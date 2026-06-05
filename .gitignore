@@ -1,0 +1,99 @@
+# ================ 通用忽略 ================
+# 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 日志文件
+logs/
+*.log
+*.log.*
+
+# 临时文件
+*.tmp
+*.temp
+
+# ================ Python 相关 ================
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 编译产物
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 测试和覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ================ 前端相关 ================
+# Node.js 依赖
+frontend/node_modules/
+
+# 构建产物
+frontend/dist/
+frontend/build/
+
+# Vite 缓存
+frontend/.vite/
+
+# TypeScript 编译
+frontend/*.tsbuildinfo
+
+# ================ 应用数据 ================
+# 环境变量（包含敏感信息）
+.env
+.env.*
+!.env.example
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 向量库数据（体积大，不应上传）
+backend/data/vectorstore/
+
+# 上传的论文PDF（体积大，不应上传）
+backend/data/papers/
+
+# 测试数据
+backend/tests/
+backend/test_*.py
+
+# 临时脚本
+backend/*.py
+!backend/app/
+!backend/migrate_*.py
+
+# ================ 部署相关 ================
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Nginx 配置
+nginx.conf
+
+# ================ 其他 ================
+# Jupyter Notebook
+*.ipynb
+.ipynb_checkpoints/
+
+# 备份文件
+*.bak
+*.backup
+
+# 编辑器自动保存
+*.autosave
+
+# Chroma DB 相关
+*.chroma
