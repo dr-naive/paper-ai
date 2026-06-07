@@ -8,7 +8,6 @@ const routes: RouteRecordRaw[] = [
   { path: '/papers', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
   { path: '/paper/:id', name: 'PaperReader', component: () => import('@/views/PaperReader.vue') },
   { path: '/paper/:id/qa', name: 'PaperQA', component: () => import('@/views/PaperQA.vue') },
-  { path: '/notes', name: 'Notes', component: () => import('@/views/Notes.vue') },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

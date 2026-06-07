@@ -22,13 +22,10 @@
     <div class="main-content">
       <!-- 左侧 PDF 查看器 -->
       <div class="pdf-viewer" :style="{ flex: sidebarWidth > 0 ? `0 0 calc(100% - ${sidebarWidth}px)` : '1' }">
-        <iframe
+        <PdfViewer
           v-if="pdfUrl"
-          :src="pdfUrl"
-          class="pdf-frame"
-          frameborder="0"
-          @load="onPdfLoad"
-          @error="onPdfError"
+          ref="pdfViewerRef"
+          :pdf-url="pdfUrl"
         />
         <div v-if="pdfError" class="pdf-error">
           <a-result status="warning" title="PDF 加载失败">
@@ -329,12 +326,6 @@
             </div>
           </a-tab-pane>
 
-          <a-tab-pane key="notes" title="笔记">
-            <div class="notes-panel">
-              <a-empty description="笔记功能开发中" />
-            </div>
-          </a-tab-pane>
-
           <a-tab-pane key="interpret" title="深度解读">
             <div class="interpret-panel">
               <!-- 解读类型选择 -->
@@ -422,6 +413,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconArrowLeft, IconMenu, IconRefresh, IconDelete } from '@arco-design/web-vue/es/icon'
+import PdfViewer from '@/components/PdfViewer.vue'
 import {
   getPaper, getPaperSections,
   listSessions, createSession, deleteSession, getSessionMessages, askInSession,
@@ -435,6 +427,7 @@ const paperId = route.params.id as string
 const paper = ref<any>(null)
 const pdfUrl = ref('')
 const pdfError = ref(false)
+const pdfViewerRef = ref<InstanceType<typeof PdfViewer> | null>(null)
 const showSidebar = ref(true)
 const sidebarWidth = ref(420)
 const sections = ref<any[]>([])
@@ -576,15 +569,6 @@ const loadPaper = async () => {
   }
 }
 
-const onPdfLoad = () => {
-  console.log('PDF loaded successfully')
-}
-
-const onPdfError = () => {
-  pdfError.value = true
-  console.error('PDF load failed')
-}
-
 const retryLoadPdf = () => {
   pdfError.value = false
   const token = localStorage.getItem('access_token')
@@ -593,7 +577,7 @@ const retryLoadPdf = () => {
 }
 
 // 定位引用到 PDF 原文
-const locateInPdf = (cite: any) => {
+const locateInPdf = async (cite: any) => {
   console.log('locateInPdf called with:', cite)
   console.log('Current sections:', sections.value)
   
@@ -606,15 +590,11 @@ const locateInPdf = (cite: any) => {
   if (sections.value.length === 0) {
     Message.warning('章节数据尚未加载，正在尝试重新加载...')
     // 尝试重新加载章节数据
-    loadSections().then(() => {
-      if (sections.value.length > 0) {
-        // 重新尝试定位
-        locateInPdf(cite)
-      } else {
-        Message.warning('无法加载章节数据')
-      }
-    })
-    return
+    await loadSections()
+    if (sections.value.length === 0) {
+      Message.warning('无法加载章节数据')
+      return
+    }
   }
   
   // 查找对应章节（支持多种匹配方式）
@@ -635,35 +615,24 @@ const locateInPdf = (cite: any) => {
   
   console.log('Found section:', targetSection)
   
-  if (targetSection) {
-    const pdfFrame = document.querySelector('.pdf-frame') as HTMLIFrameElement
-    
-    if (!pdfFrame) {
-      Message.warning('PDF 阅读器尚未加载完成')
-      return
-    }
-    
-    if (!pdfUrl.value) {
-      Message.warning('PDF URL 未设置')
-      return
-    }
-    
-    // 获取当前 URL（不带 hash）
-    const baseUrl = pdfUrl.value.split('#')[0]
-    
-    // 直接使用引用内容进行 PDF 搜索定位
-    // 优先使用引用文本，如果没有则使用章节名
-    const searchText = cite.text ? cite.text.substring(0, 100).trim() : cite.section
-    
-    if (searchText) {
-      const encodedSearch = encodeURIComponent(searchText)
-      pdfFrame.src = `${baseUrl}#search=${encodedSearch}`
-      Message.info(`正在搜索：${searchText.substring(0, 30)}...`)
+  if (!pdfViewerRef.value) {
+    Message.warning('PDF 阅读器尚未加载完成')
+    return
+  }
+  
+  // 优先使用引用文本进行搜索定位
+  const searchText = cite.text ? cite.text.substring(0, 100).trim() : cite.section
+  
+  if (searchText) {
+    Message.info(`正在定位：${searchText.substring(0, 30)}...`)
+    const foundPage = await pdfViewerRef.value.searchText(searchText)
+    if (foundPage) {
+      Message.success(`已定位到第 ${foundPage} 页`)
     } else {
-      Message.info(`引用来源：${cite.section}`)
+      Message.warning('未在 PDF 中找到匹配的原文内容')
     }
   } else {
-    Message.info(`引用来源：${cite.section}（未找到对应章节）`)
+    Message.info(`引用来源：${cite.section}`)
   }
 }
 
@@ -831,12 +800,7 @@ watch(interpretType, () => {
   flex: 1;
   min-width: 0;
   background: #525659;
-}
-
-.pdf-frame {
-  width: 100%;
-  height: 100%;
-  border: none;
+  overflow: hidden;
 }
 
 .pdf-loading {
@@ -1211,14 +1175,6 @@ watch(interpretType, () => {
 
 .bullet-list li {
   margin-bottom: 4px;
-}
-
-/* 笔记面板 */
-.notes-panel {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
 }
 
 /* 深度解读面板 */

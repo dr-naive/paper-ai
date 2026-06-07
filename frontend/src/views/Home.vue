@@ -275,6 +275,7 @@ const handleLogout = () => {
   min-height: 100vh;
   color: #1d2129;
   overflow-x: hidden;
+  z-index: 1;
 }
 
 .page-background {
@@ -284,7 +285,7 @@ const handleLogout = () => {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
 }
 
 .background-gradient {
@@ -492,6 +493,8 @@ const handleLogout = () => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 32px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
   transition: all 0.3s ease;
 }
 

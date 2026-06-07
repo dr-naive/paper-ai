@@ -35,4 +35,3 @@ export const request = {
 export default request
 
 export * as paper from './paper'
-export * as note from './note'
