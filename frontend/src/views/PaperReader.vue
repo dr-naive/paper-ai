@@ -131,7 +131,7 @@
                   </div>
                 </div>
                 <div v-if="qaLoading" class="qa-loading">
-                  <a-spin size="mini" /> 思考中...
+                  <a-spin :size="12" /> 思考中...
                 </div>
               </div>
               <!-- 快捷问题 -->
@@ -559,10 +559,8 @@ const loadPaper = async () => {
     const response = await getPaper(paperId)
     paper.value = response
     pdfError.value = false
-    // 动态获取当前服务器地址，支持其他电脑访问
     const token = localStorage.getItem('access_token')
-    const baseUrl = window.location.origin.replace(':5173', ':8000')
-    pdfUrl.value = `${baseUrl}/api/v1/papers/${paperId}/pdf?token=${token}`
+    pdfUrl.value = `/api/v1/papers/${paperId}/pdf?token=${token}`
   } catch (error) {
     console.error('加载论文失败:', error)
     Message.error('加载论文失败')
@@ -572,8 +570,7 @@ const loadPaper = async () => {
 const retryLoadPdf = () => {
   pdfError.value = false
   const token = localStorage.getItem('access_token')
-  const baseUrl = window.location.origin.replace(':5173', ':8000')
-  pdfUrl.value = `${baseUrl}/api/v1/papers/${paperId}/pdf?token=${token}&t=${Date.now()}`
+  pdfUrl.value = `/api/v1/papers/${paperId}/pdf?token=${token}&t=${Date.now()}`
 }
 
 // 定位引用到 PDF 原文

@@ -29,6 +29,7 @@ langchain-openai==0.0.8
 # PDF 处理
 pypdf==4.1.0
 pdfplumber==0.10.4
+PyMuPDF==1.24.0
 
 # JWT 认证
 python-jose[cryptography]==3.3.0
@@ -38,6 +39,7 @@ passlib[bcrypt]==1.7.4
 python-dotenv==1.0.1
 loguru==0.7.2
 httpx==0.26.0
+nltk==3.8.1
 
 # 测试
 pytest==7.4.4

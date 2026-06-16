@@ -1,5 +1,5 @@
-"""RAG 论文知识库模块 - 终极修复版"""
-from typing import List, Dict, Any, Optional
+"""RAG 论文知识库模块 - 优化版（智能分块）"""
+from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.embeddings import Embeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
@@ -7,9 +7,232 @@ from app.config import settings
 import logging
 import os
 import re
-import httpx  # 使用 httpx 直接发请求，绕过 LangChain 的坑
+import httpx
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# 禁用 nltk 下载，使用纯 Python 正则实现分词
+# nltk 数据下载在受限环境中不可行，采用纯正则方案
+
+
+# ==========================================
+# 智能分块器
+# ==========================================
+@dataclass
+class ChunkConfig:
+    """分块配置"""
+    # 小chunk配置（用于精确检索）
+    small_chunk_size: int = 400
+    small_chunk_overlap: int = 100
+    # 大chunk配置（用于提供上下文）
+    large_chunk_size: int = 1200
+    large_chunk_overlap: int = 200
+    # 滑动窗口重叠比例
+    overlap_ratio: float = 0.2
+
+
+class SmartChunker:
+    """智能分块器：语义分块 + 滑动窗口 + 层级分块"""
+    
+    def __init__(self, config: Optional[ChunkConfig] = None):
+        self.config = config or ChunkConfig()
+    
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """将文本分割成句子（语义边界）- 纯正则实现，不依赖 nltk"""
+        # 使用正则表达式进行句子分割
+        # 匹配：句号、问号、感叹号后面跟着空格或换行
+        sentence_pattern = r'(?<=[。！？.!?])\s+'
+        sentences = re.split(sentence_pattern, text)
+        
+        # 过滤空句子并清理
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        # 如果分割效果不好（只有一个大句子），尝试按段落分割
+        if len(sentences) <= 1 and len(text) > 200:
+            # 尝试按换行符分割
+            sentences = re.split(r'\n+', text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+            # 如果还是不行，按固定长度分割
+            if len(sentences) <= 1 and len(text) > 500:
+                chunk_size = 200
+                sentences = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+        
+        return sentences
+    
+    def _split_into_paragraphs(self, text: str) -> List[str]:
+        """将文本分割成段落"""
+        # 按双换行符分割
+        paragraphs = re.split(r'\n\s*\n', text)
+        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        return paragraphs
+    
+    def _merge_sentences_to_chunk(
+        self, 
+        sentences: List[str], 
+        target_size: int,
+        overlap: int = 0
+    ) -> List[Tuple[str, int, int]]:
+        """
+        将句子合并成指定大小的chunk
+        返回: List[(chunk_text, start_sentence_idx, end_sentence_idx)]
+        """
+        chunks = []
+        current_chunk = []
+        current_size = 0
+        start_idx = 0
+        
+        for i, sentence in enumerate(sentences):
+            sentence_len = len(sentence)
+            
+            # 如果当前chunk为空，直接添加
+            if not current_chunk:
+                current_chunk.append(sentence)
+                current_size = sentence_len
+                start_idx = i
+            # 如果添加后不超过目标大小，继续添加
+            elif current_size + sentence_len + 1 <= target_size:
+                current_chunk.append(sentence)
+                current_size += sentence_len + 1
+            else:
+                # 保存当前chunk
+                chunk_text = ' '.join(current_chunk) if self._is_english(' '.join(current_chunk)) else ''.join(current_chunk)
+                chunks.append((chunk_text, start_idx, i))
+                
+                # 计算重叠：保留最后几个句子
+                if overlap > 0:
+                    overlap_sentences = []
+                    overlap_size = 0
+                    for j in range(len(current_chunk) - 1, -1, -1):
+                        if overlap_size + len(current_chunk[j]) <= overlap:
+                            overlap_sentences.insert(0, current_chunk[j])
+                            overlap_size += len(current_chunk[j])
+                        else:
+                            break
+                    current_chunk = overlap_sentences + [sentence]
+                    current_size = sum(len(s) for s in current_chunk)
+                    start_idx = i - len(overlap_sentences)
+                else:
+                    current_chunk = [sentence]
+                    current_size = sentence_len
+                    start_idx = i
+        
+        # 添加最后一个chunk
+        if current_chunk:
+            chunk_text = ' '.join(current_chunk) if self._is_english(' '.join(current_chunk)) else ''.join(current_chunk)
+            chunks.append((chunk_text, start_idx, len(sentences)))
+        
+        return chunks
+    
+    def _is_english(self, text: str) -> bool:
+        """判断文本是否主要是英文"""
+        english_chars = sum(1 for c in text if c.isascii() and c.isalpha())
+        total_alpha = sum(1 for c in text if c.isalpha())
+        if total_alpha == 0:
+            return False
+        return english_chars / total_alpha > 0.7
+    
+    def chunk_text(
+        self, 
+        text: str, 
+        section_title: str = "",
+        chunk_type: str = "text"
+    ) -> List[Dict[str, Any]]:
+        """
+        智能分块：语义分块 + 滑动窗口 + 层级分块
+        
+        返回结构:
+        [
+            {
+                "content": "chunk内容",
+                "type": "small/large",
+                "section": "章节标题",
+                "index": 索引,
+                "parent_index": 父chunk索引（仅small chunk有）
+            }
+        ]
+        """
+        if not text or not text.strip():
+            return []
+        
+        # 清理文本
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        text = text.strip()
+        
+        # 分割成句子
+        sentences = self._split_into_sentences(text)
+        
+        if not sentences:
+            return []
+        
+        chunks = []
+        chunk_idx = 0
+        
+        # 1. 生成大chunks（父文档）
+        large_chunks = self._merge_sentences_to_chunk(
+            sentences,
+            self.config.large_chunk_size,
+            self.config.large_chunk_overlap
+        )
+        
+        # 2. 为每个大chunk生成小chunks（子文档）
+        for parent_idx, (large_text, start_sent, end_sent) in enumerate(large_chunks):
+            # 添加大chunk
+            chunks.append({
+                "content": large_text,
+                "type": "large",
+                "section": section_title,
+                "index": chunk_idx,
+                "sentence_range": (start_sent, end_sent)
+            })
+            chunk_idx += 1
+            
+            # 获取这个大chunk内的句子
+            sub_sentences = sentences[start_sent:end_sent]
+            
+            # 生成小chunks
+            small_chunks = self._merge_sentences_to_chunk(
+                sub_sentences,
+                self.config.small_chunk_size,
+                self.config.small_chunk_overlap
+            )
+            
+            for small_text, small_start, small_end in small_chunks:
+                # 计算在原文中的句子索引
+                actual_start = start_sent + small_start
+                actual_end = start_sent + small_end
+                
+                chunks.append({
+                    "content": small_text,
+                    "type": "small",
+                    "section": section_title,
+                    "index": chunk_idx,
+                    "parent_index": parent_idx,  # 关联父chunk
+                    "sentence_range": (actual_start, actual_end)
+                })
+                chunk_idx += 1
+        
+        return chunks
+    
+    def chunk_section(
+        self,
+        section_title: str,
+        section_content: str,
+        existing_chunks: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """处理单个章节的分块"""
+        new_chunks = self.chunk_text(section_content, section_title)
+        
+        # 重新编号
+        start_idx = len(existing_chunks)
+        for chunk in new_chunks:
+            chunk["index"] = start_idx
+            if "parent_index" in chunk:
+                chunk["parent_index"] += start_idx
+            start_idx += 1
+        
+        return existing_chunks + new_chunks
 
 # ==========================================
 # 【核心杀招】：手写 Embeddings 类，直接调用百炼 API
@@ -20,6 +243,11 @@ class DashScopeEmbeddings(Embeddings):
         self.api_key = api_key
         # 确保 base_url 末尾没有斜杠
         self.base_url = base_url.rstrip('/') 
+        # 根据模型名称确定向量维度
+        if "v3" in model.lower():
+            self.dimensions = 1024
+        else:
+            self.dimensions = 1536
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return self._call_api(texts)
@@ -47,24 +275,38 @@ class DashScopeEmbeddings(Embeddings):
         # 初始化结果数组
         all_embeddings = [[] for _ in texts]
         
-        # 【终极杀招】：batch_size = 1，逐个发送！彻底绕过百炼的批量限制和序列化 Bug
+        # 逐个发送请求
         for i, text in enumerate(clean_texts):
             if not text:
                 continue # 跳过空文本
             
-            payload = {
-                "model": self.model,
-                "input": text  # 注意：这里直接传字符串，不传数组！
-            }
+            # text-embedding-v3 需要使用正确的参数格式
+            if "v3" in self.model.lower():
+                payload = {
+                    "model": self.model,
+                    "input": text,
+                    "encoding_format": "float"
+                }
+            else:
+                payload = {
+                    "model": self.model,
+                    "input": text
+                }
             
             try:
-                response = httpx.post(url, headers=headers, json=payload, timeout=30.0)
+                response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
                 response.raise_for_status()
                 result = response.json()
-                all_embeddings[i] = result["data"][0]["embedding"]
+                
+                if "data" in result and len(result["data"]) > 0 and "embedding" in result["data"][0]:
+                    all_embeddings[i] = result["data"][0]["embedding"]
+                else:
+                    logger.warning(f"⚠️ 响应格式异常: {result}")
+                    all_embeddings[i] = [0.0] * self.dimensions
+                    
             except Exception as e:
                 logger.warning(f"⚠️ 单个文本向量化失败 (长度:{len(text)}), 已跳过: {str(e)[:100]}")
-                all_embeddings[i] = [0.0] * 1536 # 失败则填充 0 向量
+                all_embeddings[i] = [0.0] * self.dimensions # 使用正确的维度
                 
         return all_embeddings
 
@@ -93,6 +335,7 @@ class PaperKnowledgeBase:
         return self._vectorstore
     
     async def add_paper_chunks(self, paper_id: str, chunks: List[Dict[str, Any]]) -> bool:
+        """添加论文片段到知识库，支持层级分块"""
         try:
             docs = []
             for chunk in chunks:
@@ -105,20 +348,28 @@ class PaperKnowledgeBase:
                 if len(content) > 2000:
                     content = content[:2000]
 
-                docs.append(
-                    Document(
-                        page_content=content,
-                        metadata={
-                            "paper_id": str(paper_id),
-                            "chunk_type": str(chunk.get('type') or 'text'),
-                            "section": str(chunk.get('section') or ''),
-                            "chunk_index": int(chunk.get('index') or 0)
-                        }
-                    )
-                )
+                # 构建metadata，包含层级信息
+                metadata = {
+                    "paper_id": str(paper_id),
+                    "chunk_type": str(chunk.get('type') or 'text'),  # small 或 large
+                    "section": str(chunk.get('section') or ''),
+                    "chunk_index": int(chunk.get('index') or 0)
+                }
+                
+                # 如果是表格内容，提取表格编号
+                if "【表格】" in content or "table" in content.lower():
+                    # 匹配"表1"、"表1："、"Table 1"、"Table 1:"等格式
+                    table_match = re.search(r'(表\d+|Table\s+\d+)', content, re.IGNORECASE)
+                    if table_match:
+                        metadata["table_number"] = table_match.group(1)
+                
+                # 如果是small chunk，存储parent_index用于层级检索
+                if chunk.get('parent_index') is not None:
+                    metadata["parent_index"] = int(chunk.get('parent_index'))
+
+                docs.append(Document(page_content=content, metadata=metadata))
             
             if docs:
-                # 批量添加（因为我们手写的 Embeddings 已经处理好了列表，Chroma 会正确调用）
                 self.vectorstore.add_documents(docs)
                 logger.info(f"✅ 成功添加 {len(docs)} 个片段到知识库 (paper_id: {paper_id})")
             return True
@@ -126,27 +377,124 @@ class PaperKnowledgeBase:
             logger.error(f"❌ 添加论文片段失败：{e}")
             return False
     
-    async def query(self, paper_id: str, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    async def query(
+        self, 
+        paper_id: str, 
+        query: str, 
+        top_k: int = 5,
+        include_parent_context: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        查询知识库，支持层级检索
+        
+        Args:
+            paper_id: 论文ID
+            query: 查询文本
+            top_k: 返回结果数量
+            include_parent_context: 是否包含父chunk上下文（层级检索）
+        
+        Returns:
+            检索结果列表
+        """
         try:
+            # 边界检查：空查询或无效top_k
+            if not query or not query.strip():
+                logger.warning("查询文本为空，返回空结果")
+                return []
+            
+            if top_k <= 0:
+                logger.warning(f"top_k={top_k} 无效，返回空结果")
+                return []
+            
             results = self.vectorstore.similarity_search_with_score(
-                query=query, k=top_k, filter={"paper_id": paper_id}
+                query=query, k=top_k * 5
             )
-            return [
-                {
+            
+            # 在内存中过滤 paper_id
+            filtered_results = []
+            for doc, score in results:
+                if doc.metadata.get("paper_id") == paper_id:
+                    filtered_results.append((doc, score))
+            
+            # 检查查询是否包含表格编号（如"表1"、"Table 1"），如果有则优先返回匹配的表格
+            table_number_query = None
+            table_match = re.search(r'(表\d+|Table\s+\d+)', query, re.IGNORECASE)
+            if table_match:
+                table_number_query = table_match.group(1).lower()
+            
+            # 如果查询包含表格编号，优先返回匹配的表格
+            table_priority_results = []
+            other_results = []
+            for doc, score in filtered_results:
+                table_number = doc.metadata.get("table_number", "").lower()
+                if table_number_query and table_number and table_number_query in table_number:
+                    table_priority_results.append((doc, score))
+                else:
+                    other_results.append((doc, score))
+            
+            # 优先结果在前，其他结果在后
+            filtered_results = table_priority_results + other_results
+            
+            small_chunks = [(doc, score) for doc, score in filtered_results 
+                           if doc.metadata.get("chunk_type") == "small"]
+            large_chunks = [(doc, score) for doc, score in filtered_results 
+                           if doc.metadata.get("chunk_type") == "large"]
+            
+            final_results = small_chunks[:top_k]
+            
+            if len(final_results) < top_k:
+                remaining = top_k - len(final_results)
+                final_results.extend(large_chunks[:remaining])
+            
+            seen_indices = set()
+            unique_results = []
+            for doc, score in final_results:
+                idx = doc.metadata.get("chunk_index")
+                if idx not in seen_indices:
+                    seen_indices.add(idx)
+                    unique_results.append((doc, score))
+            
+            output = []
+            for doc, score in unique_results[:top_k]:
+                result = {
                     "content": doc.page_content,
                     "section": doc.metadata.get("section", ""),
                     "chunk_index": doc.metadata.get("chunk_index", 0),
+                    "chunk_type": doc.metadata.get("chunk_type", "text"),
                     "score": float(score)
                 }
-                for doc, score in results
-            ]
+                
+                if include_parent_context and doc.metadata.get("chunk_type") == "small":
+                    parent_idx = doc.metadata.get("parent_index")
+                    if parent_idx is not None:
+                        parent_content = await self._get_parent_chunk(paper_id, parent_idx)
+                        if parent_content:
+                            result["parent_context"] = parent_content
+                
+                output.append(result)
+            
+            return output
         except Exception as e:
             logger.error(f"❌ 查询失败：{e}")
             return []
     
+    async def _get_parent_chunk(self, paper_id: str, parent_index: int) -> Optional[str]:
+        """获取父chunk内容（用于层级检索）"""
+        try:
+            all_docs = self.vectorstore._collection.get(
+                where={"paper_id": paper_id, "chunk_type": "large", "chunk_index": parent_index}
+            )
+            if all_docs and all_docs["documents"]:
+                return all_docs["documents"][0]
+        except Exception as e:
+            logger.warning(f"获取父chunk失败: {e}")
+        return None
+    
     async def delete_paper(self, paper_id: str) -> bool:
         try:
-            self.vectorstore.delete(filter={"paper_id": paper_id})
+            all_docs = self.vectorstore._collection.get(where={"paper_id": paper_id})
+            if all_docs and all_docs["ids"]:
+                self.vectorstore._collection.delete(ids=all_docs["ids"])
             return True
         except Exception as e:
             logger.error(f"❌ 删除失败：{e}")

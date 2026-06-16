@@ -24,6 +24,15 @@ export const askPaperQuestion = (paperId: string, question: string) =>
 
 export const deletePaper = (paperId: string) => request.delete(`/api/v1/papers/${paperId}`)
 
+export const getTaskStatus = (taskId: string) => {
+  const token = localStorage.getItem('access_token')
+  return request.get(`/api/v1/papers/tasks/${taskId}`, {
+    headers: {
+      'Authorization': token ? `Bearer ${token}` : undefined
+    }
+  })
+}
+
 export const updateReadingStatus = (paperId: string, data: { status?: string; progress?: number; favorite?: boolean }) =>
   request.patch(`/api/v1/papers/${paperId}/status`, data)
 

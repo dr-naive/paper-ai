@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4"
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    VISION_MODEL: str = "qwen-vl-max"
+    VISION_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     VECTOR_STORE_PATH: str = "./data/vectorstore"
     FILE_STORAGE_PATH: str = "./data/papers"

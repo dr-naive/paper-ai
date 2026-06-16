@@ -100,7 +100,19 @@ async def answer_metadata(state: QAAgentState) -> QAAgentState:
         text = response.generations[0][0].text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
-        result = json.loads(text.strip())
+        
+        # 健壮地解析 JSON
+        result = None
+        try:
+            result = json.loads(text.strip())
+        except json.JSONDecodeError:
+            import re
+            answer_match = re.search(r'"answer"\s*:\s*"(.*?)"\s*,', text, re.DOTALL)
+            if answer_match:
+                result = {"answer": answer_match.group(1).replace('\\"', '"'), "citations": []}
+            else:
+                result = {"answer": text, "citations": []}
+        
         state['answer'] = result.get('answer', '暂无回答')
         state['citations'] = result.get('citations', [])
         state['sources'] = [c.get('section', '') for c in state['citations']]
@@ -182,7 +194,26 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
         text = response.generations[0][0].text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
-        result = json.loads(text.strip())
+        
+        # 健壮地解析 JSON
+        result = None
+        try:
+            result = json.loads(text.strip())
+        except json.JSONDecodeError as json_err:
+            logger.warning(f"⚠️ JSON 解析失败，尝试修复: {json_err}")
+            # 尝试提取 answer 字段
+            import re
+            answer_match = re.search(r'"answer"\s*:\s*"(.*?)"\s*,\s*"citations"', text, re.DOTALL)
+            if answer_match:
+                answer_text = answer_match.group(1)
+                # 处理转义的引号
+                answer_text = answer_text.replace('\\"', '"')
+                result = {"answer": answer_text, "citations": []}
+            else:
+                # 如果无法提取，直接使用原始文本作为回答
+                logger.warning("⚠️ 无法提取 JSON，直接使用原始文本")
+                result = {"answer": text, "citations": []}
+        
         state['answer'] = result.get('answer', '暂无回答')
         state['citations'] = result.get('citations', [])
         state['sources'] = [c.get('section', '') for c in state['citations']]

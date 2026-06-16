@@ -1,0 +1,23 @@
+[Unit]
+Description=PaperAI Frontend Service
+After=network.target paperai-backend.service
+Wants=network.target paperai-backend.service
+
+[Service]
+Type=simple
+User=ddd
+Group=ddd
+WorkingDirectory=/home/ddd/project/myAgent/frontend
+Environment=NODE_ENV=development
+Environment=PATH=/home/ddd/.nvm/versions/node/v24.16.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/ddd/.nvm/versions/node/v24.16.0/bin/npm run dev
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/home/ddd/project/myAgent/logs/frontend.log
+StandardError=append:/home/ddd/project/myAgent/logs/frontend.log
+KillMode=process
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

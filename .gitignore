@@ -17,6 +17,9 @@ logs/
 *.tmp
 *.temp
 
+# 调试文件
+.dbg/
+
 # ================ Python 相关 ================
 # 虚拟环境
 .venv/
@@ -49,6 +52,12 @@ frontend/.vite/
 # TypeScript 编译
 frontend/*.tsbuildinfo
 
+# 前端环境变量
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+frontend/.env.production.local
+
 # ================ 应用数据 ================
 # 环境变量（包含敏感信息）
 .env
@@ -60,20 +69,41 @@ frontend/*.tsbuildinfo
 *.sqlite
 *.sqlite3
 
-# 向量库数据（体积大，不应上传）
-backend/data/vectorstore/
+# 根目录数据（运行时数据）
+data/
 
-# 上传的论文PDF（体积大，不应上传）
-backend/data/papers/
+# 后端数据目录（论文、向量库、任务等）
+backend/data/
 
-# 测试数据
-backend/tests/
+# 后端依赖库（本地安装的包）
+backend/lib/
+
+# ================ 测试文件 ================
+# 根目录测试脚本
+/test_*.py
+
+# 后端测试脚本
 backend/test_*.py
+backend/check_*.py
+backend/analyze_*.py
+backend/tests/
 
-# 临时脚本
-backend/*.py
-!backend/app/
-!backend/migrate_*.py
+# 前端测试
+frontend/tests/
+
+# 测试表格数据
+backend/data/test_tables/
+
+# ================ 迁移和临时脚本 ================
+backend/migrate_*.py
+backend/parse_*.py
+
+# 技能文件
+backend/*.skill
+
+# ================ Trae IDE 配置 ================
+# 保留 .trae/rules/ 和 .trae/skills/ 用于项目规则
+# .trae/
 
 # ================ 部署相关 ================
 # Docker

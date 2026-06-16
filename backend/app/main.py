@@ -62,7 +62,7 @@ from app.api.chat import router as chat_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
 from app.models.user import User
-from app.models.paper import Paper, Section, QAPair, Note, Folder
+from app.models.paper import Paper, Section, QAPair, Note, Folder, Table, Image
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
 
 app.include_router(auth_router)

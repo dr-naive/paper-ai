@@ -4,7 +4,7 @@ const baseURL = import.meta.env.VITE_API_BASE_URL || ''
 
 const apiClient: AxiosInstance = axios.create({
   baseURL,
-  timeout: 300000
+  timeout: 900000  // 15分钟，用于大文件上传
 })
 
 apiClient.interceptors.request.use((config) => {

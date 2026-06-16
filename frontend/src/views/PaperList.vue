@@ -32,25 +32,40 @@
         </a-list>
       </a-spin>
     </div>
-    <a-modal v-model:visible="showUploadModal" title="上传论文" @ok="handleUpload">
-      <a-upload :limit="1" accept=".pdf" :auto-upload="false" @change="handleFileChange">
-        <template #upload-button><div class="upload-trigger"><p>点击或拖拽上传 PDF 文件</p></div></template>
-      </a-upload>
+    <a-modal v-model:visible="showUploadModal" title="上传论文" :footer="null">
+      <a-spin :spinning="uploading" tip="上传中...">
+        <a-upload :limit="1" accept=".pdf" :auto-upload="false" action="" :custom-request="customUpload" @change="handleFileChange">
+          <template #upload-button><div class="upload-trigger"><p>点击或拖拽上传 PDF 文件</p></div></template>
+        </a-upload>
+      </a-spin>
+      <div v-if="uploading" class="upload-progress">
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+        </div>
+        <p class="progress-text">{{ progressText }}</p>
+      </div>
+      <div v-if="!uploading && selectedFile" style="margin-top: 16px; text-align: right;">
+        <a-button type="primary" @click="handleUpload" :disabled="!selectedFile">开始上传</a-button>
+      </div>
     </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import type { FileItem } from '@arco-design/web-vue' 
-import { getPaperList, uploadPaper, deletePaper } from '@/api/paper'
+import { getPaperList, uploadPaper, deletePaper, getTaskStatus } from '@/api/paper'
 import dayjs from 'dayjs'
 
 const loading = ref(false)
 const papers = ref<any[]>([])
 const showUploadModal = ref(false)
 const selectedFile = ref<File | null>(null)
+const uploading = ref(false)
+const progressPercent = ref(0)
+const progressText = ref('')
+let pollInterval: number | null = null
 
 const loadPapers = async () => {
   loading.value = true
@@ -64,6 +79,13 @@ const loadPapers = async () => {
   }
 }
 
+
+const customUpload = async (options: any) => {
+  // 拦截 a-upload 的默认上传行为（包括重试按钮）
+  // 不做任何事，所有上传由 handleUpload 按钮触发
+  options.onSuccess?.({})
+}
+
 const handleFileChange = (fileList: FileItem[]) => {
   const latestFile = fileList[fileList.length - 1]
   if (latestFile && latestFile.file) {
@@ -73,22 +95,86 @@ const handleFileChange = (fileList: FileItem[]) => {
   }
 }
 
+const pollTaskStatus = async (taskId: string) => {
+  try {
+    const response = await getTaskStatus(taskId)
+    progressPercent.value = response.progress
+    progressText.value = response.message
+    
+    if (response.status === 'completed') {
+      if (pollInterval) {
+        clearInterval(pollInterval)
+        pollInterval = null
+      }
+      progressPercent.value = 100
+      progressText.value = '处理完成！'
+      
+      setTimeout(() => {
+        Message.success('上传成功')
+        showUploadModal.value = false
+        selectedFile.value = null
+        uploading.value = false
+        progressPercent.value = 0
+        progressText.value = ''
+        loadPapers()
+      }, 500)
+    } else if (response.status === 'failed') {
+      if (pollInterval) {
+        clearInterval(pollInterval)
+        pollInterval = null
+      }
+      uploading.value = false
+      Message.error(response.message || '处理失败')
+    }
+  } catch (error) {
+    console.error('查询任务状态失败', error)
+  }
+}
+
 const handleUpload = async () => {
   if (!selectedFile.value) { 
     Message.warning('请选择文件')
     return 
   }
+  
+  uploading.value = true
+  progressPercent.value = 0
+  progressText.value = '上传文件...'
+  
   try { 
-    await uploadPaper(selectedFile.value)
-    Message.success('上传成功')
-    showUploadModal.value = false
-    selectedFile.value = null
-    loadPapers()
+    // 异步上传，立即返回任务ID
+    const response = await uploadPaper(selectedFile.value)
+    console.log('上传响应:', response)
+    
+    const taskId = response.task_id || response.taskId
+    console.log('获取到的任务ID:', taskId)
+    
+    if (!taskId) {
+      throw new Error('未能获取任务ID')
+    }
+    
+    progressPercent.value = 5
+    progressText.value = '上传成功，正在后台处理...'
+    
+    // 开始轮询任务状态
+    pollInterval = window.setInterval(() => {
+      pollTaskStatus(taskId)
+    }, 2000)
+    
   } catch (error: any) {
+    uploading.value = false
+    progressPercent.value = 0
+    progressText.value = ''
     console.error('上传失败', error)
     Message.error(error?.response?.data?.detail || '上传失败，请检查文件格式')
   }
 }
+
+onUnmounted(() => {
+  if (pollInterval) {
+    clearInterval(pollInterval)
+  }
+})
 
 const handleDelete = (paperId: string) => {
   Modal.warning({
@@ -151,5 +237,34 @@ onMounted(() => { loadPapers() })
   text-align: center;
   cursor: pointer;
   color: #86909c;
+}
+
+.upload-progress {
+  margin-top: 16px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.progress-bar {
+  height: 8px;
+  background: #e5e6eb;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  margin: 0;
+  font-size: 14px;
+  color: #646a73;
+  text-align: center;
 }
 </style>

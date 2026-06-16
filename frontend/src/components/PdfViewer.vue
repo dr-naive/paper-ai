@@ -54,6 +54,14 @@
       <p>加载 PDF 中...</p>
     </div>
     
+    <!-- 后台加载进度 -->
+    <div v-if="!loading && loadingProgress > 0 && loadingProgress < 100" class="pdf-progress">
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: loadingProgress + '%' }"></div>
+      </div>
+      <span class="progress-text">{{ loadingProgress }}%</span>
+    </div>
+    
     <!-- 错误状态 -->
     <div v-if="error" class="pdf-error">
       <div class="error-icon">⚠️</div>
@@ -99,6 +107,7 @@ let pageHeights: number[] = []
 let pageWidths: number[] = []
 const renderedPages = new Set<number>()
 const renderingPages = new Set<number>()
+const loadingProgress = ref(0) // 加载进度 0-100
 
 const setCanvasRef = (index: number, el: HTMLCanvasElement | null) => {
   canvasRefs.value[index] = el
@@ -226,14 +235,22 @@ const loadPdf = async () => {
     console.log('渲染首页...')
     await renderPage(0)
     
-    // 【第二步：立即显示】不等待任何预渲染
+    // 【第二步：立即显示首页】用户马上能看到内容
     loading.value = false
+    loadingProgress.value = Math.round(100 / numPages.value) // 首页已加载
     console.log('PDF首页已显示')
     
-    // 【第三步：后台异步计算页面高度和预渲染】
+    // 【第三步：后台异步计算页面高度】
     setTimeout(() => {
-      calculateAllPageHeights()  // 后台计算高度
-      preRenderNearbyPages()     // 后台预渲染附近页面
+      calculateAllPageHeights()
+    }, 50)
+    
+    // 【第四步：按优先级异步渲染剩余页面】
+    // P1: 首页（已完成）
+    // P2: 前10页（高优先级，快速渲染）
+    // P3: 剩余所有页（低优先级，浏览器空闲时渲染）
+    setTimeout(() => {
+      renderWithPriority()
     }, 100)
   } catch (e: any) {
     console.error('加载 PDF 失败:', e.message || e)
@@ -242,7 +259,7 @@ const loadPdf = async () => {
   }
 }
 
-// 后台计算所有页面高度
+// 后台计算所有页面高度（不阻塞渲染）
 const calculateAllPageHeights = async () => {
   console.log('开始后台计算页面高度...')
   for (let i = 0; i < numPages.value; i++) {
@@ -260,19 +277,78 @@ const calculateAllPageHeights = async () => {
   console.log('页面高度计算完成:', pageHeights)
 }
 
-// 后台预渲染附近页面（不阻塞）
-const preRenderNearbyPages = async () => {
-  console.log('开始后台预渲染...')
-  for (let i = 1; i < numPages.value; i++) {
+// 优先级异步渲染：P1=首页(已渲染), P2=前10页, P3=剩余所有页
+const renderWithPriority = async () => {
+  if (!pdfDoc) return
+
+  const totalPages = numPages.value
+  if (totalPages <= 1) return
+
+  // 定义优先级队列
+  // P2: 第2页到第10页（或总页数，取较小值）
+  const priority2End = Math.min(totalPages, 10)
+  const priority2Pages: number[] = []
+  for (let i = 1; i < priority2End; i++) {
     if (!renderedPages.has(i)) {
-      await renderPage(i)
-      // 每渲染3页后停顿，让出主线程
-      if (i % 3 === 0) {
-        await new Promise(resolve => setTimeout(resolve, 50))
-      }
+      priority2Pages.push(i)
     }
   }
-  console.log('后台预渲染完成')
+
+  // P3: 第11页到最后一页
+  const priority3Pages: number[] = []
+  for (let i = priority2End; i < totalPages; i++) {
+    if (!renderedPages.has(i)) {
+      priority3Pages.push(i)
+    }
+  }
+
+  let renderedCount = 1 // 首页已渲染
+  const totalToRender = priority2Pages.length + priority3Pages.length
+
+  // 渲染单个页面并更新进度
+  const renderAndUpdateProgress = async (pageIndex: number) => {
+    if (renderedPages.has(pageIndex) || renderingPages.has(pageIndex)) return
+    await renderPage(pageIndex)
+    renderedCount++
+    loadingProgress.value = Math.round((renderedCount / totalPages) * 100)
+  }
+
+  // P2: 渲染前10页（高优先级）
+  console.log(`[P2] 开始渲染前 ${priority2Pages.length} 页...`)
+  for (const i of priority2Pages) {
+    await renderAndUpdateProgress(i)
+    // 每渲染2页让出主线程，确保用户交互流畅
+    if (priority2Pages.indexOf(i) % 2 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 30))
+    }
+  }
+  console.log('[P2] 前10页渲染完成')
+
+  // P3: 渲染剩余页面（低优先级，后台异步）
+  if (priority3Pages.length > 0) {
+    console.log(`[P3] 开始后台渲染剩余 ${priority3Pages.length} 页...`)
+    // 使用 requestIdleCallback 或 setTimeout 让出主线程
+    for (const i of priority3Pages) {
+      // 等待浏览器空闲时再渲染
+      await new Promise<void>(resolve => {
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(async () => {
+            await renderAndUpdateProgress(i)
+            resolve()
+          }, { timeout: 200 })
+        } else {
+          setTimeout(async () => {
+            await renderAndUpdateProgress(i)
+            resolve()
+          }, 50)
+        }
+      })
+    }
+    console.log('[P3] 剩余页面渲染完成')
+  }
+
+  loadingProgress.value = 100
+  console.log('所有页面渲染完成')
 }
 
 const zoomIn = () => {
@@ -683,6 +759,42 @@ defineExpose({
 .pdf-loading p {
   color: white;
   margin: 0;
+}
+
+.pdf-progress {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: rgba(60, 63, 65, 0.9);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  z-index: 20;
+}
+
+.progress-bar {
+  width: 160px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  color: white;
+  font-size: 12px;
+  min-width: 36px;
 }
 
 .error-icon {

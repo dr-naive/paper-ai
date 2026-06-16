@@ -3,61 +3,131 @@ from langgraph.graph import StateGraph, END
 from app.agent.state import PaperParserState
 from app.llm.client import get_llm_client
 import json
+import re
 from loguru import logger
+
+
+def _extract_metadata_by_rules(raw_text: str) -> dict:
+    """基于规则从文本中提取元数据（LLM 失败时的 fallback）"""
+    result = {}
+    
+    lines = raw_text.split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+    
+    if not lines:
+        return result
+    
+    title_parts = []
+    author_candidates = []
+    
+    for i, line in enumerate(lines[:15]):
+        if not line or len(line) < 2:
+            continue
+        
+        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in line)
+        has_english = any('a' <= c.lower() <= 'z' for c in line)
+        has_number = any('0' <= c <= '9' for c in line)
+        
+        if has_chinese and has_english and ':' in line and len(line) > 10:
+            title_parts.append(line)
+        elif title_parts and has_chinese and len(line) > 5 and not has_number:
+            title_parts.append(line)
+        elif has_chinese and len(line) < 150:
+            author_pattern = re.search(r'([\u4e00-\u9fff]+(?:[\d,，、]+[\u4e00-\u9fff]+)*)', line)
+            if author_pattern and len(author_pattern.group(1)) >= 2:
+                author_candidates.append(author_pattern.group(1))
+    
+    if title_parts:
+        full_title = ' '.join(title_parts).replace('  ', ' ').strip()
+        full_title = full_title.replace('，', '')
+        full_title = full_title.replace('。', '')
+        result['title'] = full_title
+    elif lines:
+        result['title'] = lines[0][:100]
+    
+    if author_candidates:
+        authors = author_candidates[0]
+        authors = re.sub(r'[\d†]', '', authors)
+        authors = authors.replace('，', ', ')
+        result['authors'] = authors.strip()
+    
+    return result
 
 
 async def extract_metadata(state: PaperParserState) -> PaperParserState:
     """提取论文元数据（标题、作者、摘要等）"""
     logger.info(f"[论文解析 Agent] 提取元数据")
     
-    llm = get_llm_client()
     raw_text = state['raw_text'][:1000]
-    prompt = f"""
-    请从以下论文文本中提取元数据：
-    {raw_text}
+    logger.info(f"📥 输入文本长度: {len(raw_text)}, 前200字符: {repr(raw_text[:200])}")
     
-    请以 JSON 格式返回，包含以下字段：
-    - title: 论文标题
-    - authors: 作者列表（字符串，用逗号分隔）
-    - abstract: 摘要内容
-    - keywords: 关键词列表
-    """
+    result = {}
+    use_rule_extraction = False
     
     try:
+        llm = get_llm_client()
+        prompt = f"""请从以下论文文本中提取信息。返回严格的 JSON 格式，不要包含任何其他内容：
+
+{{"title":"标题","authors":"作者","abstract":"摘要","keywords":["关键词1","关键词2"]}}
+
+论文内容：
+{raw_text}
+
+注意：
+- 如果某个字段找不到，使用空字符串或空列表
+- 作者名只保留姓名，去掉机构编号"""
+        
         response = await llm.agenerate([prompt])
         text = response.generations[0][0].text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        result = json.loads(text.strip())
+        logger.info(f"📝 LLM 返回原始内容: {repr(text[:300])}")
         
-        # 【核心修复】：强制类型转换，确保存入数据库的绝对是字符串！
-        state['title'] = str(result.get('title', '未知论文'))
-        
-        # authors：如果是列表，用逗号拼接成字符串；否则直接转字符串
-        authors_raw = result.get('authors', '')
-        if isinstance(authors_raw, list):
-            state['authors'] = ", ".join(str(a) for a in authors_raw)
+        if not text:
+            logger.warning(f"⚠️ LLM 返回空内容，使用规则提取")
+            use_rule_extraction = True
         else:
-            state['authors'] = str(authors_raw)
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
             
-        state['abstract'] = str(result.get('abstract', ''))
-        
-        # keywords：强制转为 JSON 格式的字符串（如 '["AI", "IFDL"]'）
-        keywords_raw = result.get('keywords', [])
-        if isinstance(keywords_raw, list):
-            state['keywords'] = json.dumps(keywords_raw, ensure_ascii=False)
-        else:
-            state['keywords'] = str(keywords_raw)
+            logger.info(f"📝 清理后内容: {repr(text[:300])}")
             
-        logger.info(f"✅ 元数据提取成功：{state['title'][:50]}...")
-        
+            try:
+                result = json.loads(text.strip())
+            except json.JSONDecodeError:
+                logger.warning(f"⚠️ JSON 解析失败，使用规则提取")
+                use_rule_extraction = True
+    
     except Exception as e:
-        logger.error(f"❌ 元数据提取失败：{e}")
-        # 【核心修复】：异常时的默认值，也必须是字符串！绝对不能是列表 []
-        state['title'] = "未知论文"
-        state['authors'] = ""
-        state['abstract'] = ""
-        state['keywords'] = "[]"  # 注意：这里是字符串 "[]"，而不是列表 []
+        logger.warning(f"⚠️ LLM 调用失败，使用规则提取: {e}")
+        use_rule_extraction = True
+    
+    if use_rule_extraction:
+        result = _extract_metadata_by_rules(raw_text)
+    
+    if not result.get('title'):
+        result = _extract_metadata_by_rules(raw_text)
+    
+    # 【核心修复】：强制类型转换，确保存入数据库的绝对是字符串！
+    state['title'] = str(result.get('title', '未知论文')).strip() or '未知论文'
+        
+    # authors：如果是列表，用逗号拼接成字符串；否则直接转字符串
+    authors_raw = result.get('authors', '')
+    if isinstance(authors_raw, list):
+        state['authors'] = ", ".join(str(a) for a in authors_raw)
+    else:
+        state['authors'] = str(authors_raw)
+            
+    state['abstract'] = str(result.get('abstract', ''))
+        
+    # keywords：强制转为 JSON 格式的字符串（如 '["AI", "IFDL"]'）
+    keywords_raw = result.get('keywords', [])
+    if isinstance(keywords_raw, list):
+        state['keywords'] = json.dumps(keywords_raw, ensure_ascii=False)
+    else:
+        state['keywords'] = str(keywords_raw)
+            
+    logger.info(f"✅ 元数据提取成功：{state['title'][:50]}...")
     
     return state
 
