@@ -39,12 +39,17 @@
     <!-- PDF 内容区域 -->
     <div ref="containerRef" class="pdf-container" @scroll="onScroll">
       <div ref="contentRef" class="pdf-content">
-        <canvas
+        <div
           v-for="i in numPages"
           :key="i - 1"
-          :ref="el => setCanvasRef(i - 1, el as HTMLCanvasElement | null)"
-          class="pdf-canvas"
-        />
+          class="pdf-page-shell"
+          :style="pageShellStyle(i - 1)"
+        >
+          <canvas
+            :ref="el => setCanvasRef(i - 1, el as HTMLCanvasElement | null)"
+            class="pdf-canvas"
+          />
+        </div>
       </div>
     </div>
     
@@ -108,9 +113,29 @@ let pageWidths: number[] = []
 const renderedPages = new Set<number>()
 const renderingPages = new Set<number>()
 const loadingProgress = ref(0) // 加载进度 0-100
+let renderedScale = 1
+let scrollFrame: number | null = null
 
 const setCanvasRef = (index: number, el: HTMLCanvasElement | null) => {
   canvasRefs.value[index] = el
+}
+
+const pageShellStyle = (index: number) => ({
+  width: `${pageWidths[index] || 600}px`,
+  height: `${pageHeights[index] || 800}px`
+})
+
+const updatePageElementSize = (index: number) => {
+  const canvas = canvasRefs.value[index]
+  if (!canvas) return
+  const width = `${pageWidths[index] || 600}px`
+  const height = `${pageHeights[index] || 800}px`
+  canvas.style.width = width
+  canvas.style.height = height
+  if (canvas.parentElement) {
+    canvas.parentElement.style.width = width
+    canvas.parentElement.style.height = height
+  }
 }
 
 const renderPage = async (pageIndex: number, forceRender = false) => {
@@ -122,7 +147,7 @@ const renderPage = async (pageIndex: number, forceRender = false) => {
   
   try {
     const page = await pdfDoc.getPage(pageIndex + 1)
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     const viewport = page.getViewport({ scale: scale.value })
     
     const canvas = canvasRefs.value[pageIndex]
@@ -149,6 +174,7 @@ const renderPage = async (pageIndex: number, forceRender = false) => {
     
     pageHeights[pageIndex] = viewport.height
     pageWidths[pageIndex] = viewport.width
+    updatePageElementSize(pageIndex)
     
     await page.render({
       canvasContext: ctx,
@@ -183,7 +209,7 @@ const renderVisiblePages = () => {
       }
     }
     
-    cumulativeHeight += pageHeight
+    cumulativeHeight += pageHeight + 10
   }
   
   updateCurrentPage(scrollTop)
@@ -192,7 +218,7 @@ const renderVisiblePages = () => {
 const updateCurrentPage = (scrollTop: number) => {
   let cumulativeHeight = 0
   for (let i = 0; i < numPages.value; i++) {
-    cumulativeHeight += pageHeights[i] || 800
+    cumulativeHeight += (pageHeights[i] || 800) + 10
     if (cumulativeHeight > scrollTop + 50) {
       currentPage.value = i + 1
       break
@@ -201,7 +227,11 @@ const updateCurrentPage = (scrollTop: number) => {
 }
 
 const onScroll = () => {
-  renderVisiblePages()
+  if (scrollFrame !== null) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = null
+    renderVisiblePages()
+  })
 }
 
 const loadPdf = async () => {
@@ -218,18 +248,26 @@ const loadPdf = async () => {
   
   try {
     console.log('开始加载 PDF...')
-    const pdf = await pdfjsLib.getDocument({ 
-  url: props.pdfUrl,
-  verbosity: 0  // 设置日志级别：0=静默(不输出任何日志), 1=错误, 2=警告(默认), 3=信息
-}).promise
+    const pdf = await pdfjsLib.getDocument({
+      url: props.pdfUrl,
+      disableRange: false,
+      disableStream: true,
+      disableAutoFetch: true,
+      rangeChunkSize: 256 * 1024,
+      verbosity: 0
+    }).promise
     console.log('PDF 加载成功，页数:', pdf.numPages)
     
     pdfDoc = pdf
+    const firstPage = await pdf.getPage(1)
+    const firstViewport = firstPage.getViewport({ scale: scale.value })
+    pageHeights = new Array(pdf.numPages).fill(firstViewport.height)
+    pageWidths = new Array(pdf.numPages).fill(firstViewport.width)
+    renderedScale = scale.value
     numPages.value = pdf.numPages
-    pageHeights = new Array(pdf.numPages).fill(800)  // 默认高度
-    pageWidths = new Array(pdf.numPages).fill(600)    // 默认宽度
     
     await nextTick()
+    canvasRefs.value.forEach((_, index) => updatePageElementSize(index))
     
     // 【第一步：立即渲染首页】不等待所有页面高度计算
     console.log('渲染首页...')
@@ -237,118 +275,14 @@ const loadPdf = async () => {
     
     // 【第二步：立即显示首页】用户马上能看到内容
     loading.value = false
-    loadingProgress.value = Math.round(100 / numPages.value) // 首页已加载
+    loadingProgress.value = 100
     console.log('PDF首页已显示')
-    
-    // 【第三步：后台异步计算页面高度】
-    setTimeout(() => {
-      calculateAllPageHeights()
-    }, 50)
-    
-    // 【第四步：按优先级异步渲染剩余页面】
-    // P1: 首页（已完成）
-    // P2: 前10页（高优先级，快速渲染）
-    // P3: 剩余所有页（低优先级，浏览器空闲时渲染）
-    setTimeout(() => {
-      renderWithPriority()
-    }, 100)
+    renderVisiblePages()
   } catch (e: any) {
     console.error('加载 PDF 失败:', e.message || e)
     error.value = true
     loading.value = false
   }
-}
-
-// 后台计算所有页面高度（不阻塞渲染）
-const calculateAllPageHeights = async () => {
-  console.log('开始后台计算页面高度...')
-  for (let i = 0; i < numPages.value; i++) {
-    if (!pageHeights[i] || pageHeights[i] === 800) {
-      try {
-        const page = await pdfDoc.getPage(i + 1)
-        const viewport = page.getViewport({ scale: scale.value })
-        pageHeights[i] = viewport.height
-        pageWidths[i] = viewport.width
-      } catch (e) {
-        console.error(`计算第 ${i + 1} 页高度失败:`, e)
-      }
-    }
-  }
-  console.log('页面高度计算完成:', pageHeights)
-}
-
-// 优先级异步渲染：P1=首页(已渲染), P2=前10页, P3=剩余所有页
-const renderWithPriority = async () => {
-  if (!pdfDoc) return
-
-  const totalPages = numPages.value
-  if (totalPages <= 1) return
-
-  // 定义优先级队列
-  // P2: 第2页到第10页（或总页数，取较小值）
-  const priority2End = Math.min(totalPages, 10)
-  const priority2Pages: number[] = []
-  for (let i = 1; i < priority2End; i++) {
-    if (!renderedPages.has(i)) {
-      priority2Pages.push(i)
-    }
-  }
-
-  // P3: 第11页到最后一页
-  const priority3Pages: number[] = []
-  for (let i = priority2End; i < totalPages; i++) {
-    if (!renderedPages.has(i)) {
-      priority3Pages.push(i)
-    }
-  }
-
-  let renderedCount = 1 // 首页已渲染
-  const totalToRender = priority2Pages.length + priority3Pages.length
-
-  // 渲染单个页面并更新进度
-  const renderAndUpdateProgress = async (pageIndex: number) => {
-    if (renderedPages.has(pageIndex) || renderingPages.has(pageIndex)) return
-    await renderPage(pageIndex)
-    renderedCount++
-    loadingProgress.value = Math.round((renderedCount / totalPages) * 100)
-  }
-
-  // P2: 渲染前10页（高优先级）
-  console.log(`[P2] 开始渲染前 ${priority2Pages.length} 页...`)
-  for (const i of priority2Pages) {
-    await renderAndUpdateProgress(i)
-    // 每渲染2页让出主线程，确保用户交互流畅
-    if (priority2Pages.indexOf(i) % 2 === 0) {
-      await new Promise(resolve => setTimeout(resolve, 30))
-    }
-  }
-  console.log('[P2] 前10页渲染完成')
-
-  // P3: 渲染剩余页面（低优先级，后台异步）
-  if (priority3Pages.length > 0) {
-    console.log(`[P3] 开始后台渲染剩余 ${priority3Pages.length} 页...`)
-    // 使用 requestIdleCallback 或 setTimeout 让出主线程
-    for (const i of priority3Pages) {
-      // 等待浏览器空闲时再渲染
-      await new Promise<void>(resolve => {
-        if (typeof requestIdleCallback !== 'undefined') {
-          requestIdleCallback(async () => {
-            await renderAndUpdateProgress(i)
-            resolve()
-          }, { timeout: 200 })
-        } else {
-          setTimeout(async () => {
-            await renderAndUpdateProgress(i)
-            resolve()
-          }, 50)
-        }
-      })
-    }
-    console.log('[P3] 剩余页面渲染完成')
-  }
-
-  loadingProgress.value = 100
-  console.log('所有页面渲染完成')
 }
 
 const zoomIn = () => {
@@ -372,63 +306,41 @@ const fitWidth = () => {
   const containerWidth = containerRef.value.clientWidth - 20
   const firstPageWidth = pageWidths[0] || 600
   
-  scale.value = containerWidth / firstPageWidth
+  scale.value = scale.value * containerWidth / firstPageWidth
   reRenderAll()
 }
 
 const reRenderAll = async () => {
   if (!pdfDoc) return
-  
-  // 记录缩放前的当前页面
-  const currentScrollTop = containerRef.value?.scrollTop || 0
-  let currentDisplayPage = currentPage.value
-  
-  // 计算缩放前显示的是第几页
-  if (currentScrollTop > 0 && pageHeights.length > 0) {
-    let cumulativeHeight = 0
-    for (let i = 0; i < numPages.value; i++) {
-      cumulativeHeight += pageHeights[i] || 800
-      if (cumulativeHeight > currentScrollTop + 50) {
-        currentDisplayPage = i + 1
-        break
-      }
+
+  const currentDisplayPage = currentPage.value
+  const ratio = scale.value / renderedScale
+  renderedScale = scale.value
+  renderedPages.clear()
+
+  for (let i = 0; i < numPages.value; i++) {
+    pageHeights[i] = (pageHeights[i] || 800) * ratio
+    pageWidths[i] = (pageWidths[i] || 600) * ratio
+    const canvas = canvasRefs.value[i]
+    if (canvas) {
+      canvas.width = 1
+      canvas.height = 1
+      updatePageElementSize(i)
     }
   }
-  
-  console.log(`缩放前显示第 ${currentDisplayPage} 页`)
-  
-  renderedPages.clear()
-  
-  // 重新计算所有页面高度（考虑当前缩放比例）
-  for (let i = 0; i < numPages.value; i++) {
-    const page = await pdfDoc.getPage(i + 1)
-    const viewport = page.getViewport({ scale: scale.value })
-    pageHeights[i] = viewport.height
-    pageWidths[i] = viewport.width
-  }
-  
+
   await nextTick()
-  
-  // 重新渲染所有页面（强制渲染）
-  for (let i = 0; i < numPages.value; i++) {
-    await renderPage(i, true)
-  }
-  
-  await nextTick()
-  
-  // 根据新的页面高度计算新的滚动位置，保持显示同一页面
+
   if (containerRef.value && currentDisplayPage > 0) {
     const targetIndex = currentDisplayPage - 1
     let newScrollTop = 0
     for (let i = 0; i < targetIndex; i++) {
-      newScrollTop += pageHeights[i] || 800
+      newScrollTop += (pageHeights[i] || 800) + 10
     }
-    
-    console.log(`缩放后滚动到 ${newScrollTop} (第 ${currentDisplayPage} 页)`)
     containerRef.value.scrollTop = newScrollTop
-    currentPage.value = currentDisplayPage
   }
-  
+
+  await renderPage(currentDisplayPage - 1, true)
   renderVisiblePages()
 }
 
@@ -471,27 +383,16 @@ const scrollToPage = async (pageNum: number) => {
     return
   }
   
-  // 预渲染目标页面及其前后的页面（确保滚动时有足够高度）
-  const preRenderStart = Math.max(0, targetIndex - 2)
-  const preRenderEnd = Math.min(numPages.value - 1, targetIndex + 5)
-  
-  console.log(`预渲染页面 ${preRenderStart + 1} - ${preRenderEnd + 1}`)
-  
-  // 先渲染目标页面，确保有正确的高度
-  for (let i = preRenderStart; i <= preRenderEnd; i++) {
-    await renderPage(i)
-  }
+  // 只先渲染目标页，滚动后由视口逻辑加载附近页面。
+  await renderPage(targetIndex)
   
   // 等待渲染完成后再计算滚动位置
   await nextTick()
   
-  // 确保所有页面高度都已更新
-  await ensureAllPageHeights()
-  
   // 计算目标滚动位置
   let targetScrollTop = 0
   for (let i = 0; i < targetIndex; i++) {
-    targetScrollTop += (pageHeights[i] || 800)
+    targetScrollTop += (pageHeights[i] || 800) + 10
   }
   
   console.log('targetScrollTop:', targetScrollTop)
@@ -511,37 +412,41 @@ const scrollToPage = async (pageNum: number) => {
   }, 100)
   
   currentPage.value = pageNum
+  renderVisiblePages()
 }
 
-// 确保所有页面高度都已计算
-const ensureAllPageHeights = async () => {
-  if (!pdfDoc) return
-  
-  for (let i = 0; i < numPages.value; i++) {
-    if (!pageHeights[i]) {
-      const page = await pdfDoc.getPage(i + 1)
-      const viewport = page.getViewport({ scale: scale.value })
-      pageHeights[i] = viewport.height
-      pageWidths[i] = viewport.width
+const normalizeSearchText = (value: string) => value
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, '')
+
+const buildSearchFragments = (values: string[]): string[] => {
+  const fragments = new Set<string>()
+  for (const value of values) {
+    const normalized = normalizeSearchText(value)
+    if (normalized.length < 8) continue
+    fragments.add(normalized)
+    for (const length of [32, 24, 16, 12]) {
+      if (normalized.length < length) continue
+      const step = Math.max(6, Math.floor(length / 2))
+      for (let start = 0; start + length <= normalized.length; start += step) {
+        fragments.add(normalized.slice(start, start + length))
+      }
+      fragments.add(normalized.slice(-length))
     }
   }
+  return Array.from(fragments).sort((a, b) => b.length - a.length)
 }
 
-const searchText = async (text: string): Promise<number | null> => {
-  console.log('搜索文本:', text)
+const searchText = async (text: string | string[]): Promise<number | null> => {
+  const searchValues = (Array.isArray(text) ? text : [text]).filter(value => value?.trim())
+  console.log('搜索文本:', searchValues)
   
-  if (!pdfDoc || !text.trim()) {
+  if (!pdfDoc || searchValues.length === 0) {
     console.error('搜索失败：PDF未加载或搜索文本为空')
     return null
   }
-  
-  // 优化搜索策略：使用多个短文本片段进行搜索
-  const searchFragments = [
-    text.substring(0, 50),   // 前50字符
-    text.substring(0, 30),   // 前30字符
-    text.substring(0, 20),   // 前20字符
-  ].filter(t => t.trim().length >= 10)  // 至少10字符
-  
+  const searchFragments = buildSearchFragments(searchValues)
   console.log('搜索片段:', searchFragments)
   
   // 遍历所有页面查找匹配的文本
@@ -549,7 +454,9 @@ const searchText = async (text: string): Promise<number | null> => {
     try {
       const page = await pdfDoc.getPage(i + 1)
       const textContent = await page.getTextContent()
-      const pageText = textContent.items.map((item: any) => item.str).join('')
+      const pageText = normalizeSearchText(
+        textContent.items.map((item: any) => item.str).join(' ')
+      )
       
       // 检查页面是否包含任一搜索片段
       for (const fragment of searchFragments) {
@@ -572,13 +479,6 @@ watch(scale, () => {
   console.log('缩放变化:', scale.value)
 })
 
-watch(currentPage, (newPage) => {
-  if (newPage >= 1 && newPage <= numPages.value && containerRef.value) {
-    const scrollTop = pageHeights.slice(0, newPage - 1).reduce((a, b) => a + (b || 800), 0)
-    containerRef.value.scrollTop = scrollTop
-  }
-})
-
 watch(() => props.pdfUrl, () => {
   if (props.pdfUrl) {
     loadPdf()
@@ -592,6 +492,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (scrollFrame !== null) {
+    cancelAnimationFrame(scrollFrame)
+  }
   if (pdfDoc && typeof pdfDoc.destroy === 'function') {
     pdfDoc.destroy()
   }
@@ -722,6 +625,14 @@ defineExpose({
 }
 
 .pdf-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: white;
+}
+
+.pdf-page-shell {
+  flex: 0 0 auto;
   margin-bottom: 10px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   background: white;

@@ -1,10 +1,10 @@
-import axios, { AxiosInstance } from 'axios'
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || ''
 
 const apiClient: AxiosInstance = axios.create({
   baseURL,
-  timeout: 900000  // 15分钟，用于大文件上传
+  timeout: 30000
 })
 
 apiClient.interceptors.request.use((config) => {
@@ -25,11 +25,11 @@ apiClient.interceptors.response.use(
 )
 
 export const request = {
-  get: <T = any>(url: string, config?: any) => apiClient.get<T>(url, config),
-  post: <T = any>(url: string, data?: any, config?: any) => apiClient.post<T>(url, data, config),
-  put: <T = any>(url: string, data?: any, config?: any) => apiClient.put<T>(url, data, config),
-  delete: <T = any>(url: string, config?: any) => apiClient.delete<T>(url, config),
-  patch: <T = any>(url: string, data?: any, config?: any) => apiClient.patch<T>(url, data, config),
+  get: <T = any>(url: string, config?: AxiosRequestConfig): Promise<T> => apiClient.get<T>(url, config) as Promise<T>,
+  post: <T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => apiClient.post<T>(url, data, config) as Promise<T>,
+  put: <T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => apiClient.put<T>(url, data, config) as Promise<T>,
+  delete: <T = any>(url: string, config?: AxiosRequestConfig): Promise<T> => apiClient.delete<T>(url, config) as Promise<T>,
+  patch: <T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => apiClient.patch<T>(url, data, config) as Promise<T>,
 }
 
 export default request

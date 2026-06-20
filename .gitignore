@@ -16,6 +16,9 @@ logs/
 # 临时文件
 *.tmp
 *.temp
+*.pid
+*.pid.lock
+*.sock
 
 # 调试文件
 .dbg/
@@ -37,10 +40,18 @@ __pycache__/
 .coverage
 htmlcov/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.tox/
+.nox/
+*.egg-info/
+coverage.xml
 
 # ================ 前端相关 ================
 # Node.js 依赖
 frontend/node_modules/
+node_modules/
 
 # 构建产物
 frontend/dist/
@@ -51,6 +62,16 @@ frontend/.vite/
 
 # TypeScript 编译
 frontend/*.tsbuildinfo
+*.tsbuildinfo
+
+# Node/Vite 测试和诊断产物
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+playwright-report/
+test-results/
 
 # 前端环境变量
 frontend/.env
@@ -82,13 +103,12 @@ backend/lib/
 # 根目录测试脚本
 /test_*.py
 
-# 后端测试脚本
+# 后端临时测试脚本
 backend/test_*.py
 backend/check_*.py
 backend/analyze_*.py
-backend/tests/
 
-# 前端测试
+# 前端临时测试目录
 frontend/tests/
 
 # 测试表格数据
@@ -106,12 +126,12 @@ backend/*.skill
 # .trae/
 
 # ================ 部署相关 ================
-# Docker
+# 仅忽略本机覆盖配置；Dockerfile、.dockerignore、Nginx 配置应纳入版本控制
 docker-compose.override.yml
-.dockerignore
 
-# Nginx 配置
-nginx.conf
+# 本地工具状态
+.codex/
+.agents/
 
 # ================ 其他 ================
 # Jupyter Notebook

@@ -1,7 +1,8 @@
 """应用程序配置模块"""
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
-from typing import Optional, List
+from typing import Any, Optional, List
 from pathlib import Path
 
 # 【修正路径计算】根据你的实际文件位置重新计算
@@ -37,6 +38,19 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"]
 
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "debug", "development", "dev"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "release", "production", "prod"}:
+                return False
+        return bool(value)
+
     class Config:
         env_file = str(ENV_FILE_PATH)  # <--- 使用计算出的绝对路径
         env_file_encoding = "utf-8"
@@ -48,12 +62,20 @@ def get_settings() -> Settings:
 
 settings = get_settings()
 
+
+def mask_secret(value: Optional[str]) -> str:
+    if not value:
+        return "未设置"
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
+
 # 【解决缓冲问题】加上 flush=True，强制立刻写入日志文件！
 print("="*50, flush=True)
 print(f"🔥 [Config] 当前 config.py 绝对路径: {Path(__file__).resolve()}", flush=True)
 print(f"🔥 [Config] 尝试加载 .env 绝对路径: {ENV_FILE_PATH}", flush=True)
 print(f"🔥 [Config] 该文件是否存在: {ENV_FILE_PATH.exists()}", flush=True)
 print(f"🔥 [Config] 读取到的 LLM_PROVIDER: {settings.LLM_PROVIDER}", flush=True)
-print(f"🔥 [Config] 读取到的 OPENAI_API_KEY: {settings.OPENAI_API_KEY}", flush=True)
+print(f"🔥 [Config] 读取到的 OPENAI_API_KEY: {mask_secret(settings.OPENAI_API_KEY)}", flush=True)
 print(f"🔥 [Config] 读取到的 OPENAI_BASE_URL: {settings.OPENAI_BASE_URL}", flush=True)
 print("="*50, flush=True)

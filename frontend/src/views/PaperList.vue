@@ -20,7 +20,15 @@
               <a-list-item-meta>
                 <template #avatar><a-avatar :style="{ backgroundColor: '#6366f1' }"></a-avatar></template>
                 <template #title><a-link @click="$router.push(`/paper/${paper.id}`)">{{ paper.title }}</a-link></template>
-                <template #description><span>{{ paper.authors || '未知作者' }}</span><span> | </span><span>{{ formatDate(paper.uploaded_at) }}</span></template>
+                <template #description>
+                  <span>{{ paper.authors || '未知作者' }}</span><span> | </span><span>{{ formatDate(paper.uploaded_at) }}</span>
+                  <a-tag
+                    v-if="paper.media_status"
+                    size="small"
+                    :color="mediaStatusColor(paper.media_status)"
+                    class="media-status"
+                  >{{ paper.media_message }}</a-tag>
+                </template>
               </a-list-item-meta>
               <template #actions>
                 <a-button type="text" size="small" @click="$router.push(`/paper/${paper.id}`)">阅读</a-button>
@@ -32,7 +40,7 @@
         </a-list>
       </a-spin>
     </div>
-    <a-modal v-model:visible="showUploadModal" title="上传论文" :footer="null">
+    <a-modal v-model:visible="showUploadModal" title="上传论文" :footer="false">
       <a-spin :spinning="uploading" tip="上传中...">
         <a-upload :limit="1" accept=".pdf" :auto-upload="false" action="" :custom-request="customUpload" @change="handleFileChange">
           <template #upload-button><div class="upload-trigger"><p>点击或拖拽上传 PDF 文件</p></div></template>
@@ -54,7 +62,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
-import type { FileItem } from '@arco-design/web-vue' 
+import type { FileItem } from '@arco-design/web-vue'
+import type { RequestOption, UploadRequest } from '@arco-design/web-vue/es/upload/interfaces'
 import { getPaperList, uploadPaper, deletePaper, getTaskStatus } from '@/api/paper'
 import dayjs from 'dayjs'
 
@@ -66,24 +75,47 @@ const uploading = ref(false)
 const progressPercent = ref(0)
 const progressText = ref('')
 let pollInterval: number | null = null
+let mediaPollInterval: number | null = null
 
-const loadPapers = async () => {
-  loading.value = true
-  try { 
-    const response = await getPaperList()
-    papers.value = response.items || response.papers || []
-  } catch (error) { 
-    console.error('加载论文列表失败', error)
-  } finally { 
-    loading.value = false 
+const syncMediaPolling = () => {
+  const hasProcessingMedia = papers.value.some(paper => paper.media_status === 'processing')
+  if (hasProcessingMedia && !mediaPollInterval) {
+    mediaPollInterval = window.setInterval(() => loadPapers(true), 5000)
+  } else if (!hasProcessingMedia && mediaPollInterval) {
+    clearInterval(mediaPollInterval)
+    mediaPollInterval = null
   }
 }
 
+const loadPapers = async (silent = false) => {
+  if (!silent) loading.value = true
+  try { 
+    const response = await getPaperList()
+    papers.value = response.items || response.papers || []
+    syncMediaPolling()
+  } catch (error) { 
+    console.error('加载论文列表失败', error)
+    if (!silent) Message.error('加载论文列表失败，请刷新页面或重新登录')
+  } finally { 
+    if (!silent) loading.value = false
+  }
+}
 
-const customUpload = async (options: any) => {
+const mediaStatusColor = (status: string) => ({
+  processing: 'orange',
+  completed: 'green',
+  failed: 'red',
+  not_started: 'gray'
+}[status] || 'gray')
+
+
+const customUpload = (options: RequestOption): UploadRequest => {
   // 拦截 a-upload 的默认上传行为（包括重试按钮）
   // 不做任何事，所有上传由 handleUpload 按钮触发
   options.onSuccess?.({})
+  return {
+    abort: () => {}
+  }
 }
 
 const handleFileChange = (fileList: FileItem[]) => {
@@ -101,16 +133,17 @@ const pollTaskStatus = async (taskId: string) => {
     progressPercent.value = response.progress
     progressText.value = response.message
     
-    if (response.status === 'completed') {
+    if (response.status === 'ready' || response.status === 'completed') {
       if (pollInterval) {
         clearInterval(pollInterval)
         pollInterval = null
       }
       progressPercent.value = 100
-      progressText.value = '处理完成！'
+      const mediaEnhancing = response.status === 'ready'
+      progressText.value = mediaEnhancing ? '论文已可用，图表继续后台增强' : '处理完成！'
       
       setTimeout(() => {
-        Message.success('上传成功')
+        Message.success(mediaEnhancing ? '论文已可用，图表将在后台继续增强' : '上传成功')
         showUploadModal.value = false
         selectedFile.value = null
         uploading.value = false
@@ -173,6 +206,9 @@ const handleUpload = async () => {
 onUnmounted(() => {
   if (pollInterval) {
     clearInterval(pollInterval)
+  }
+  if (mediaPollInterval) {
+    clearInterval(mediaPollInterval)
   }
 })
 
@@ -244,6 +280,11 @@ onMounted(() => { loadPapers() })
   padding: 16px;
   background: #f5f7fa;
   border-radius: 8px;
+}
+
+.media-status {
+  margin-left: 8px;
+  vertical-align: middle;
 }
 
 .progress-bar {

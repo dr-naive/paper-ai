@@ -159,7 +159,7 @@ class TableSemanticAnalyzer:
 """
         
         try:
-            response = await self.llm.agenerate([prompt])
+            response = await self.llm.agenerate([prompt], json_mode=True, enable_thinking=False)
             text = response.generations[0][0].text.strip()
             
             # 清理响应
@@ -234,7 +234,7 @@ class TableSemanticAnalyzer:
 """
         
         try:
-            response = await self.llm.agenerate([prompt])
+            response = await self.llm.agenerate([prompt], json_mode=True, enable_thinking=False)
             text = response.generations[0][0].text.strip()
             
             # 清理响应

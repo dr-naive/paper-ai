@@ -1,4 +1,5 @@
 """多媒体信息提取器 - 从论文中提取图片、表格、公式"""
+import asyncio
 import re
 import json
 import logging
@@ -79,6 +80,10 @@ class MultimediaExtractor:
             logger.warning("未提供 PDF 路径，无法提取表格")
             return tables
 
+        if self._is_raster_document_without_vector_tables(path):
+            logger.info("📊 检测到无矢量线条的整页栅格 PDF，跳过无效的 pdfplumber 表格扫描")
+            return tables
+
         try:
             import pdfplumber
             import os
@@ -105,50 +110,45 @@ class MultimediaExtractor:
                                     "extraction_method": "pdfplumber"
                                 })
 
-            if len(tables) == 0:
-                logger.info("📊 pdfplumber 未提取到表格，尝试使用 VLM 分析图片表格")
-                
-                output_dir = f"/tmp/paper_table_images_{os.path.basename(path).replace('.pdf', '')}"
-                os.makedirs(output_dir, exist_ok=True)
-                
-                table_images = await self.extract_suspected_table_images_from_pdf(path, output_dir)
-                logger.info(f"📊 提取到 {len(table_images)} 张疑似表格图片")
-                
-                if table_images:
-                    vlm_tables = await self.analyze_table_images(table_images)
-                    logger.info(f"📊 VLM 确认为表格的有 {len(vlm_tables)} 个")
-                    
-                    for idx, vlm_table in enumerate(vlm_tables):
-                        content = []
-                        csv_content = vlm_table.get("csv_content", "")
-                        if csv_content:
-                            import io
-                            import csv
-                            try:
-                                reader = csv.reader(io.StringIO(csv_content))
-                                content = [row for row in reader]
-                            except Exception as e:
-                                logger.warning(f"CSV 解析失败，使用简单分割: {e}")
-                                for line in csv_content.strip().split("\n"):
-                                    content.append(line.split(","))
-                        
-                        tables.append({
-                            "page": vlm_table["page"],
-                            "table_number": idx + 1,
-                            "content": content,
-                            "markdown": vlm_table.get("markdown_content", ""),
-                            "csv": vlm_table.get("csv_content", ""),
-                            "caption": vlm_table.get("table_title", f"表{len(tables)+1}"),
-                            "bbox": None,
-                            "extraction_method": "vlm_table_extraction"
-                        })
-
         except ImportError as e:
             logger.error(f"需要安装依赖: {e}")
         except Exception as e:
             logger.error(f"PDF 表格提取失败: {e}")
 
         return tables
+
+    @staticmethod
+    def _is_raster_document_without_vector_tables(pdf_path: str) -> bool:
+        """Return true when every page is a dominant raster image without vector lines."""
+        try:
+            import fitz
+
+            doc = fitz.open(pdf_path)
+            if not doc.page_count:
+                doc.close()
+                return False
+
+            for page in doc:
+                page_area = page.rect.width * page.rect.height
+                has_dominant_image = False
+                for image_info in page.get_images(full=True):
+                    for rect in page.get_image_rects(image_info[0]):
+                        coverage = rect.width * rect.height / page_area if page_area else 0
+                        if coverage >= 0.8:
+                            has_dominant_image = True
+                            break
+                    if has_dominant_image:
+                        break
+
+                if not has_dominant_image or page.get_drawings():
+                    doc.close()
+                    return False
+
+            doc.close()
+            return True
+        except Exception as exc:
+            logger.debug("整页栅格 PDF 检测失败，保留 pdfplumber 路径: %s", exc)
+            return False
 
     def _table_to_markdown(self, table_data: List[List[str]]) -> str:
         """将表格数据转换为 Markdown 格式"""
@@ -421,7 +421,10 @@ class MultimediaExtractor:
 
                         table_groups.append([(tx0, ty0, page.rect.width - 50, region_y_end, ttext)])
                 else:
-                    table_groups = [target_blocks]
+                    # 泛化关键词（Method、ACC、数据集名等）在正文中很常见，不能据此
+                    # 把整页送给视觉模型。无明确标题的结构化表格已由 pdfplumber 处理；
+                    # 纯扫描件应进入独立 OCR/版面检测回退。
+                    continue
 
                 for group_idx, group in enumerate(table_groups):
                     min_x0 = min(b[0] for b in group)
@@ -496,22 +499,37 @@ class MultimediaExtractor:
         from .image_analyzer import get_image_analyzer
         
         analyzer = get_image_analyzer()
-        results = []
+        semaphore = asyncio.Semaphore(3)
 
-        for item in table_images:
+        async def analyze_one(item: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+            image_path = item.get("image_path")
+            if not image_path:
+                return item, {"success": False, "is_table": False, "error": "缺少图片路径"}
+            async with semaphore:
+                return item, await analyzer.analyze_table_image(image_path)
+
+        analyzed = await asyncio.gather(*(analyze_one(item) for item in table_images))
+
+        # 并发调用中的瞬时错误串行重试一次，避免限流或格式错误直接造成表格丢失。
+        for index, (item, analysis_result) in enumerate(analyzed):
+            if not analysis_result.get("success") and item.get("image_path"):
+                logger.warning("表格候选 %s 首次分析失败，串行重试", index + 1)
+                await asyncio.sleep(0.5)
+                analyzed[index] = (
+                    item,
+                    await analyzer.analyze_table_image(item["image_path"]),
+                )
+
+        results = []
+        for index, (item, analysis_result) in enumerate(analyzed):
             image_path = item.get("image_path")
             page_num = item.get("page")
-
-            if not image_path:
-                continue
-
-            analysis_result = await analyzer.analyze_table_image(image_path)
 
             if analysis_result.get("is_table"):
                 results.append({
                     "page": page_num,
                     "image_index": item.get("image_index"),
-                    "table_title": analysis_result.get("table_title", f"表{len(results)+1}"),
+                    "table_title": analysis_result.get("table_title", f"表{index + 1}"),
                     "markdown_content": analysis_result.get("markdown_content", ""),
                     "csv_content": analysis_result.get("csv_content", ""),
                     "key_data_points": analysis_result.get("key_data_points", []),
@@ -565,6 +583,7 @@ class MultimediaExtractor:
             for page_num, page in enumerate(doc, start=1):
                 # 获取页面中的所有图像
                 image_list = page.get_images(full=True)
+                full_page_processed = False
 
                 for img_index, img_info in enumerate(image_list, start=1):
                     try:
@@ -572,6 +591,60 @@ class MultimediaExtractor:
                         xref = img_info[0]
                         base_image = doc.extract_image(xref)
                         image_bytes = base_image["image"]
+
+                        page_area = page.rect.width * page.rect.height
+                        image_rects = page.get_image_rects(xref)
+                        max_page_coverage = max(
+                            (
+                                max(0, rect.width) * max(0, rect.height) / page_area
+                                for rect in image_rects
+                            ),
+                            default=0,
+                        ) if page_area else 0
+                        if max_page_coverage >= 0.8:
+                            if full_page_processed:
+                                continue
+                            full_page_processed = True
+
+                            figure_regions = self._extract_figure_regions_from_page(
+                                page=page,
+                                page_num=page_num,
+                                output_dir=output_dir,
+                                start_index=len(images) + 1,
+                            )
+                            if figure_regions:
+                                images.extend(figure_regions)
+                                logger.info(
+                                    "整页背景第 %s 页裁出 %s 个图区域",
+                                    page_num,
+                                    len(figure_regions),
+                                )
+                                continue
+
+                            # 纯扫描页没有可定位文字层时保留整页视觉回退，避免召回归零。
+                            if not page.get_text().strip():
+                                img = Image.open(io.BytesIO(image_bytes))
+                                width, height = img.size
+                                image_path = os.path.join(output_dir, f"full_page_p{page_num}.jpg")
+                                img.convert("RGB").save(image_path, "JPEG", quality=85)
+                                images.append({
+                                    "page": page_num,
+                                    "image_index": len(images) + 1,
+                                    "image_path": image_path,
+                                    "width": width,
+                                    "height": height,
+                                    "aspect_ratio": width / height if height else 0,
+                                    "caption": None,
+                                    "extraction_method": "full_page_scan_fallback",
+                                })
+                                logger.info("纯扫描页 %s 保留整页视觉回退", page_num)
+                                continue
+
+                            logger.info(
+                                "整页背景第 %s 页无图标题，跳过普通图片分析",
+                                page_num,
+                            )
+                            continue
 
                         # 转换为 PIL Image
                         img = Image.open(io.BytesIO(image_bytes))
@@ -618,6 +691,117 @@ class MultimediaExtractor:
             logger.error(f"PDF 图片提取失败: {e}")
 
         return images
+
+    def _extract_figure_regions_from_page(
+        self,
+        page: object,
+        page_num: int,
+        output_dir: str,
+        start_index: int,
+    ) -> List[Dict[str, Any]]:
+        """Crop figure candidates above explicit figure captions on rasterized pages."""
+        import fitz
+        import os
+
+        blocks = [block for block in page.get_text("blocks") if len(block) >= 5]
+        caption_pattern = re.compile(
+            r"^(?:图\s*\d+\s*[：:]|fig(?:ure)?\.?\s*\d+\s*[.:])",
+            re.IGNORECASE,
+        )
+        captions = [block for block in blocks if caption_pattern.match(block[4].strip())]
+        if not captions:
+            return []
+
+        page_width = page.rect.width
+        page_height = page.rect.height
+        margin_x = max(24.0, page_width * 0.08)
+        regions = []
+        full_page_fallback_added = False
+
+        for offset, caption in enumerate(sorted(captions, key=lambda block: block[1])):
+            cx0, cy0, cx1, cy1, caption_text = caption[:5]
+
+            if cx0 >= page_width * 0.48:
+                region_x0, region_x1 = page_width * 0.49, page_width - margin_x
+            elif cx1 <= page_width * 0.52:
+                region_x0, region_x1 = margin_x, page_width * 0.51
+            else:
+                region_x0, region_x1 = margin_x, page_width - margin_x
+
+            previous_bottom = page_height * 0.05
+            preceding_content_blocks = []
+            preceding_caption_is_table = False
+            for block in blocks:
+                bx0, by0, bx1, by1 = block[:4]
+                if by1 >= cy0 - 4:
+                    continue
+                overlap = max(0.0, min(region_x1, bx1) - max(region_x0, bx0))
+                if overlap >= min(region_x1 - region_x0, bx1 - bx0) * 0.2:
+                    previous_bottom = max(previous_bottom, by1)
+                    text = block[4].strip()
+                    if by0 > page_height * 0.06:
+                        preceding_content_blocks.append(block)
+                    if re.match(r"^(?:表\s*\d+|table\s*\d+)", text, re.IGNORECASE):
+                        preceding_caption_is_table = True
+
+            clip = fitz.Rect(
+                max(0, region_x0 - 8),
+                max(0, previous_bottom + 5),
+                min(page_width, region_x1 + 8),
+                min(page_height, cy1 + 6),
+            )
+            boundary_is_ambiguous = (
+                len(preceding_content_blocks) >= 3
+                or preceding_caption_is_table
+                or clip.height < page_height * 0.18
+            )
+            if boundary_is_ambiguous:
+                if full_page_fallback_added:
+                    continue
+                full_page_fallback_added = True
+                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                image_index = start_index + len(regions)
+                image_path = os.path.join(
+                    output_dir,
+                    f"figure_page_{image_index}_p{page_num}.jpg",
+                )
+                pix.save(image_path)
+                regions.append({
+                    "page": page_num,
+                    "image_index": image_index,
+                    "image_path": image_path,
+                    "width": pix.width,
+                    "height": pix.height,
+                    "aspect_ratio": pix.width / pix.height if pix.height else 0,
+                    "caption": re.sub(r"\s+", " ", caption_text).strip(),
+                    "bbox": [0, 0, page_width, page_height],
+                    "extraction_method": "caption_page_fallback",
+                })
+                continue
+
+            if clip.width < 120 or clip.height < 60:
+                continue
+
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=clip, alpha=False)
+            image_index = start_index + offset
+            image_path = os.path.join(
+                output_dir,
+                f"figure_region_{image_index}_p{page_num}.jpg",
+            )
+            pix.save(image_path)
+            regions.append({
+                "page": page_num,
+                "image_index": image_index,
+                "image_path": image_path,
+                "width": pix.width,
+                "height": pix.height,
+                "aspect_ratio": pix.width / pix.height if pix.height else 0,
+                "caption": re.sub(r"\s+", " ", caption_text).strip(),
+                "bbox": [clip.x0, clip.y0, clip.x1, clip.y1],
+                "extraction_method": "caption_region_cropping",
+            })
+
+        return regions
 
     def extract_text_from_image(self, image_path: str) -> str:
         """

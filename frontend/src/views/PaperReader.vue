@@ -63,9 +63,9 @@
                 <a-select
                   v-model="currentSessionId"
                   placeholder="选择对话"
-                  size="mini"
+                  size="small"
                   style="flex: 1; min-width: 0"
-                  @change="switchSession"
+                  @change="handleSessionChange"
                 >
                   <a-option v-for="s in sessions" :key="s.id" :value="s.id">
                     {{ s.title }}
@@ -94,7 +94,7 @@
                   <div class="qa-answer">
                     <span class="qa-label">答</span>
                     <div class="qa-answer-content">
-                      <span>{{ qa.answer }}</span>
+                      <div class="markdown-answer" v-html="renderMarkdown(qa.answer)"></div>
                       <!-- 引用溯源 -->
                       <div v-if="qa.citations && qa.citations.length" class="qa-citations">
                         <div class="citation-title">
@@ -108,7 +108,7 @@
                           @click="locateInPdf(cite)"
                         >
                           <div class="citation-header">
-                            <a-tag size="mini" color="arcoblue">{{ cite.section }}</a-tag>
+                            <a-tag size="small" color="arcoblue">{{ cite.section }}</a-tag>
                             <span v-if="cite.position" class="citation-position">{{ cite.position }}</span>
                           </div>
                           <p class="citation-text">{{ cite.text }}</p>
@@ -414,6 +414,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconArrowLeft, IconMenu, IconRefresh, IconDelete } from '@arco-design/web-vue/es/icon'
 import PdfViewer from '@/components/PdfViewer.vue'
+import { renderMarkdown } from '@/utils/markdown'
 import {
   getPaper, getPaperSections,
   listSessions, createSession, deleteSession, getSessionMessages, askInSession,
@@ -431,7 +432,7 @@ const pdfViewerRef = ref<InstanceType<typeof PdfViewer> | null>(null)
 const showSidebar = ref(true)
 const sidebarWidth = ref(420)
 const sections = ref<any[]>([])
-const highlightedSection = ref('')
+const paperTables = ref<any[]>([])
 
 // 结构化摘要相关
 const structuredSummary = ref<any>(null)
@@ -499,6 +500,38 @@ const switchSession = async (sessionId: string) => {
     }))
   } catch (error) {
     Message.error('加载会话失败')
+  }
+}
+
+const syncPendingQaMessage = async (sessionId: string, messageId: string) => {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    if (currentSessionId.value !== sessionId) return
+
+    try {
+      const res = await getSessionMessages(sessionId)
+      const remoteMessage = (res.messages || []).find((m: any) => m.id === messageId)
+      if (!remoteMessage) continue
+
+      const localMessage = qaHistory.value.find(item => item.id === messageId)
+      if (localMessage) {
+        localMessage.follow_up_questions = remoteMessage.follow_up_questions || []
+      }
+
+      if (remoteMessage.follow_up_questions?.length) {
+        await loadSessions()
+        return
+      }
+    } catch (error) {
+      console.error('同步后台追问失败:', error)
+    }
+  }
+  await loadSessions()
+}
+
+const handleSessionChange = (value: string | number | boolean | Record<string, any> | Array<string | number | boolean | Record<string, any>>) => {
+  if (typeof value === 'string') {
+    switchSession(value)
   }
 }
 
@@ -573,6 +606,38 @@ const retryLoadPdf = () => {
   pdfUrl.value = `/api/v1/papers/${paperId}/pdf?token=${token}&t=${Date.now()}`
 }
 
+const normalizeLocationText = (value: unknown) => String(value || '')
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, '')
+
+const findCitationPage = (cite: any): number | null => {
+  const explicitPage = Number(cite?.page)
+  if (Number.isInteger(explicitPage) && explicitPage > 0) return explicitPage
+
+  const sectionText = String(cite?.section || '')
+  const numberMatch = sectionText.match(/(?:表|table)\s*(\d+)/i)
+  const tableNumber = Number(cite?.table_number || numberMatch?.[1])
+  const normalizedSection = normalizeLocationText(sectionText)
+  const tables = [
+    ...paperTables.value,
+    ...sections.value.flatMap(section => section.tables || [])
+  ]
+
+  const matchedTable = tables.find((table: any) => {
+    const caption = normalizeLocationText(table.caption || table.title || '')
+    const captionMatches = caption && normalizedSection && (
+      caption.includes(normalizedSection) || normalizedSection.includes(caption)
+    )
+    const numberMatches = Number.isInteger(tableNumber) && tableNumber > 0
+      && Number(table.table_number) === tableNumber
+    return captionMatches || numberMatches
+  })
+
+  const page = Number(matchedTable?.page || matchedTable?.page_number)
+  return Number.isInteger(page) && page > 0 ? page : null
+}
+
 // 定位引用到 PDF 原文
 const locateInPdf = async (cite: any) => {
   console.log('locateInPdf called with:', cite)
@@ -616,13 +681,22 @@ const locateInPdf = async (cite: any) => {
     Message.warning('PDF 阅读器尚未加载完成')
     return
   }
-  
-  // 优先使用引用文本进行搜索定位
-  const searchText = cite.text ? cite.text.substring(0, 100).trim() : cite.section
-  
-  if (searchText) {
-    Message.info(`正在定位：${searchText.substring(0, 30)}...`)
-    const foundPage = await pdfViewerRef.value.searchText(searchText)
+
+  const citationPage = findCitationPage(cite)
+  if (citationPage) {
+    Message.info(`正在定位到第 ${citationPage} 页...`)
+    await pdfViewerRef.value.scrollToPage(citationPage)
+    Message.success(`已定位到第 ${citationPage} 页`)
+    return
+  }
+
+  const searchCandidates = [cite.search_text, cite.text, cite.section]
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+
+  if (searchCandidates.length) {
+    Message.info(`正在定位：${searchCandidates[0].substring(0, 30)}...`)
+    const foundPage = await pdfViewerRef.value.searchText(searchCandidates)
     if (foundPage) {
       Message.success(`已定位到第 ${foundPage} 页`)
     } else {
@@ -637,6 +711,7 @@ const loadSections = async () => {
   try {
     const response = await getPaperSections(paperId)
     sections.value = response.sections || []
+    paperTables.value = response.tables || []
   } catch (error) {
     console.error('加载章节失败:', error)
   }
@@ -667,6 +742,9 @@ const askQuestion = async (q: string) => {
       follow_up_questions: response.follow_up_questions || []
     })
     question.value = ''
+    if (response.follow_up_pending && response.message_id) {
+      void syncPendingQaMessage(currentSessionId.value, response.message_id)
+    }
     // 刷新会话列表（更新标题）
     await loadSessions()
   } catch (error) {
@@ -940,10 +1018,73 @@ watch(interpretType, () => {
   min-width: 0;
 }
 
-.qa-answer-content > span {
-  display: block;
+.markdown-answer {
   margin-bottom: 8px;
   color: #1d2129;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
+}
+
+.markdown-answer :deep(p) {
+  margin: 0 0 10px;
+}
+
+.markdown-answer :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-answer :deep(ul),
+.markdown-answer :deep(ol) {
+  margin: 6px 0 10px;
+  padding-left: 24px;
+}
+
+.markdown-answer :deep(li) {
+  margin: 4px 0;
+}
+
+.markdown-answer :deep(h2),
+.markdown-answer :deep(h3),
+.markdown-answer :deep(h4) {
+  margin: 14px 0 6px;
+  line-height: 1.4;
+}
+
+.markdown-answer :deep(h2) { font-size: 17px; }
+.markdown-answer :deep(h3) { font-size: 15px; }
+.markdown-answer :deep(h4) { font-size: 14px; }
+
+.markdown-answer :deep(table) {
+  width: max-content;
+  min-width: 100%;
+  margin: 10px 0 12px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.markdown-answer :deep(th),
+.markdown-answer :deep(td) {
+  padding: 7px 10px;
+  border: 1px solid #d9dde5;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.markdown-answer :deep(th) {
+  background: #f2f3f5;
+  font-weight: 600;
+}
+
+.markdown-answer :deep(tr:nth-child(even) td) {
+  background: #fafbfc;
+}
+
+.markdown-answer :deep(code) {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f2f3f5;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.92em;
 }
 
 .qa-label {

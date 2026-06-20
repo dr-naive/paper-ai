@@ -4,17 +4,207 @@ from app.agent.state import QAAgentState
 from app.llm.client import get_llm_client
 import json
 import logging
+import re
+import time
+from difflib import SequenceMatcher
 from loguru import logger
 
 logger = logging.getLogger(__name__)
+
+
+METADATA_PATTERNS = {
+    "title": [r"标题", r"题目", r"title", r"paper name"],
+    "authors": [r"作者", r"谁写", r"author", r"authors"],
+    "abstract": [r"摘要", r"abstract"],
+    "keywords": [r"关键词", r"关键字", r"keywords"],
+    "venue": [r"期刊", r"会议", r"venue", r"发表在哪", r"published"],
+    "publication_year": [r"年份", r"哪一年", r"year"],
+    "doi": [r"\bdoi\b"],
+}
+
+SIMPLE_INTENT_PATTERNS = [
+    r"总结",
+    r"概括",
+    r"主要内容",
+    r"讲了什么",
+    r"研究什么",
+    r"核心观点",
+    r"main idea",
+    r"summary",
+    r"summarize",
+    r"what is .* about",
+]
+
+CONTEXT_DEPENDENT_PATTERNS = [
+    r"这个",
+    r"上面",
+    r"刚才",
+    r"前面",
+    r"\bit\b",
+    r"\bthat\b",
+    r"\babove\b",
+    r"\bprevious\b",
+]
+
+COMPLEX_REASONING_PATTERNS = [
+    r"证明",
+    r"推导",
+    r"数学",
+    r"公式",
+    r"为什么.*成立",
+    r"机制",
+    r"原理",
+    r"复杂",
+    r"derive",
+    r"prove",
+    r"equation",
+    r"formula",
+    r"mechanism",
+]
+
+
+def detect_metadata_intent(question: str) -> str | None:
+    q = question.lower()
+    # “表1的标题”等媒体问题不是论文元数据问题。
+    if re.search(r"(?:表|table|图|figure)\s*\d+", q, re.IGNORECASE):
+        return None
+    for field, patterns in METADATA_PATTERNS.items():
+        if any(re.search(pattern, q, re.IGNORECASE) for pattern in patterns):
+            return field
+    return None
+
+
+def detect_simple_intent(question: str) -> str | None:
+    """Conservative rule path for short overview questions."""
+    q = question.lower().strip()
+    if len(q) > 80:
+        return None
+    if any(re.search(pattern, q, re.IGNORECASE) for pattern in CONTEXT_DEPENDENT_PATTERNS):
+        return None
+    if any(re.search(pattern, q, re.IGNORECASE) for pattern in SIMPLE_INTENT_PATTERNS):
+        return "general"
+    return None
+
+
+def needs_deep_thinking(question: str) -> bool:
+    q = question.lower().strip()
+    return any(re.search(pattern, q, re.IGNORECASE) for pattern in COMPLEX_REASONING_PATTERNS)
+
+
+def safe_json_loads(text: str) -> dict:
+    """Parse model JSON output with light cleanup."""
+    cleaned = text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0]
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```", 1)[1].split("```", 1)[0]
+    try:
+        return json.loads(cleaned.strip())
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
+def _normalize_locator_text(text: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(text or "").lower())
+
+
+def _best_source_excerpt(citation_text: str, source_content: str, max_chars: int = 180) -> str:
+    """Choose an exact source sentence for client-side PDF text location."""
+    source_content = str(source_content or "").strip()
+    if not source_content:
+        return ""
+
+    candidates = [
+        part.strip()
+        for part in re.split(r"(?<=[。！？.!?；;])\s*|\n+", source_content)
+        if len(_normalize_locator_text(part)) >= 8
+    ]
+    if not candidates:
+        return source_content[:max_chars]
+
+    normalized_citation = _normalize_locator_text(citation_text)
+    if not normalized_citation:
+        return candidates[0][:max_chars]
+
+    best = max(
+        candidates,
+        key=lambda part: SequenceMatcher(
+            None,
+            normalized_citation,
+            _normalize_locator_text(part),
+        ).ratio(),
+    )
+    return best[:max_chars]
+
+
+def _enrich_citations(citations: list, chunks: list) -> list:
+    """Attach deterministic retrieval metadata used for PDF source location."""
+    enriched = []
+    for citation in citations or []:
+        if not isinstance(citation, dict):
+            continue
+
+        item = dict(citation)
+        source = None
+        source_id = str(item.get("source_id") or "").upper()
+        if source_id.startswith("S") and source_id[1:].isdigit():
+            index = int(source_id[1:]) - 1
+            if 0 <= index < len(chunks):
+                source = chunks[index]
+
+        if source is None:
+            section = str(item.get("section") or "")
+            source = next(
+                (chunk for chunk in chunks if str(chunk.get("section") or "") == section),
+                None,
+            )
+
+        if source:
+            item["source_id"] = f"S{chunks.index(source) + 1}"
+            for field in ("page", "table_number", "chunk_type", "chunk_index"):
+                if source.get(field) is not None:
+                    item[field] = source[field]
+            if source.get("page") is not None:
+                item["position"] = f"PDF 第{source['page']}页"
+            item["search_text"] = _best_source_excerpt(
+                item.get("text", ""),
+                source.get("content", ""),
+            )
+        enriched.append(item)
+    return enriched
 
 
 async def recognize_intent(state: QAAgentState) -> QAAgentState:
     """识别问题意图"""
     logger.info(f"[增强问答 Agent] 识别问题意图")
     
-    llm = get_llm_client()
     question = state['question']
+    metadata_field = detect_metadata_intent(question)
+    if metadata_field:
+        state['intent'] = 'metadata'
+        state['confidence'] = 0.95
+        state['metadata_field'] = metadata_field
+        logger.info(f"✅ 规则识别元数据问题：{metadata_field}")
+        return state
+
+    simple_intent = detect_simple_intent(question)
+    if simple_intent:
+        state['intent'] = simple_intent
+        state['confidence'] = 0.8
+        state['simple_question'] = True
+        logger.info(f"✅ 规则识别简单问题：{simple_intent}")
+        return state
+
+    if re.search(r"表格|(?:表|table)\s*\d+", question, re.IGNORECASE):
+        state['intent'] = 'detail'
+        state['confidence'] = 0.95
+        logger.info("✅ 规则识别表格细节问题")
+        return state
+
+    llm = get_llm_client()
     
     prompt = f"""
     请分析以下关于论文的问题意图：
@@ -35,11 +225,9 @@ async def recognize_intent(state: QAAgentState) -> QAAgentState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text = response.generations[0][0].text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        result = json.loads(text.strip())
+        result = safe_json_loads(text)
         state['intent'] = result.get('intent', 'general')
         state['confidence'] = result.get('confidence', 0.5)
         logger.info(f"✅ 意图识别成功：{state['intent']}")
@@ -57,6 +245,33 @@ async def answer_metadata(state: QAAgentState) -> QAAgentState:
     
     metadata = state.get('paper_metadata', {})
     question = state['question']
+    field = state.get('metadata_field') or detect_metadata_intent(question)
+    field_labels = {
+        "title": "标题",
+        "authors": "作者",
+        "abstract": "摘要",
+        "keywords": "关键词",
+        "venue": "发表 venue",
+        "publication_year": "发表年份",
+        "doi": "DOI",
+    }
+
+    if field:
+        value = metadata.get(field)
+        if isinstance(value, list):
+            value_text = "、".join(str(v) for v in value if v)
+        else:
+            value_text = str(value or "").strip()
+        label = field_labels.get(field, field)
+        if value_text:
+            state['answer'] = f"论文的{label}是：{value_text}"
+            state['citations'] = [{"section": "论文元数据", "text": f"{label}：{value_text}", "position": "metadata"}]
+            state['sources'] = ["论文元数据"]
+        else:
+            state['answer'] = f"论文信息中未提供{label}。"
+            state['citations'] = []
+            state['sources'] = []
+        return state
     
     # 构建元数据上下文
     meta_info = []
@@ -96,17 +311,11 @@ async def answer_metadata(state: QAAgentState) -> QAAgentState:
     
     try:
         llm = get_llm_client()
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text = response.generations[0][0].text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        
-        # 健壮地解析 JSON
-        result = None
         try:
-            result = json.loads(text.strip())
+            result = safe_json_loads(text)
         except json.JSONDecodeError:
-            import re
             answer_match = re.search(r'"answer"\s*:\s*"(.*?)"\s*,', text, re.DOTALL)
             if answer_match:
                 result = {"answer": answer_match.group(1).replace('\\"', '"'), "citations": []}
@@ -141,13 +350,18 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
         state['sources'] = []
         return state
     
-    # 构建带章节信息的上下文，保留更多原文
+    table_question = bool(re.search(r"表格|(?:表|table)\s*\d+", question, re.IGNORECASE))
+
+    # 构建带章节和媒体元数据的上下文，保留更多原文
     context_parts = []
     for i, c in enumerate(chunks):
         section = c.get('section', '未知章节')
         content = c.get('content', '')
-        # 保留更长的原文片段
-        context_parts.append(f"[章节: {section}]\n{content}")
+        media_label = ""
+        if c.get("chunk_type") == "table":
+            number = c.get("table_number")
+            media_label = f"[表格: 表{number}]\n" if number else "[表格]\n"
+        context_parts.append(f"[来源: S{i + 1}]\n[章节: {section}]\n{media_label}{content}")
     
     context = "\n\n---\n\n".join(context_parts)
     
@@ -166,6 +380,17 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
         
         注意：回答当前问题时可以参考历史信息，但要以论文内容为准。
         """
+
+    table_prompt = ""
+    if table_question:
+        table_prompt = """
+    7. 这是表格数据问题。优先依据标记为[表格]的原始表格数据作答，说明列名、主要行和对应数值；不要只复述表格总结。
+    8. 若上下文中已经提供目标表格，不得回答“未找到”；若表格过长，应概括结构并列出关键数据，明确说明省略范围。
+    9. 表中的方法数量、行列数量、数值和排名必须逐项核对后再陈述；不要根据印象补全。除非逐行计数并确认，否则不要写“其他N种方法”，直接列出方法名。
+    10. 必须使用 Markdown 表格展示用户要求的数据。单个表格尽量不超过 6 列；原表很宽时按数据集或指标拆成最多 2-3 个小表，或将表格转置。
+        对“多个数据集 × ACC/F1”这类表，优先每 3-4 个数据集一组，列格式为“Method | 数据集1 (ACC/F1) | 数据集2 (ACC/F1) ...”，不要为每个数据集单独生成一个表。
+    11. 表格之后用 2-4 个项目符号总结关键观察；缺失值保持为“-”，不得自行推测。
+        """
     
     prompt = f"""
     请根据以下论文内容回答问题。要求：
@@ -173,7 +398,9 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
     2. 在回答中用 [章节名] 标注引用来源
     3. 如果内容不足以回答问题，请明确说明"论文中未提及"
     4. 回答要有条理，使用分点或分段
-    5. **重要**：citations 中的 section 字段必须严格使用以下章节名之一：{sections_list}
+    5. **重要**：citations 中必须填写对应上下文的 source_id（如 S1），section 字段必须严格使用以下章节名之一：{sections_list}
+    6. answer 使用 Markdown 排版：段落之间空一行；并列内容每项单独一行；适合比较的数据使用表格。不要把编号、项目符号和多个数据项挤在同一行。
+    {table_prompt}
     {history_prompt}
     问题：{question}
     
@@ -184,25 +411,23 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
     {{
         "answer": "回答内容，在关键信息后标注 [章节名]",
         "citations": [
-            {{"section": "必须从可用章节名中选择", "text": "原文关键句（至少30字，完整保留关键信息）", "position": "章节中的位置描述"}}
+            {{"source_id": "对应来源编号，如S1", "section": "必须从可用章节名中选择", "text": "原文关键句（至少30字，完整保留关键信息）", "position": "章节中的位置描述"}}
         ]
     }}
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate(
+            [prompt],
+            json_mode=True,
+            enable_thinking=needs_deep_thinking(question)
+        )
         text = response.generations[0][0].text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        
-        # 健壮地解析 JSON
-        result = None
         try:
-            result = json.loads(text.strip())
+            result = safe_json_loads(text)
         except json.JSONDecodeError as json_err:
             logger.warning(f"⚠️ JSON 解析失败，尝试修复: {json_err}")
             # 尝试提取 answer 字段
-            import re
             answer_match = re.search(r'"answer"\s*:\s*"(.*?)"\s*,\s*"citations"', text, re.DOTALL)
             if answer_match:
                 answer_text = answer_match.group(1)
@@ -215,7 +440,7 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
                 result = {"answer": text, "citations": []}
         
         state['answer'] = result.get('answer', '暂无回答')
-        state['citations'] = result.get('citations', [])
+        state['citations'] = _enrich_citations(result.get('citations', []), chunks)
         state['sources'] = [c.get('section', '') for c in state['citations']]
         logger.info(f"✅ 回答生成成功，长度：{len(state['answer'])}")
     except Exception as e:
@@ -230,6 +455,10 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
 async def generate_follow_up(state: QAAgentState) -> QAAgentState:
     """生成智能追问"""
     logger.info(f"[增强问答 Agent] 生成智能追问")
+    if not state.get('generate_follow_up', True):
+        state['follow_up_questions'] = []
+        logger.info("[增强问答 Agent] 跳过同步追问生成")
+        return state
     
     llm = get_llm_client()
     question = state['question']
@@ -253,11 +482,9 @@ async def generate_follow_up(state: QAAgentState) -> QAAgentState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text = response.generations[0][0].text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        result = json.loads(text.strip())
+        result = safe_json_loads(text)
         state['follow_up_questions'] = result.get('follow_up_questions', [])
         logger.info(f"✅ 追问生成成功：{len(state['follow_up_questions'])} 个")
     except Exception as e:
@@ -302,9 +529,39 @@ def get_enhanced_qa_agent():
     return _enhanced_qa_agent
 
 
-async def run_enhanced_qa_agent(paper_id: str, question: str, relevant_chunks: list, paper_metadata: dict = None, history_context: str = None) -> dict:
+async def generate_follow_up_questions(question: str, answer: str, intent: str = "general") -> list[str]:
+    state = QAAgentState(
+        paper_id="",
+        question=question,
+        paper_metadata={},
+        history_context="",
+        intent=intent,
+        relevant_chunks=[],
+        answer=answer,
+        sources=[],
+        citations=[],
+        follow_up_questions=[],
+        generate_follow_up=True,
+        metadata_field=None,
+        simple_question=False,
+        confidence=0.0,
+        error=None
+    )
+    result = await generate_follow_up(state)
+    return result.get("follow_up_questions", [])
+
+
+async def run_enhanced_qa_agent(
+    paper_id: str,
+    question: str,
+    relevant_chunks: list,
+    paper_metadata: dict = None,
+    history_context: str = None,
+    generate_follow_up: bool = True
+) -> dict:
     """运行增强版问答 Agent"""
     logger.info(f"[增强问答 Agent] 处理问题：{question[:50]}...")
+    started_at = time.perf_counter()
     
     initial_state = QAAgentState(
         paper_id=paper_id,
@@ -312,11 +569,14 @@ async def run_enhanced_qa_agent(paper_id: str, question: str, relevant_chunks: l
         paper_metadata=paper_metadata or {},
         history_context=history_context or "",
         intent=None,
+        metadata_field=None,
+        simple_question=False,
         relevant_chunks=relevant_chunks,
         answer=None,
         sources=[],
         citations=[],
         follow_up_questions=[],
+        generate_follow_up=generate_follow_up,
         confidence=0.0,
         error=None
     )
@@ -324,7 +584,7 @@ async def run_enhanced_qa_agent(paper_id: str, question: str, relevant_chunks: l
     agent = get_enhanced_qa_agent()
     result = await agent.ainvoke(initial_state)
     
-    logger.info(f"✅ [增强问答 Agent] 处理完成")
+    logger.info(f"✅ [增强问答 Agent] 处理完成，耗时 {time.perf_counter() - started_at:.2f}s")
     
     return {
         "answer": result.get("answer", ""),

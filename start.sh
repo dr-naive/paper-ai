@@ -64,7 +64,7 @@ else
     nvm use v24.16.0 > /dev/null 2>&1
     
     cd /home/ddd/project/myAgent/frontend
-    npm run dev > /home/ddd/project/myAgent/logs/frontend.log 2>&1 &
+    CHOKIDAR_USEPOLLING=true npm run dev > /home/ddd/project/myAgent/logs/frontend.log 2>&1 &
     FRONTEND_PID=$!
     echo $FRONTEND_PID > /home/ddd/project/myAgent/logs/frontend.pid
     echo "   前端 PID: $FRONTEND_PID"

@@ -14,7 +14,7 @@ class LLMClient:
     
     def _create_client(self) -> ChatOpenAI:
         print(f" 调试信息: LLM_PROVIDER = {settings.LLM_PROVIDER}")
-        print(f" 调试信息: OPENAI_API_KEY = {settings.OPENAI_API_KEY}")
+        print(f" 调试信息: OPENAI_API_KEY = {self._mask_secret(settings.OPENAI_API_KEY)}")
         print(f" 调试信息: OPENAI_BASE_URL = {settings.OPENAI_BASE_URL}")
         # 注意：qwen3.6-plus 等模型有 reasoning tokens，
         # 需要预留足够的 token 给实际输出内容
@@ -36,16 +36,38 @@ class LLMClient:
             )
         else:
             raise ValueError(f"不支持的 LLM 提供商：{self.provider}")
+
+    @staticmethod
+    def _mask_secret(value: Optional[str]) -> str:
+        if not value:
+            return "未设置"
+        if len(value) <= 8:
+            return "***"
+        return f"{value[:4]}...{value[-4:]}"
     
-    async def agenerate(self, prompts: List[str]):
-        logger.info(f"📡 LLMClient.agenerate 被调用，prompts 数量: {len(prompts)}")
+    async def agenerate(
+        self,
+        prompts: List[str],
+        *,
+        json_mode: bool = False,
+        enable_thinking: Optional[bool] = None,
+    ):
+        logger.info(
+            "📡 LLMClient.agenerate 被调用，prompts 数量: %d, json_mode=%s, enable_thinking=%s",
+            len(prompts), json_mode, enable_thinking
+        )
         try:
             # 使用 langchain_core 中的 HumanMessage（新版本 langchain 的正确导入方式）
             from langchain_core.messages import HumanMessage
             # agenerate expects List[List[BaseMessage]] - one message list per prompt
             message_lists = [[HumanMessage(content=prompt)] for prompt in prompts]
             logger.info(f"📡 调用 self.client.agenerate...")
-            response = await self.client.agenerate(message_lists)
+            kwargs = {}
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            if enable_thinking is not None and self.provider == "qwen":
+                kwargs["extra_body"] = {"enable_thinking": enable_thinking}
+            response = await self.client.agenerate(message_lists, **kwargs)
             logger.info(f" LLM 响应成功，类型: {type(response)}")
             
             if hasattr(response, 'generations'):

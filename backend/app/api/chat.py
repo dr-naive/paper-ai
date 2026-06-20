@@ -3,21 +3,74 @@ from fastapi import APIRouter, HTTPException, Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional
+from datetime import datetime
+import asyncio
 import logging
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
 from app.models.paper import Paper, Section
 from app.api.auth import decode_token
 from app.api.papers import get_current_user_id
-from app.agent.qa_agent.enhanced_graph import run_enhanced_qa_agent
+from app.agent.qa_agent.enhanced_graph import (
+    detect_metadata_intent,
+    generate_follow_up_questions,
+    run_enhanced_qa_agent,
+)
 from app.agent.summarizer.graph import run_summarizer_agent
 from app.rag.knowledge_base import get_knowledge_base
+from app.rag.table_retrieval import get_exact_table_chunks, merge_retrieval_chunks
 from app.llm.client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/chat")
+
+
+def _fallback_session_title(question: str) -> str:
+    return question[:20] + ("..." if len(question) > 20 else "")
+
+
+async def _generate_followups_background(
+    message_id: str,
+    question: str,
+    answer: str,
+    intent: str = "general",
+) -> None:
+    """Generate follow-up questions after the main answer has been returned."""
+    try:
+        followups = await asyncio.wait_for(
+            generate_follow_up_questions(question, answer or "", intent or "general"),
+            timeout=25,
+        )
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(ChatMessage).where(ChatMessage.id == message_id))
+            message = result.scalar_one_or_none()
+            if not message:
+                return
+            message.follow_up_questions = followups
+            await db.commit()
+        logger.info("后台追问生成完成 message_id=%s count=%d", message_id, len(followups))
+    except Exception as e:
+        logger.error("后台追问生成失败 message_id=%s: %s", message_id, e)
+
+
+async def _generate_title_background(session_id: str, question: str, answer: str) -> None:
+    """Generate a concise session title without blocking the answer response."""
+    try:
+        title = _fallback_session_title(question)
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
+            session = result.scalar_one_or_none()
+            if not session:
+                return
+            session.title = title
+            session.updated_at = datetime.utcnow()
+            await db.commit()
+        logger.info("后台会话标题生成完成 session_id=%s title=%s", session_id, title)
+    except Exception as e:
+        logger.error("后台会话标题生成失败 session_id=%s: %s", session_id, e)
 
 
 # ==================== 对话会话管理 ====================
@@ -197,6 +250,7 @@ async def ask_in_session(
         raise HTTPException(status_code=400, detail="问题不能为空")
     
     paper_id = session.paper_id
+    metadata_field = detect_metadata_intent(question)
     
     # 获取历史消息作为上下文
     messages_result = await db.execute(
@@ -210,9 +264,14 @@ async def ask_in_session(
     paper_result = await db.execute(select(Paper).where(Paper.id == paper_id))
     paper = paper_result.scalar_one_or_none()
     
-    # RAG 检索
-    kb = get_knowledge_base()
-    chunks = await kb.query(paper_id, question, top_k=5)
+    # RAG 检索。元数据类问题可以直接用数据库字段回答，不需要向量检索。
+    if metadata_field:
+        chunks = []
+    else:
+        kb = get_knowledge_base()
+        exact_table_chunks = await get_exact_table_chunks(db, paper_id, question)
+        semantic_chunks = await kb.query(paper_id, question, top_k=5)
+        chunks = merge_retrieval_chunks(exact_table_chunks, semantic_chunks, top_k=5)
     
     # 构建历史对话上下文
     history_context = ""
@@ -228,10 +287,20 @@ async def ask_in_session(
         "authors": paper.authors if paper else "",
         "abstract": paper.abstract if paper else "",
         "keywords": paper.keywords or [] if paper else [],
+        "venue": getattr(paper, "venue", "") if paper else "",
+        "publication_year": getattr(paper, "publication_year", "") if paper else "",
+        "doi": getattr(paper, "doi", "") if paper else "",
     }
     
-    # 使用增强版问答 Agent
-    qa_result = await run_enhanced_qa_agent(paper_id, question, chunks, paper_metadata, history_context)
+    # 使用增强版问答 Agent；追问后台生成，避免阻塞主回答。
+    qa_result = await run_enhanced_qa_agent(
+        paper_id,
+        question,
+        chunks,
+        paper_metadata,
+        history_context,
+        generate_follow_up=False
+    )
     
     # 保存消息
     msg_count = await db.execute(select(func.count()).select_from(ChatMessage).where(ChatMessage.session_id == session_id))
@@ -243,45 +312,31 @@ async def ask_in_session(
         question=question,
         answer=qa_result.get('answer'),
         citations=qa_result.get('citations', []),
-        follow_up_questions=qa_result.get('follow_up_questions', []),
+        follow_up_questions=[],
         confidence=qa_result.get('confidence')
     )
     db.add(message)
-    
-    # 更新会话标题（如果是第一条消息）- 使用AI生成简短摘要
     if order_index == 0:
-        answer = qa_result.get('answer', '')
-        if answer:
-            # 使用AI生成会话标题
-            llm = get_llm_client()
-            title_prompt = f"""
-            请为以下问答生成一个简短的会话标题（10-30个字）：
-            
-            用户问：{question}
-            
-            AI回答摘要：{answer[:100]}...
-            
-            请直接返回标题，不要包含其他内容。
-            """
-            try:
-                title_response = await llm.agenerate([title_prompt])
-                session.title = title_response.generations[0][0].text.strip()[:50]
-            except Exception as e:
-                logger.error(f"生成会话标题失败: {e}")
-                session.title = question[:50] + ("..." if len(question) > 50 else "")
-        else:
-            session.title = question[:50] + ("..." if len(question) > 50 else "")
-    
+        session.title = _fallback_session_title(question)
+
+    await db.flush()
+    message_id = str(message.id)
     await db.commit()
+
+    answer = qa_result.get("answer") or ""
+    intent = qa_result.get("intent") or "general"
+    asyncio.create_task(_generate_followups_background(message_id, question, answer, intent))
     
     return {
         "answer": qa_result.get("answer"),
         "intent": qa_result.get("intent"),
         "sources": qa_result.get("sources", []),
         "citations": qa_result.get("citations", []),
-        "follow_up_questions": qa_result.get("follow_up_questions", []),
+        "follow_up_questions": [],
+        "follow_up_pending": True,
+        "title_pending": False,
         "confidence": qa_result.get("confidence", 0.0),
-        "message_id": str(message.id)
+        "message_id": message_id
     }
 
 
@@ -534,7 +589,7 @@ async def generate_interpret(
     prompt = prompts.get(interpret_type, prompts["concept"])
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text_result = response.generations[0][0].text.strip()
         if "```json" in text_result:
             text_result = text_result.split("```json")[1].split("```")[0]

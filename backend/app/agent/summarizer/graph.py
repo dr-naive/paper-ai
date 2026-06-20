@@ -32,7 +32,7 @@ async def extract_overview(state: SummarizerState) -> SummarizerState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text_result = response.generations[0][0].text.strip()
         if "```json" in text_result:
             text_result = text_result.split("```json")[1].split("```")[0]
@@ -75,7 +75,7 @@ async def extract_methodology(state: SummarizerState) -> SummarizerState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text_result = response.generations[0][0].text.strip()
         if "```json" in text_result:
             text_result = text_result.split("```json")[1].split("```")[0]
@@ -119,7 +119,7 @@ async def extract_experiments(state: SummarizerState) -> SummarizerState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text_result = response.generations[0][0].text.strip()
         if "```json" in text_result:
             text_result = text_result.split("```json")[1].split("```")[0]
@@ -163,7 +163,7 @@ async def extract_contributions(state: SummarizerState) -> SummarizerState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text_result = response.generations[0][0].text.strip()
         if "```json" in text_result:
             text_result = text_result.split("```json")[1].split("```")[0]

@@ -8,7 +8,7 @@
       <div class="qa-content">
         <div v-for="qa in qaHistory" :key="qa.id" class="qa-item">
           <div class="question"><div class="avatar"></div><div class="content"><div class="label">问题</div><div class="text">{{ qa.question }}</div></div></div>
-          <div class="answer"><div class="avatar">🤖</div><div class="content"><div class="label">回答</div><a-tag color="getIntColor(qa.intent)">{{ qa.intent }}</a-tag><div class="text">{{ qa.answer }}</div></div></div>
+          <div class="answer"><div class="avatar">🤖</div><div class="content"><div class="label">回答</div><a-tag :color="getIntColor(qa.intent)">{{ qa.intent }}</a-tag><div class="text markdown-answer" v-html="renderMarkdown(qa.answer)"></div></div></div>
         </div>
       </div>
       <div class="input-area">
@@ -29,6 +29,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { getPaper, askPaperQuestion } from '@/api/paper'
+import { renderMarkdown } from '@/utils/markdown'
 
 const route = useRoute()
 const id = route.params.id as string
@@ -73,6 +74,14 @@ onMounted(() => { loadPaper() })
 .label { font-size: 12px; color: #999; margin-bottom: 4px; }
 .text { padding: 16px; background: white; border-radius: 8px; line-height: 1.6; }
 .question .text { background: #f5f5f5; }
+.markdown-answer { overflow-x: auto; overflow-wrap: anywhere; }
+.markdown-answer :deep(p) { margin: 0 0 10px; }
+.markdown-answer :deep(ul), .markdown-answer :deep(ol) { margin: 6px 0 10px; padding-left: 24px; }
+.markdown-answer :deep(li) { margin: 4px 0; }
+.markdown-answer :deep(table) { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 13px; }
+.markdown-answer :deep(th), .markdown-answer :deep(td) { padding: 8px 10px; border: 1px solid #d9dde5; white-space: nowrap; text-align: left; }
+.markdown-answer :deep(th) { background: #f2f3f5; }
+.markdown-answer :deep(tr:nth-child(even) td) { background: #fafbfc; }
 .input-area { padding: 24px; background: white; border-top: 1px solid #e5e6eb; }
 .input-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
 .quick-questions { display: flex; gap: 8px; flex-wrap: wrap; }

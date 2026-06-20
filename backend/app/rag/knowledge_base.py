@@ -178,6 +178,7 @@ class SmartChunker:
         
         # 2. 为每个大chunk生成小chunks（子文档）
         for parent_idx, (large_text, start_sent, end_sent) in enumerate(large_chunks):
+            parent_chunk_index = chunk_idx
             # 添加大chunk
             chunks.append({
                 "content": large_text,
@@ -208,7 +209,7 @@ class SmartChunker:
                     "type": "small",
                     "section": section_title,
                     "index": chunk_idx,
-                    "parent_index": parent_idx,  # 关联父chunk
+                    "parent_index": parent_chunk_index,  # 关联父chunk的真实chunk_index
                     "sentence_range": (actual_start, actual_end)
                 })
                 chunk_idx += 1
@@ -355,12 +356,19 @@ class PaperKnowledgeBase:
                     "section": str(chunk.get('section') or ''),
                     "chunk_index": int(chunk.get('index') or 0)
                 }
+
+                if chunk.get("page") is not None:
+                    metadata["page"] = int(chunk["page"])
+                if chunk.get("caption"):
+                    metadata["caption"] = str(chunk["caption"])
+                if chunk.get("table_number") is not None:
+                    metadata["table_number"] = str(chunk["table_number"])
                 
                 # 如果是表格内容，提取表格编号
                 if "【表格】" in content or "table" in content.lower():
                     # 匹配"表1"、"表1："、"Table 1"、"Table 1:"等格式
-                    table_match = re.search(r'(表\d+|Table\s+\d+)', content, re.IGNORECASE)
-                    if table_match:
+                    table_match = re.search(r'(?:表|Table)\s*(\d+)', content, re.IGNORECASE)
+                    if table_match and "table_number" not in metadata:
                         metadata["table_number"] = table_match.group(1)
                 
                 # 如果是small chunk，存储parent_index用于层级检索
@@ -397,6 +405,8 @@ class PaperKnowledgeBase:
             检索结果列表
         """
         try:
+            import time
+            started_at = time.perf_counter()
             # 边界检查：空查询或无效top_k
             if not query or not query.strip():
                 logger.warning("查询文本为空，返回空结果")
@@ -406,52 +416,73 @@ class PaperKnowledgeBase:
                 logger.warning(f"top_k={top_k} 无效，返回空结果")
                 return []
             
-            results = self.vectorstore.similarity_search_with_score(
-                query=query, k=top_k * 5
-            )
-            
-            # 在内存中过滤 paper_id
-            filtered_results = []
-            for doc, score in results:
-                if doc.metadata.get("paper_id") == paper_id:
-                    filtered_results.append((doc, score))
+            try:
+                filtered_results = self.vectorstore.similarity_search_with_score(
+                    query=query, k=top_k * 8, filter={"paper_id": paper_id}
+                )
+            except TypeError:
+                results = self.vectorstore.similarity_search_with_score(
+                    query=query, k=top_k * 8
+                )
+                filtered_results = [
+                    (doc, score) for doc, score in results
+                    if doc.metadata.get("paper_id") == paper_id
+                ]
             
             # 检查查询是否包含表格编号（如"表1"、"Table 1"），如果有则优先返回匹配的表格
             table_number_query = None
-            table_match = re.search(r'(表\d+|Table\s+\d+)', query, re.IGNORECASE)
+            table_match = re.search(r'(?:表|Table)\s*(\d+)', query, re.IGNORECASE)
             if table_match:
-                table_number_query = table_match.group(1).lower()
+                table_number_query = table_match.group(1)
             
             # 如果查询包含表格编号，优先返回匹配的表格
             table_priority_results = []
             other_results = []
             for doc, score in filtered_results:
-                table_number = doc.metadata.get("table_number", "").lower()
-                if table_number_query and table_number and table_number_query in table_number:
+                table_number = re.sub(r"\D", "", str(doc.metadata.get("table_number", "")))
+                if table_number_query and table_number == table_number_query:
                     table_priority_results.append((doc, score))
                 else:
                     other_results.append((doc, score))
             
-            # 优先结果在前，其他结果在后
-            filtered_results = table_priority_results + other_results
+            # 优先结果在前，其他结果在后，并做轻量重排
+            filtered_results = self._rerank_results(query, table_priority_results + other_results)
             
             small_chunks = [(doc, score) for doc, score in filtered_results 
                            if doc.metadata.get("chunk_type") == "small"]
             large_chunks = [(doc, score) for doc, score in filtered_results 
                            if doc.metadata.get("chunk_type") == "large"]
+            table_chunks = [(doc, score) for doc, score in filtered_results
+                            if doc.metadata.get("chunk_type") == "table"]
+            image_chunks = [(doc, score) for doc, score in filtered_results
+                            if doc.metadata.get("chunk_type") == "image"]
+
+            table_intent = bool(re.search(r"表格|(?:表|table)\s*\d+", query, re.IGNORECASE))
+            image_intent = bool(re.search(r"图片|图像|插图|(?:图|figure)\s*\d+", query, re.IGNORECASE))
+
+            ordered_groups = [small_chunks, large_chunks, table_chunks, image_chunks]
+            if table_intent:
+                ordered_groups = [table_chunks, small_chunks, large_chunks, image_chunks]
+            elif image_intent:
+                ordered_groups = [image_chunks, small_chunks, large_chunks, table_chunks]
             
-            final_results = small_chunks[:top_k]
-            
-            if len(final_results) < top_k:
-                remaining = top_k - len(final_results)
-                final_results.extend(large_chunks[:remaining])
+            final_results = []
+            for group in ordered_groups:
+                for item in group:
+                    if len(final_results) >= top_k:
+                        break
+                    final_results.append(item)
             
             seen_indices = set()
             unique_results = []
             for doc, score in final_results:
-                idx = doc.metadata.get("chunk_index")
-                if idx not in seen_indices:
-                    seen_indices.add(idx)
+                result_key = (
+                    doc.metadata.get("chunk_type"),
+                    doc.metadata.get("chunk_index"),
+                    doc.metadata.get("section"),
+                )
+                if result_key not in seen_indices:
+                    seen_indices.add(result_key)
                     unique_results.append((doc, score))
             
             output = []
@@ -463,6 +494,9 @@ class PaperKnowledgeBase:
                     "chunk_type": doc.metadata.get("chunk_type", "text"),
                     "score": float(score)
                 }
+                for field in ("table_number", "caption", "page"):
+                    if doc.metadata.get(field) is not None:
+                        result[field] = doc.metadata[field]
                 
                 if include_parent_context and doc.metadata.get("chunk_type") == "small":
                     parent_idx = doc.metadata.get("parent_index")
@@ -473,16 +507,52 @@ class PaperKnowledgeBase:
                 
                 output.append(result)
             
+            logger.info(
+                "知识库检索完成 paper_id=%s query=%r candidates=%d returned=%d cost=%.2fs",
+                paper_id, query[:80], len(filtered_results), len(output), time.perf_counter() - started_at
+            )
             return output
         except Exception as e:
             logger.error(f"❌ 查询失败：{e}")
             return []
+
+    def _rerank_results(self, query: str, results: List[Tuple[Document, float]]) -> List[Tuple[Document, float]]:
+        """轻量规则重排：向量距离为主，关键词/章节/表格命中加分。"""
+        query_l = query.lower()
+        terms = [t for t in re.findall(r"[\w\u4e00-\u9fff]+", query_l) if len(t) >= 2]
+
+        def lexical_bonus(doc: Document) -> float:
+            content = doc.page_content.lower()
+            section = str(doc.metadata.get("section", "")).lower()
+            bonus = 0.0
+            for term in terms:
+                if term in content:
+                    bonus += 0.08
+                if term in section:
+                    bonus += 0.12
+            if doc.metadata.get("chunk_type") == "small":
+                bonus += 0.03
+            if doc.metadata.get("table_number"):
+                bonus += 0.05
+                query_table = re.search(r"(?:表|table)\s*(\d+)", query_l, re.IGNORECASE)
+                document_table = re.sub(r"\D", "", str(doc.metadata.get("table_number", "")))
+                if query_table and query_table.group(1) == document_table:
+                    bonus += 0.5
+            return min(bonus, 0.6)
+
+        return sorted(results, key=lambda item: float(item[1]) - lexical_bonus(item[0]))
     
     async def _get_parent_chunk(self, paper_id: str, parent_index: int) -> Optional[str]:
         """获取父chunk内容（用于层级检索）"""
         try:
             all_docs = self.vectorstore._collection.get(
-                where={"paper_id": paper_id, "chunk_type": "large", "chunk_index": parent_index}
+                where={
+                    "$and": [
+                        {"paper_id": paper_id},
+                        {"chunk_type": "large"},
+                        {"chunk_index": parent_index}
+                    ]
+                }
             )
             if all_docs and all_docs["documents"]:
                 return all_docs["documents"][0]

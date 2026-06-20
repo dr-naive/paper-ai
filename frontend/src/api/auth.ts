@@ -3,10 +3,17 @@ import request from './index'
 export interface LoginResponse {
   access_token: string
   user: {
-    id: number
+    id: string
     username: string
     email: string
   }
+}
+
+export interface UserResponse {
+  id: string
+  username: string
+  email: string
+  created_at: string
 }
 
 export interface LoginData {
@@ -19,11 +26,11 @@ export const login = (data: LoginData) => {
 }
 
 export const register = (data: LoginData & { email: string }) => {
-  return request.post<LoginResponse>('/api/auth/register', data)
+  return request.post<UserResponse>('/api/auth/register', data)
 }
 
 export const getCurrentUser = () => {
-  return request.get('/api/auth/me')
+  return request.get<UserResponse>('/api/auth/users/me')
 }
 
 export const logout = () => {

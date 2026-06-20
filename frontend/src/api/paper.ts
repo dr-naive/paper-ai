@@ -5,6 +5,7 @@ export const uploadPaper = (file: File) => {
   formData.append('file', file)
   const token = localStorage.getItem('access_token')
   return request.post('/api/v1/papers/upload', formData, { 
+    timeout: 900000,
     headers: { 
       'Authorization': token ? `Bearer ${token}` : undefined,
       'Content-Type': undefined 

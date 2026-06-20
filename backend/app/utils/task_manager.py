@@ -11,6 +11,7 @@ from pathlib import Path
 class TaskStatus(str, Enum):
     PENDING = "pending"
     PROCESSING = "processing"
+    READY = "ready"
     COMPLETED = "completed"
     FAILED = "failed"
 

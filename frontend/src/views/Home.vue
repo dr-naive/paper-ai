@@ -183,11 +183,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { IconDown, IconFile, IconExport } from '@arco-design/web-vue/es/icon'
 
-const router = useRouter()
 const currentUser = ref<any>(null)
 const showDropdown = ref(false)
 const isScrolled = ref(false)

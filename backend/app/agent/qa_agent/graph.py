@@ -33,7 +33,7 @@ async def recognize_intent(state: QAAgentState) -> QAAgentState:
     
     try:
         logger.info(f"📤 调用 LLM agenerate...")
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         logger.info(f"LLM 原始响应类型: {type(response)}")
         logger.info(f"LLM 原始响应: {response}")
         
@@ -82,7 +82,7 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text = response.generations[0][0].text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
@@ -129,10 +129,17 @@ async def run_qa_agent(paper_id: str, question: str, relevant_chunks: list) -> d
     initial_state = QAAgentState(
         paper_id=paper_id,
         question=question,
+        paper_metadata={},
+        history_context="",
         intent=None,
+        metadata_field=None,
+        simple_question=False,
         relevant_chunks=relevant_chunks,
         answer=None,
         sources=[],
+        citations=[],
+        follow_up_questions=[],
+        generate_follow_up=True,
         confidence=0.0,
         error=None
     )

@@ -4,54 +4,162 @@ from app.agent.state import PaperParserState
 from app.llm.client import get_llm_client
 import json
 import re
+import time
 from loguru import logger
 
 
-def _extract_metadata_by_rules(raw_text: str) -> dict:
-    """基于规则从文本中提取元数据（LLM 失败时的 fallback）"""
-    result = {}
-    
-    lines = raw_text.split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
-    
-    if not lines:
-        return result
-    
+_TITLE_STOP_PATTERN = re.compile(
+    r"^(摘要|abstract|关键词|keywords?)(?:\s|[：:])*$",
+    re.IGNORECASE,
+)
+_FRONT_MATTER_PATTERN = re.compile(
+    r"^(published\s+as|arxiv\b|doi\b|preprint\b|proceedings\b|"
+    r"copyright\b|收稿日期|基金项目)",
+    re.IGNORECASE,
+)
+_AFFILIATION_PATTERN = re.compile(
+    r"(大学|学院|研究院|实验室|研究所|医院|公司|中心|"
+    r"university|college|school|institute|laborator(?:y|ies)|department)",
+    re.IGNORECASE,
+)
+
+
+def _clean_title(value: str) -> str:
+    """Normalize a title and remove content following common paper boundaries."""
+    title = str(value or "").strip()
+    title = re.split(
+        r"(?:\n|\r|\s{2,})(?:摘要|abstract|关键词|keywords?)\s*[：:]?",
+        title,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    return re.sub(r"\s+", " ", title).strip(" -—|，,。")
+
+
+def _looks_like_author_line(line: str, next_line: str = "") -> bool:
+    """Identify common author rows without treating numbered titles as authors."""
+    if "@" in line or _AFFILIATION_PATTERN.search(line):
+        return True
+    has_markers = bool(re.search(r"\d(?:\s*[,，]\s*\d)*[†*]?", line))
+    has_name_separators = line.count("，") + line.count(",") + line.count("、") >= 2
+    next_is_affiliation = bool(_AFFILIATION_PATTERN.search(next_line))
+    english_author_row = (
+        next_is_affiliation
+        and bool(re.search(r",|\band\b|&", line, re.IGNORECASE))
+        and len(line.split()) <= 16
+    )
+    return english_author_row or (
+        has_markers and (has_name_separators or next_is_affiliation)
+    )
+
+
+def _extract_front_page_title(lines: list[str]) -> str:
+    """Extract the title block before authors/affiliations/abstract on page one."""
+    front_lines = []
+    for line in lines[:30]:
+        if _TITLE_STOP_PATTERN.match(line):
+            break
+        front_lines.append(line)
+
+    while front_lines and _FRONT_MATTER_PATTERN.match(front_lines[0]):
+        front_lines.pop(0)
+
     title_parts = []
+    for index, line in enumerate(front_lines):
+        next_line = front_lines[index + 1] if index + 1 < len(front_lines) else ""
+        if _looks_like_author_line(line, next_line):
+            break
+        if 2 <= len(line) <= 200:
+            title_parts.append(line)
+        if len(title_parts) >= 4:
+            break
+
+    return _clean_title(" ".join(title_parts))
+
+
+def _extract_metadata_by_rules(raw_text: str) -> dict:
+    """基于首页结构从文本中提取元数据（LLM 失败时的 fallback）。"""
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    if not lines:
+        return {}
+
+    result = {"title": _extract_front_page_title(lines) or _clean_title(lines[0])[:200]}
     author_candidates = []
-    
-    for i, line in enumerate(lines[:15]):
-        if not line or len(line) < 2:
-            continue
-        
-        has_chinese = any('\u4e00' <= c <= '\u9fff' for c in line)
-        has_english = any('a' <= c.lower() <= 'z' for c in line)
-        has_number = any('0' <= c <= '9' for c in line)
-        
-        if has_chinese and has_english and ':' in line and len(line) > 10:
-            title_parts.append(line)
-        elif title_parts and has_chinese and len(line) > 5 and not has_number:
-            title_parts.append(line)
-        elif has_chinese and len(line) < 150:
-            author_pattern = re.search(r'([\u4e00-\u9fff]+(?:[\d,，、]+[\u4e00-\u9fff]+)*)', line)
-            if author_pattern and len(author_pattern.group(1)) >= 2:
-                author_candidates.append(author_pattern.group(1))
-    
-    if title_parts:
-        full_title = ' '.join(title_parts).replace('  ', ' ').strip()
-        full_title = full_title.replace('，', '')
-        full_title = full_title.replace('。', '')
-        result['title'] = full_title
-    elif lines:
-        result['title'] = lines[0][:100]
-    
+    for index, line in enumerate(lines[:20]):
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        if _looks_like_author_line(line, next_line) and not _AFFILIATION_PATTERN.search(line):
+            author_candidates.append(line)
+
     if author_candidates:
-        authors = author_candidates[0]
-        authors = re.sub(r'[\d†]', '', authors)
-        authors = authors.replace('，', ', ')
-        result['authors'] = authors.strip()
-    
+        authors = re.sub(r"[\d†*]", "", author_candidates[0])
+        result["authors"] = re.sub(r"\s+", " ", authors.replace("，", ", ")).strip(" ,")
+
     return result
+
+
+def _select_title(model_title: object, raw_text: str) -> str:
+    """Prefer the model title unless it has clear signs of swallowed body text."""
+    candidate = _clean_title(str(model_title or ""))
+    rule_title = _extract_metadata_by_rules(raw_text).get("title", "")
+    looks_corrupted = (
+        len(candidate) > 200
+        or len(candidate.split()) > 35
+        or bool(re.search(r"(本文|我们提出|研究表明|实验表明).{20,}", candidate))
+    )
+    if not candidate or looks_corrupted:
+        return rule_title or candidate[:200] or "未知论文"
+    return candidate[:200]
+
+
+def _parse_sections_by_rules(raw_text: str) -> list[dict]:
+    """Parse common paper headings without an LLM call."""
+    heading_pattern = re.compile(
+        r"^(abstract|摘要|introduction|related work|background|method|methods|methodology|experiment|experiments|evaluation|result|results|discussion|conclusion|references|参考文献|"
+        r"\d+(?:\.\d+)*\s+[A-Z][A-Za-z0-9 ,:()/-]{2,80}|"
+        r"\d+(?:\.\d+)*\s+[\u4e00-\u9fffA-Za-z0-9 ,:()/-]{2,80})$",
+        re.IGNORECASE,
+    )
+    lines = [line.strip() for line in raw_text.splitlines()]
+    sections: list[dict] = []
+    current_title: str | None = None
+    current_content: list[str] = []
+
+    def flush_current() -> None:
+        if current_title and current_content:
+            content = "\n".join(line for line in current_content if line).strip()
+            if content:
+                sections.append({
+                    "title": current_title,
+                    "content": content,
+                    "key_points": []
+                })
+
+    for line in lines:
+        if not line:
+            if current_content:
+                current_content.append("")
+            continue
+
+        is_heading = (
+            len(line) <= 120
+            and bool(heading_pattern.match(line))
+            and not line.endswith(".")
+        )
+        if is_heading:
+            flush_current()
+            current_title = line
+            current_content = []
+        elif current_title:
+            current_content.append(line)
+
+    flush_current()
+
+    meaningful_sections = [
+        section for section in sections
+        if len(section.get("content", "")) >= 20
+        and not re.search(r"^(references|参考文献)$", section["title"], re.IGNORECASE)
+    ]
+    return meaningful_sections
 
 
 async def extract_metadata(state: PaperParserState) -> PaperParserState:
@@ -77,7 +185,7 @@ async def extract_metadata(state: PaperParserState) -> PaperParserState:
 - 如果某个字段找不到，使用空字符串或空列表
 - 作者名只保留姓名，去掉机构编号"""
         
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text = response.generations[0][0].text.strip()
         logger.info(f"📝 LLM 返回原始内容: {repr(text[:300])}")
         
@@ -108,8 +216,7 @@ async def extract_metadata(state: PaperParserState) -> PaperParserState:
     if not result.get('title'):
         result = _extract_metadata_by_rules(raw_text)
     
-    # 【核心修复】：强制类型转换，确保存入数据库的绝对是字符串！
-    state['title'] = str(result.get('title', '未知论文')).strip() or '未知论文'
+    state['title'] = _select_title(result.get('title'), raw_text)
         
     # authors：如果是列表，用逗号拼接成字符串；否则直接转字符串
     authors_raw = result.get('authors', '')
@@ -136,8 +243,16 @@ async def parse_sections(state: PaperParserState) -> PaperParserState:
     """解析论文内容分段（100-200 字）"""
     logger.info(f"[论文解析 Agent] 解析章节内容")
     
+    started_at = time.perf_counter()
     llm = get_llm_client()
     raw_text = state['raw_text']
+
+    rule_sections = _parse_sections_by_rules(raw_text)
+    if len(rule_sections) >= 2:
+        state['sections'] = rule_sections
+        logger.info(f"✅ 规则章节解析成功：{len(state['sections'])} 个章节，耗时 {time.perf_counter() - started_at:.2f}s")
+        return state
+
     prompt = f"""
     你是一个严格的 JSON 生成器。请将以下论文内容分段，每段包含 title, content, key_points。
     
@@ -166,31 +281,27 @@ async def parse_sections(state: PaperParserState) -> PaperParserState:
     """
     
     try:
-        response = await llm.agenerate([prompt])
+        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
         text = response.generations[0][0].text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
         sections = json.loads(text.strip())
         
-        # 【核心修复】：遍历每个章节，把 key_points 列表强制转为 JSON 字符串
         for sec in sections:
             kp = sec.get('key_points', [])
-            if isinstance(kp, list):
-                sec['key_points'] = json.dumps(kp, ensure_ascii=False)
-            else:
-                sec['key_points'] = str(kp)
+            if not isinstance(kp, list):
+                sec['key_points'] = [str(kp)] if kp else []
                 
-        state['sections'] = sections[:10]  # 限制最多 10 个章节
-        logger.info(f"✅ 章节解析成功：{len(state['sections'])} 个章节")
+        state['sections'] = sections
+        logger.info(f"✅ LLM 章节解析成功：{len(state['sections'])} 个章节，耗时 {time.perf_counter() - started_at:.2f}s")
         
     except Exception as e:
         logger.error(f"❌ 章节解析失败：{e}")
-        # 【核心修复】：异常时的默认章节，key_points 也必须是字符串 "[]"
         state['sections'] = [
             {
                 "title": "全文",
                 "content": raw_text[:1000] + "...",
-                "key_points": "[]"  # 字符串 "[]"
+                "key_points": []
             }
         ]
 

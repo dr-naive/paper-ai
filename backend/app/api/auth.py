@@ -10,7 +10,6 @@ from app.database import get_db
 from app.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-import uuid
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -92,7 +91,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     except JWTError:
         raise credentials_exception
     
-    result = await db.execute(select(User).filter(User.id == uuid.UUID(token_data.user_id)))
+    result = await db.execute(select(User).filter(User.id == token_data.user_id))
     user = result.scalars().first()
     if user is None:
         raise credentials_exception

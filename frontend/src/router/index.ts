@@ -12,7 +12,7 @@ const routes: RouteRecordRaw[] = [
 
 const router = createRouter({ history: createWebHistory(), routes })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem('access_token')
   // 已登录用户访问登录/注册页，重定向到首页
   if (token && (to.path === '/login' || to.path === '/register')) {
