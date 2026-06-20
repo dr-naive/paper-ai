@@ -133,6 +133,9 @@ docker-compose.override.yml
 .codex/
 .agents/
 
+# 本地 Codex skill 安装包
+/impeccable.zip
+
 # ================ 其他 ================
 # Jupyter Notebook
 *.ipynb

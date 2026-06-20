@@ -62,7 +62,7 @@
     <!-- 后台加载进度 -->
     <div v-if="!loading && loadingProgress > 0 && loadingProgress < 100" class="pdf-progress">
       <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: loadingProgress + '%' }"></div>
+        <div class="progress-fill" :style="{ transform: `scaleX(${loadingProgress / 100})` }"></div>
       </div>
       <span class="progress-text">{{ loadingProgress }}%</span>
     </div>
@@ -696,10 +696,12 @@ defineExpose({
 }
 
 .progress-fill {
+  width: 100%;
   height: 100%;
   background: linear-gradient(90deg, #6366f1, #8b5cf6);
   border-radius: 2px;
-  transition: width 0.3s ease;
+  transform-origin: left;
+  transition: transform 0.3s ease;
 }
 
 .progress-text {

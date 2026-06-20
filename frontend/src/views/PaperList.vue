@@ -48,7 +48,7 @@
       </a-spin>
       <div v-if="uploading" class="upload-progress">
         <div class="progress-bar">
-          <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+          <div class="progress-fill" :style="{ transform: `scaleX(${progressPercent / 100})` }"></div>
         </div>
         <p class="progress-text">{{ progressText }}</p>
       </div>
@@ -296,10 +296,12 @@ onMounted(() => { loadPapers() })
 }
 
 .progress-fill {
+  width: 100%;
   height: 100%;
   background: linear-gradient(90deg, #6366f1, #8b5cf6);
   border-radius: 4px;
-  transition: width 0.3s ease;
+  transform-origin: left;
+  transition: transform 0.3s ease;
 }
 
 .progress-text {

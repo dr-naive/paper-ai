@@ -17,182 +17,231 @@ html, body, #app {
 }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color: #1d2129;
-  background: #f5f7fa;
+  color: oklch(0.25 0.02 50);
+  background: oklch(0.95 0.01 90);
 }
 
-/* ===== 全局 Arco 浅色主题 ===== */
+/* ===== 全局 Arco 暖色调主题 ===== */
 
 /* 按钮 */
 .arco-btn-primary {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-  border-color: #6366f1 !important;
+  background: oklch(0.50 0.16 45) !important;
+  border-color: oklch(0.50 0.16 45) !important;
+  color: oklch(0.98 0.01 95) !important;
 }
 
 .arco-btn-primary:hover {
-  background: linear-gradient(135deg, #5558e6, #7c4feb) !important;
+  background: oklch(0.45 0.18 45) !important;
+  border-color: oklch(0.45 0.18 45) !important;
+}
+
+.arco-btn-secondary {
+  background: oklch(0.95 0.01 90) !important;
+  border-color: oklch(0.50 0.16 45 / 0.3) !important;
+  color: oklch(0.30 0.02 50) !important;
+}
+
+.arco-btn-secondary:hover {
+  background: oklch(0.50 0.16 45 / 0.08) !important;
+  border-color: oklch(0.50 0.16 45) !important;
+  color: oklch(0.25 0.02 50) !important;
+}
+
+.arco-btn-text {
+  color: oklch(0.45 0.02 50) !important;
+}
+
+.arco-btn-text:hover {
+  color: oklch(0.40 0.10 45) !important;
+  background: oklch(0.50 0.16 45 / 0.1) !important;
 }
 
 /* 输入框 */
 .arco-input-wrapper,
 .arco-input-password {
-  background: #fff !important;
-  border-color: #e5e6eb !important;
-  color: #1d2129 !important;
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.3) !important;
+  color: oklch(0.25 0.02 50) !important;
 }
 
 .arco-input-wrapper:hover,
 .arco-input-password:hover {
-  border-color: #6366f1 !important;
+  border-color: oklch(0.50 0.16 45 / 0.5) !important;
 }
 
 .arco-input-wrapper:focus-within,
 .arco-input-password:focus-within {
-  border-color: #6366f1 !important;
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15) !important;
+  border-color: oklch(0.50 0.16 45) !important;
+  box-shadow: 0 0 0 2px oklch(0.50 0.16 45 / 0.15) !important;
 }
 
 .arco-input {
-  color: #1d2129 !important;
+  color: oklch(0.25 0.02 50) !important;
 }
 
 .arco-input::placeholder {
-  color: #a9aeb8 !important;
+  color: oklch(0.60 0.01 50) !important;
 }
 
 /* 表单标签 */
 .arco-form-item-label {
-  color: #4e5969 !important;
+  color: oklch(0.30 0.02 50) !important;
 }
 
 /* 链接 */
 .arco-link {
-  color: #6366f1 !important;
+  color: oklch(0.45 0.14 45) !important;
 }
 
 .arco-link:hover {
-  color: #4f46e5 !important;
+  color: oklch(0.40 0.16 45) !important;
 }
 
 /* 列表 */
 .arco-list-item {
-  border-bottom-color: #e5e6eb !important;
+  border-bottom-color: oklch(0.85 0.01 60 / 0.15) !important;
 }
 
 .arco-list-item-meta-title {
-  color: #1d2129 !important;
+  color: oklch(0.20 0.02 50) !important;
 }
 
 .arco-list-item-meta-description {
-  color: #86909c !important;
+  color: oklch(0.45 0.02 50) !important;
 }
 
 /* 标签 */
 .arco-tag {
-  color: #6366f1 !important;
-  background: rgba(99, 102, 241, 0.08) !important;
-  border-color: rgba(99, 102, 241, 0.15) !important;
+  color: oklch(0.40 0.10 45) !important;
+  background: oklch(0.50 0.16 45 / 0.1) !important;
+  border-color: oklch(0.50 0.16 45 / 0.2) !important;
 }
 
 /* 下拉菜单 */
 .arco-dropdown-menu {
-  background: #fff !important;
-  border-color: #e5e6eb !important;
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.2) !important;
+  box-shadow: 0 4px 16px oklch(0 0 / 0.1) !important;
 }
 
 .arco-dropdown-option {
-  color: #1d2129 !important;
+  color: oklch(0.30 0.02 50) !important;
 }
 
 .arco-dropdown-option:hover {
-  background: rgba(99, 102, 241, 0.06) !important;
+  background: oklch(0.50 0.16 45 / 0.1) !important;
 }
 
 /* 模态框 */
 .arco-modal {
-  background: #fff !important;
-  border-color: transparent !important;
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.2) !important;
 }
 
 .arco-modal-title {
-  color: #1d2129 !important;
+  color: oklch(0.20 0.02 50) !important;
 }
 
 .arco-modal-header {
-  border-bottom-color: #e5e6eb !important;
+  border-bottom-color: oklch(0.85 0.01 60 / 0.15) !important;
+}
+
+.arco-modal-body {
+  color: oklch(0.35 0.02 50) !important;
 }
 
 /* Tabs */
 .arco-tabs-header {
-  border-bottom-color: #e5e6eb !important;
+  border-bottom-color: oklch(0.85 0.01 60 / 0.15) !important;
 }
 
 .arco-tabs-tab {
-  color: #86909c !important;
+  color: oklch(0.50 0.02 50) !important;
 }
 
 .arco-tabs-tab-active {
-  color: #6366f1 !important;
+  color: oklch(0.45 0.14 45) !important;
 }
 
 .arco-tabs-tab:hover {
-  color: #6366f1 !important;
+  color: oklch(0.40 0.14 45) !important;
 }
 
 /* 选择器 */
 .arco-select-view {
-  background: #fff !important;
-  border-color: #e5e6eb !important;
-  color: #1d2129 !important;
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.3) !important;
+  color: oklch(0.25 0.02 50) !important;
 }
 
 .arco-select-view:hover {
-  border-color: #6366f1 !important;
+  border-color: oklch(0.50 0.16 45 / 0.5) !important;
 }
 
 .arco-select-dropdown {
-  background: #fff !important;
-  border-color: #e5e6eb !important;
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.2) !important;
 }
 
 .arco-select-option {
-  color: #1d2129 !important;
+  color: oklch(0.30 0.02 50) !important;
 }
 
 .arco-select-option:hover {
-  background: rgba(99, 102, 241, 0.06) !important;
+  background: oklch(0.50 0.16 45 / 0.1) !important;
 }
 
 /* 单选按钮组 */
 .arco-radio-group-button .arco-radio-button {
-  background: #fff !important;
-  border-color: #e5e6eb !important;
-  color: #4e5969 !important;
+  background: oklch(0.95 0.01 90) !important;
+  border-color: oklch(0.85 0.01 60 / 0.3) !important;
+  color: oklch(0.40 0.02 50) !important;
 }
 
 .arco-radio-group-button .arco-radio-button-checked {
-  background: #6366f1 !important;
-  border-color: #6366f1 !important;
-  color: white !important;
+  background: oklch(0.50 0.16 45) !important;
+  border-color: oklch(0.50 0.16 45) !important;
+  color: oklch(0.98 0.01 95) !important;
 }
 
 /* 上传组件 */
 .arco-upload {
-  color: #4e5969 !important;
+  color: oklch(0.40 0.02 50) !important;
+}
+
+.arco-upload-trigger {
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.3) !important;
 }
 
 /* 空状态 */
 .arco-empty {
-  color: #86909c !important;
+  color: oklch(0.50 0.02 50) !important;
 }
 
 /* 结果组件 */
 .arco-result-title {
-  color: #1d2129 !important;
+  color: oklch(0.20 0.02 50) !important;
 }
 
 .arco-result-subtitle {
-  color: #86909c !important;
+  color: oklch(0.40 0.02 50) !important;
+}
+
+/* 卡片 */
+.arco-card {
+  background: oklch(0.98 0.01 95) !important;
+  border-color: oklch(0.85 0.01 60 / 0.2) !important;
+}
+
+.arco-card-header-title {
+  color: oklch(0.20 0.02 50) !important;
+}
+
+/* 头像 */
+.arco-avatar {
+  background: oklch(0.50 0.16 45 / 0.2) !important;
+  color: oklch(0.40 0.10 45) !important;
 }
 
 /* 滚动条 */
@@ -206,11 +255,11 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
+  background: oklch(0.85 0.01 60 / 0.3);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
+  background: oklch(0.50 0.16 45 / 0.4);
 }
 </style>

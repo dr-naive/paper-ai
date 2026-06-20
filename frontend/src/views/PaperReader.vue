@@ -1135,7 +1135,7 @@ watch(interpretType, () => {
   padding: 10px;
   background: rgba(99, 102, 241, 0.06);
   border-radius: 8px;
-  border-left: 3px solid #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.22);
 }
 
 .citation-title {
