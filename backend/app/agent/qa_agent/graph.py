@@ -45,14 +45,14 @@ async def recognize_intent(state: QAAgentState) -> QAAgentState:
             text = text.split("```json")[1].split("```")[0]
         result = json.loads(text.strip())
         state['intent'] = result.get('intent', 'general')
-        state['confidence'] = result.get('confidence', 0.5)
+        state['intent_confidence'] = result.get('confidence', 0.5)
         logger.info(f"✅ 意图识别成功：{state['intent']}")
     except Exception as e:
         import traceback
         logger.error(f"❌ 意图识别失败：{e}")
         logger.error(f"详细堆栈：{traceback.format_exc()}")
         state['intent'] = 'general'
-        state['confidence'] = 0.5
+        state['intent_confidence'] = 0.5
     
     return state
 
@@ -140,7 +140,8 @@ async def run_qa_agent(paper_id: str, question: str, relevant_chunks: list) -> d
         citations=[],
         follow_up_questions=[],
         generate_follow_up=True,
-        confidence=0.0,
+        intent_confidence=0.0,
+        evidence_confidence=0.0,
         error=None
     )
     
@@ -153,5 +154,8 @@ async def run_qa_agent(paper_id: str, question: str, relevant_chunks: list) -> d
         "answer": result.get("answer", ""),
         "intent": result.get("intent", ""),
         "sources": result.get("sources", []),
-        "confidence": result.get("confidence", 0.0)
+        "intent_confidence": result.get("intent_confidence", 0.0),
+        "evidence_confidence": 0.0,
+        "confidence": 0.0,
+        "confidence_type": "evidence_support",
     }

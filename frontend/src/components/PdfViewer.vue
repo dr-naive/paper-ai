@@ -43,6 +43,7 @@
           v-for="i in numPages"
           :key="i - 1"
           class="pdf-page-shell"
+          :class="{ 'citation-target': highlightedPage === i }"
           :style="pageShellStyle(i - 1)"
         >
           <canvas
@@ -106,6 +107,7 @@ const error = ref(false)
 const numPages = ref(0)
 const scale = ref(1.0)
 const currentPage = ref(1)
+const highlightedPage = ref<number | null>(null)
 
 let pdfDoc: any = null
 let pageHeights: number[] = []
@@ -115,6 +117,7 @@ const renderingPages = new Set<number>()
 const loadingProgress = ref(0) // 加载进度 0-100
 let renderedScale = 1
 let scrollFrame: number | null = null
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
 
 const setCanvasRef = (index: number, el: HTMLCanvasElement | null) => {
   canvasRefs.value[index] = el
@@ -235,9 +238,6 @@ const onScroll = () => {
 }
 
 const loadPdf = async () => {
-  console.log('=== loadPdf called ===')
-  console.log('pdfUrl:', props.pdfUrl)
-  
   loading.value = true
   error.value = false
   numPages.value = 0
@@ -247,7 +247,6 @@ const loadPdf = async () => {
   currentPage.value = 1
   
   try {
-    console.log('开始加载 PDF...')
     const pdf = await pdfjsLib.getDocument({
       url: props.pdfUrl,
       disableRange: false,
@@ -256,8 +255,7 @@ const loadPdf = async () => {
       rangeChunkSize: 256 * 1024,
       verbosity: 0
     }).promise
-    console.log('PDF 加载成功，页数:', pdf.numPages)
-    
+
     pdfDoc = pdf
     const firstPage = await pdf.getPage(1)
     const firstViewport = firstPage.getViewport({ scale: scale.value })
@@ -270,13 +268,11 @@ const loadPdf = async () => {
     canvasRefs.value.forEach((_, index) => updatePageElementSize(index))
     
     // 【第一步：立即渲染首页】不等待所有页面高度计算
-    console.log('渲染首页...')
     await renderPage(0)
     
     // 【第二步：立即显示首页】用户马上能看到内容
     loading.value = false
     loadingProgress.value = 100
-    console.log('PDF首页已显示')
     renderVisiblePages()
   } catch (e: any) {
     console.error('加载 PDF 失败:', e.message || e)
@@ -363,10 +359,6 @@ const nextPage = () => {
 }
 
 const scrollToPage = async (pageNum: number) => {
-  console.log('scrollToPage called with pageNum:', pageNum)
-  console.log('pageHeights:', pageHeights)
-  console.log('current scale:', scale.value)
-  
   if (!containerRef.value) {
     console.error('scrollToPage failed: containerRef is null')
     return
@@ -395,8 +387,6 @@ const scrollToPage = async (pageNum: number) => {
     targetScrollTop += (pageHeights[i] || 800) + 10
   }
   
-  console.log('targetScrollTop:', targetScrollTop)
-  
   const container = containerRef.value
   
   // 直接设置 scrollTop
@@ -404,15 +394,22 @@ const scrollToPage = async (pageNum: number) => {
   
   // 延迟检查并修正
   setTimeout(() => {
-    console.log('scrollTop after:', container.scrollTop)
     if (Math.abs(container.scrollTop - targetScrollTop) > 10) {
-      console.log('滚动位置不准确，重新设置')
       container.scrollTop = targetScrollTop
     }
   }, 100)
   
   currentPage.value = pageNum
   renderVisiblePages()
+}
+
+const highlightPage = (pageNum: number) => {
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightedPage.value = pageNum
+  highlightTimer = setTimeout(() => {
+    highlightedPage.value = null
+    highlightTimer = null
+  }, 2600)
 }
 
 const normalizeSearchText = (value: string) => value
@@ -440,15 +437,13 @@ const buildSearchFragments = (values: string[]): string[] => {
 
 const searchText = async (text: string | string[]): Promise<number | null> => {
   const searchValues = (Array.isArray(text) ? text : [text]).filter(value => value?.trim())
-  console.log('搜索文本:', searchValues)
-  
+
   if (!pdfDoc || searchValues.length === 0) {
     console.error('搜索失败：PDF未加载或搜索文本为空')
     return null
   }
   const searchFragments = buildSearchFragments(searchValues)
-  console.log('搜索片段:', searchFragments)
-  
+
   // 遍历所有页面查找匹配的文本
   for (let i = 0; i < numPages.value; i++) {
     try {
@@ -461,8 +456,7 @@ const searchText = async (text: string | string[]): Promise<number | null> => {
       // 检查页面是否包含任一搜索片段
       for (const fragment of searchFragments) {
         if (pageText.includes(fragment)) {
-          console.log(`在第 ${i + 1} 页找到匹配内容（片段: ${fragment.substring(0, 20)}...）`)
-          scrollToPage(i + 1)
+          await scrollToPage(i + 1)
           return i + 1  // 返回找到的页码
         }
       }
@@ -471,13 +465,8 @@ const searchText = async (text: string | string[]): Promise<number | null> => {
     }
   }
   
-  console.log('未找到匹配内容')
   return null
 }
-
-watch(scale, () => {
-  console.log('缩放变化:', scale.value)
-})
 
 watch(() => props.pdfUrl, () => {
   if (props.pdfUrl) {
@@ -498,11 +487,14 @@ onUnmounted(() => {
   if (pdfDoc && typeof pdfDoc.destroy === 'function') {
     pdfDoc.destroy()
   }
+  if (highlightTimer) clearTimeout(highlightTimer)
 })
 
 defineExpose({
   scrollToPage,
-  searchText
+  searchText,
+  highlightPage,
+  fitWidth
 })
 </script>
 
@@ -512,7 +504,7 @@ defineExpose({
   flex-direction: column;
   height: 100%;
   width: 100%;
-  background: #525659;
+  background: oklch(0.36 0.012 45);
   position: relative;
 }
 
@@ -522,8 +514,8 @@ defineExpose({
   justify-content: space-between;
   gap: 8px;
   padding: 8px 16px;
-  background: #3c3f41;
-  border-bottom: 1px solid #2a2d2f;
+  background: var(--pa-toolbar);
+  border-bottom: 1px solid oklch(0.22 0.015 45);
   position: relative;
   z-index: 10;
   flex-shrink: 0;
@@ -543,8 +535,8 @@ defineExpose({
 .page-input {
   width: 50px;
   padding: 4px 8px;
-  background: #4a4e51;
-  border: 1px solid #5a5e61;
+  background: var(--pa-toolbar-control);
+  border: 1px solid oklch(0.46 0.018 45);
   border-radius: 4px;
   color: white;
   font-size: 14px;
@@ -562,11 +554,12 @@ defineExpose({
 
 .page-input:focus {
   outline: none;
-  border-color: #4a90d9;
+  border-color: oklch(0.72 0.14 55);
+  box-shadow: 0 0 0 2px oklch(0.50 0.16 45 / 0.2);
 }
 
 .page-separator {
-  color: #888;
+  color: oklch(0.76 0.01 55);
   font-size: 14px;
 }
 
@@ -584,7 +577,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
   padding: 6px 12px;
-  background: #4a4e51;
+  background: var(--pa-toolbar-control);
   border: none;
   border-radius: 4px;
   color: white;
@@ -595,7 +588,7 @@ defineExpose({
 }
 
 .toolbar-btn:hover:not(:disabled) {
-  background: #5a5e61;
+  background: oklch(0.43 0.022 45);
 }
 
 .toolbar-btn:disabled {
@@ -636,6 +629,21 @@ defineExpose({
   margin-bottom: 10px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   background: white;
+}
+
+.pdf-page-shell.citation-target {
+  outline: 3px solid var(--pa-primary);
+  outline-offset: 3px;
+  animation: citation-page-pulse 1.3s cubic-bezier(0.25, 1, 0.5, 1) 2;
+}
+
+@keyframes citation-page-pulse {
+  0%, 100% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+  50% { box-shadow: 0 0 0 8px oklch(0.50 0.16 45 / 0.22), 0 4px 18px rgba(0, 0, 0, 0.38); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-page-shell.citation-target { animation: none; }
 }
 
 .pdf-loading,
@@ -681,9 +689,8 @@ defineExpose({
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: rgba(60, 63, 65, 0.9);
+  background: var(--pa-toolbar);
   border-radius: 8px;
-  backdrop-filter: blur(8px);
   z-index: 20;
 }
 
@@ -698,7 +705,7 @@ defineExpose({
 .progress-fill {
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  background: var(--pa-primary);
   border-radius: 2px;
   transform-origin: left;
   transition: transform 0.3s ease;

@@ -177,6 +177,42 @@ def _enrich_citations(citations: list, chunks: list) -> list:
     return enriched
 
 
+def calculate_evidence_confidence(
+    answer: str,
+    citations: list,
+    chunks: list,
+    intent: str | None = None,
+) -> float:
+    """Estimate source support, never statistical answer correctness."""
+    if not str(answer or "").strip():
+        return 0.0
+    valid_citations = [item for item in citations or [] if isinstance(item, dict)]
+    if intent == "metadata":
+        return 0.95 if valid_citations else 0.0
+    if not valid_citations or not chunks:
+        return 0.0
+
+    grounded = 0
+    for citation in valid_citations:
+        source_id = str(citation.get("source_id") or "").upper()
+        if not (source_id.startswith("S") and source_id[1:].isdigit()):
+            continue
+        index = int(source_id[1:]) - 1
+        if not 0 <= index < len(chunks):
+            continue
+        citation_text = _normalize_locator_text(citation.get("text", ""))
+        source_text = _normalize_locator_text(chunks[index].get("content", ""))
+        if citation_text and (
+            citation_text in source_text
+            or SequenceMatcher(None, citation_text, source_text).ratio() >= 0.55
+        ):
+            grounded += 1
+
+    grounding_ratio = grounded / len(valid_citations)
+    citation_coverage_factor = 0.7 + 0.3 * min(len(valid_citations) / 2, 1.0)
+    return round(grounding_ratio * citation_coverage_factor, 4)
+
+
 async def recognize_intent(state: QAAgentState) -> QAAgentState:
     """识别问题意图"""
     logger.info(f"[增强问答 Agent] 识别问题意图")
@@ -185,7 +221,7 @@ async def recognize_intent(state: QAAgentState) -> QAAgentState:
     metadata_field = detect_metadata_intent(question)
     if metadata_field:
         state['intent'] = 'metadata'
-        state['confidence'] = 0.95
+        state['intent_confidence'] = 0.95
         state['metadata_field'] = metadata_field
         logger.info(f"✅ 规则识别元数据问题：{metadata_field}")
         return state
@@ -193,14 +229,14 @@ async def recognize_intent(state: QAAgentState) -> QAAgentState:
     simple_intent = detect_simple_intent(question)
     if simple_intent:
         state['intent'] = simple_intent
-        state['confidence'] = 0.8
+        state['intent_confidence'] = 0.8
         state['simple_question'] = True
         logger.info(f"✅ 规则识别简单问题：{simple_intent}")
         return state
 
     if re.search(r"表格|(?:表|table)\s*\d+", question, re.IGNORECASE):
         state['intent'] = 'detail'
-        state['confidence'] = 0.95
+        state['intent_confidence'] = 0.95
         logger.info("✅ 规则识别表格细节问题")
         return state
 
@@ -229,12 +265,12 @@ async def recognize_intent(state: QAAgentState) -> QAAgentState:
         text = response.generations[0][0].text.strip()
         result = safe_json_loads(text)
         state['intent'] = result.get('intent', 'general')
-        state['confidence'] = result.get('confidence', 0.5)
+        state['intent_confidence'] = result.get('confidence', 0.5)
         logger.info(f"✅ 意图识别成功：{state['intent']}")
     except Exception as e:
         logger.error(f"❌ 意图识别失败：{e}")
         state['intent'] = 'general'
-        state['confidence'] = 0.5
+        state['intent_confidence'] = 0.5
     
     return state
 
@@ -544,7 +580,8 @@ async def generate_follow_up_questions(question: str, answer: str, intent: str =
         generate_follow_up=True,
         metadata_field=None,
         simple_question=False,
-        confidence=0.0,
+        intent_confidence=0.0,
+        evidence_confidence=0.0,
         error=None
     )
     result = await generate_follow_up(state)
@@ -577,7 +614,8 @@ async def run_enhanced_qa_agent(
         citations=[],
         follow_up_questions=[],
         generate_follow_up=generate_follow_up,
-        confidence=0.0,
+        intent_confidence=0.0,
+        evidence_confidence=0.0,
         error=None
     )
     
@@ -586,11 +624,22 @@ async def run_enhanced_qa_agent(
     
     logger.info(f"✅ [增强问答 Agent] 处理完成，耗时 {time.perf_counter() - started_at:.2f}s")
     
+    evidence_confidence = calculate_evidence_confidence(
+        result.get("answer", ""),
+        result.get("citations", []),
+        relevant_chunks,
+        result.get("intent"),
+    )
     return {
         "answer": result.get("answer", ""),
         "intent": result.get("intent", ""),
         "sources": result.get("sources", []),
         "citations": result.get("citations", []),
         "follow_up_questions": result.get("follow_up_questions", []),
-        "confidence": result.get("confidence", 0.0)
+        "intent_confidence": result.get("intent_confidence", 0.0),
+        "evidence_confidence": evidence_confidence,
+        # Deprecated compatibility alias. It now means evidence support,
+        # never intent confidence or answer accuracy.
+        "confidence": evidence_confidence,
+        "confidence_type": "evidence_support",
     }

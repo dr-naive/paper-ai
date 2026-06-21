@@ -38,6 +38,7 @@ class ChatMessage(Base):
     answer = Column(Text)
     citations = Column(JSON, default=list)  # 引用来源
     follow_up_questions = Column(JSON, default=list)  # 推荐追问
+    # 新消息存储 evidence_confidence；历史消息可能仍是旧版 intent confidence。
     confidence = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
     

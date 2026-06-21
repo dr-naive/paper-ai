@@ -33,7 +33,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"🚀 启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     await init_db()
     logger.info("✅ 数据库初始化完成")
+    from app.api.papers import recover_incomplete_paper_tasks
+    recovered = recover_incomplete_paper_tasks()
+    if recovered:
+        logger.warning("恢复 %d 个未完成论文任务", recovered)
     yield
+    from app.utils.background_tasks import shutdown_background_tasks
+    await shutdown_background_tasks()
     await close_db()
     logger.info("👋 应用关闭")
 
@@ -48,15 +54,16 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 
 from app.api.auth import router as auth_router
 from app.api.papers import router as papers_router
+from app.api.paper_analysis import router as paper_analysis_router
 from app.api.notes import router as notes_router
 from app.api.chat import router as chat_router
 
@@ -67,6 +74,7 @@ from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCac
 
 app.include_router(auth_router)
 app.include_router(papers_router)
+app.include_router(paper_analysis_router)
 app.include_router(notes_router)
 app.include_router(chat_router)
 

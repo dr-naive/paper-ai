@@ -2,11 +2,16 @@
 
 import asyncio
 import json
+import logging
 import os
+import threading
 from typing import Dict, Any, Optional
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+_task_file_lock = threading.Lock()
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -38,6 +43,17 @@ def get_task_storage_dir():
 def get_task_file_path(task_id: str):
     return get_task_storage_dir() / f"{task_id}.json"
 
+
+def _write_task_file(file_path: Path, task_data: Dict[str, Any]) -> None:
+    """Write through a same-directory temporary file to prevent torn JSON."""
+    temporary_path = file_path.with_suffix(".json.tmp")
+    with _task_file_lock:
+        with open(temporary_path, "w", encoding="utf-8") as handle:
+            json.dump(task_data, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, file_path)
+
 def create_task(paper_id: str, user_id: str) -> TaskProgress:
     """创建任务"""
     task_id = f"task_{paper_id}"
@@ -57,8 +73,7 @@ def create_task(paper_id: str, user_id: str) -> TaskProgress:
     }
     
     file_path = get_task_file_path(task_id)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(task_data, f, ensure_ascii=False, indent=2)
+    _write_task_file(file_path, task_data)
     
     return task
 
@@ -83,6 +98,7 @@ def get_task(task_id: str) -> Optional[TaskProgress]:
         
         return task
     except Exception:
+        logger.exception("读取任务状态失败: %s", task_id)
         return None
 
 def update_task(task_id: str, **kwargs):
@@ -105,10 +121,18 @@ def update_task(task_id: str, **kwargs):
         
         task_dict['updated_at'] = datetime.now().isoformat()
         
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(task_dict, f, ensure_ascii=False, indent=2)
+        _write_task_file(file_path, task_dict)
     except Exception:
-        pass
+        logger.exception("更新任务状态失败: %s", task_id)
+
+
+def list_tasks(statuses: Optional[set[TaskStatus]] = None) -> list[TaskProgress]:
+    tasks = []
+    for file_path in get_task_storage_dir().glob("task_*.json"):
+        task = get_task(file_path.stem)
+        if task is not None and (statuses is None or task.status in statuses):
+            tasks.append(task)
+    return sorted(tasks, key=lambda task: task.created_at)
 
 def remove_task(task_id: str):
     """移除任务"""

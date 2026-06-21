@@ -1,0 +1,40 @@
+{
+  "papers": [
+    {
+      "alias": "p01",
+      "paper_id": "f504c2df-8e4e-4c96-a99e-5e072269f93c",
+      "split": "dev",
+      "role": "中文短论文、表格与实验数值"
+    },
+    {
+      "alias": "p02",
+      "paper_id": "1a882991-5662-44cb-b8b1-048ff4469ed0",
+      "split": "dev",
+      "role": "英文长论文、多表格"
+    },
+    {
+      "alias": "p03",
+      "paper_id": "3577cd26-8c82-4057-9c4e-c99525fb142d",
+      "split": "dev",
+      "role": "中文技术论文、多模态与消融实验"
+    },
+    {
+      "alias": "p04",
+      "paper_id": "7d949e29-ac02-4cac-bd4c-1d3e29457f57",
+      "split": "test",
+      "role": "中文长论文、跨章节综合"
+    },
+    {
+      "alias": "p05",
+      "paper_id": "b48e62d1-563b-44ea-aad4-11d20ae509a0",
+      "split": "test",
+      "role": "英文短论文、算法方法"
+    }
+  ],
+  "excluded": [
+    {
+      "paper_id": "60596536-54b9-4ea8-aeb9-66303a11b0f1",
+      "reason": "上传文件只有一页参考文献，标题误识别且没有正文，不能构造可信问答金标准"
+    }
+  ]
+}

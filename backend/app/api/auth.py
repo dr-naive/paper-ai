@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
@@ -29,9 +29,9 @@ class TokenData(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
+    username: str = Field(min_length=3, max_length=50)
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
 
 
 class UserResponse(BaseModel):
@@ -53,8 +53,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def get_password_hash(password: str) -> str:
-    # bcrypt 限制密码长度不能超过 72 字节
-    return pwd_context.hash(password[:72])
+    return pwd_context.hash(password)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:

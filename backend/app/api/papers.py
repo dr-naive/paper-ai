@@ -2,13 +2,10 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header, Query, BackgroundTasks
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 from typing import Optional, List, Dict, Any
 import os
-import re
 import uuid
-import json
-import pdfplumber
 import logging
 import asyncio
 import time
@@ -16,61 +13,32 @@ import time
 logger = logging.getLogger(__name__)
 
 from app.database import get_db, AsyncSessionLocal
-from app.models.paper import Paper, Section, QAPair, Table as TableModel
+from app.models.paper import Paper, Section, Table as TableModel
 from app.agent.paper_parser.graph import run_paper_parser
-from app.agent.summarizer.graph import run_summarizer_agent
-from app.agent.qa_agent.enhanced_graph import run_enhanced_qa_agent as run_enhanced_qa_agent_impl
 from app.rag.knowledge_base import get_knowledge_base, SmartChunker
-from app.rag.table_retrieval import get_exact_table_chunks, merge_retrieval_chunks
-from app.llm.client import get_llm_client
-from app.api.auth import decode_token
+from app.api.dependencies import get_current_user_id
 from app.config import settings
 from app.parsers.multimedia_extractor import MultimediaExtractor
 from app.utils.task_manager import create_task, update_task, get_task
+from app.utils.background_tasks import spawn_background_task
+from app.services.paper_files import (
+    extract_pdf_page_contents as _extract_pdf_page_contents,
+    extract_pdf_page_texts as _extract_pdf_page_texts,
+    extract_pdf_text as _extract_pdf_text,
+    find_content_page as _find_content_page,
+    iter_file_range as _iter_file_range,
+    normalize_page_text as _normalize_page_text,
+    parse_byte_range as _parse_byte_range,
+    save_validated_pdf as _save_validated_pdf,
+)
+from app.services.paper_indexing import (
+    build_complete_text_chunks as _build_complete_text_chunks,
+    build_text_chunks as _build_text_chunks,
+    normalize_key_points as _normalize_key_points,
+    normalize_sections as _normalize_sections,
+)
 
 router = APIRouter(prefix="/api/v1/papers")
-
-
-def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int] | None:
-    """Parse a single RFC 7233 byte range and return an inclusive interval."""
-    if not range_header or not range_header.startswith("bytes=") or file_size <= 0:
-        return None
-
-    value = range_header[6:].strip()
-    if "," in value or "-" not in value:
-        return None
-
-    start_text, end_text = value.split("-", 1)
-    try:
-        if not start_text:
-            suffix_length = int(end_text)
-            if suffix_length <= 0:
-                return None
-            start = max(0, file_size - suffix_length)
-            end = file_size - 1
-        else:
-            start = int(start_text)
-            end = int(end_text) if end_text else file_size - 1
-            if start < 0 or start >= file_size or end < start:
-                return None
-            end = min(end, file_size - 1)
-    except ValueError:
-        return None
-
-    return start, end
-
-
-def _iter_file_range(file_path: str, start: int, end: int, chunk_size: int = 256 * 1024):
-    """Yield only the requested inclusive file interval."""
-    remaining = end - start + 1
-    with open(file_path, "rb") as file_obj:
-        file_obj.seek(start)
-        while remaining > 0:
-            data = file_obj.read(min(chunk_size, remaining))
-            if not data:
-                break
-            remaining -= len(data)
-            yield data
 
 
 def _get_paper_media_state(paper_id: str) -> Dict[str, Any]:
@@ -94,6 +62,7 @@ def _get_paper_media_state(paper_id: str) -> Dict[str, Any]:
         "processing": "图表增强中",
         "completed": "图表已完成",
         "failed": "图表增强失败",
+        "interrupted": "图表增强因服务重启中断",
         "not_started": "图表尚未处理",
     }
     return {
@@ -124,178 +93,6 @@ def _build_timing_details(
         "timing_percentages": percentages,
         "counts": counts or {},
     }
-
-
-def _extract_pdf_text(file_path: str, max_pages: int = 51) -> tuple[str, str]:
-    """Extract text with PyMuPDF first and retain pdfplumber as compatibility fallback."""
-    try:
-        import fitz
-
-        doc = fitz.open(file_path)
-        text = "\n\n".join(
-            doc[index].get_text("text")
-            for index in range(min(max_pages, len(doc)))
-        )
-        doc.close()
-        if text.strip():
-            return text, "pymupdf"
-    except Exception as exc:
-        logger.warning("PyMuPDF 文字提取失败，回退 pdfplumber: %s", exc)
-
-    text_parts = []
-    with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages[:max_pages]:
-            page_text = page.extract_text()
-            if page_text:
-                text_parts.append(page_text)
-    return "\n\n".join(text_parts), "pdfplumber"
-
-
-def _normalize_key_points(value: Any) -> list:
-    if isinstance(value, list):
-        return [str(item) for item in value if item]
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return []
-        try:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, list):
-                return [str(item) for item in parsed if item]
-        except json.JSONDecodeError:
-            pass
-        return [stripped]
-    return []
-
-
-def _normalize_sections(raw_sections: list, raw_text: str) -> list[dict]:
-    """Normalize parser output to the shape used by persistence/RAG."""
-    sections = []
-    for i, section in enumerate(raw_sections or []):
-        if not isinstance(section, dict):
-            continue
-
-        title = (
-            section.get("title")
-            or section.get("section_title")
-            or section.get("heading")
-            or f"第{i + 1}节"
-        )
-        content = (
-            section.get("content")
-            or section.get("text")
-            or section.get("body")
-            or ""
-        )
-        title = str(title).strip()[:200] or f"第{i + 1}节"
-        content = str(content).strip()
-        if not content:
-            continue
-
-        sections.append({
-            "title": title,
-            "content": content,
-            "key_points": _normalize_key_points(section.get("key_points", [])),
-        })
-
-    if sections:
-        return sections
-
-    logger.warning("未解析到有效章节，创建默认全文章节")
-    return [{
-        "title": "全文",
-        "content": raw_text[:3000],
-        "key_points": []
-    }]
-
-
-def _normalize_page_text(value: str) -> str:
-    return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value or "").lower())
-
-
-def _extract_pdf_page_texts(file_path: str) -> list[str]:
-    """Extract normalized text per physical PDF page for source-page mapping."""
-    try:
-        import fitz
-
-        with fitz.open(file_path) as document:
-            return [_normalize_page_text(page.get_text("text")) for page in document]
-    except Exception as exc:
-        logger.warning("提取 PDF 分页文本失败，页码定位将回退: %s", exc)
-        return []
-
-
-def _find_content_page(page_texts: list[str], content: str, start_page: int = 1) -> int:
-    """Locate content on a physical page using several exact normalized anchors."""
-    if not page_texts:
-        return max(1, start_page)
-
-    normalized = _normalize_page_text(content)
-    if not normalized:
-        return max(1, start_page)
-
-    anchor_length = min(48, len(normalized))
-    anchors = []
-    for offset in (0, 48, 96, max(0, len(normalized) - anchor_length)):
-        anchor = normalized[offset:offset + anchor_length]
-        if len(anchor) >= 12 and anchor not in anchors:
-            anchors.append(anchor)
-
-    order = list(range(max(0, start_page - 1), len(page_texts)))
-    order.extend(range(0, max(0, start_page - 1)))
-    best_index = max(0, min(start_page - 1, len(page_texts) - 1))
-    best_score = 0
-    for index in order:
-        score = sum(1 for anchor in anchors if anchor in page_texts[index])
-        if score > best_score:
-            best_index = index
-            best_score = score
-        if score == len(anchors) and score > 0:
-            break
-    return best_index + 1
-
-
-def _build_text_chunks(
-    sections: list[dict],
-    chunker: SmartChunker,
-    page_texts: list[str] | None = None,
-) -> list[dict]:
-    """Build paper-global chunk IDs and attach physical source pages."""
-    chunks: list[dict] = []
-    next_index = 0
-    page_hint = 1
-    for section in sections:
-        title = section.get("title", "全文")
-        content = section.get("content", "")
-        if not content:
-            continue
-
-        section_page = _find_content_page(page_texts or [], f"{title}\n{content[:200]}", page_hint)
-        page_hint = section_page
-        local_chunks = chunker.chunk_text(content, title)
-        for chunk in local_chunks:
-            local_index = int(chunk.get("index") or 0)
-            chunk["index"] = next_index + local_index
-            if chunk.get("parent_index") is not None:
-                chunk["parent_index"] = next_index + int(chunk["parent_index"])
-            chunk["page"] = _find_content_page(
-                page_texts or [],
-                chunk.get("content", ""),
-                section_page,
-            )
-        chunks.extend(local_chunks)
-        next_index += len(local_chunks)
-    return chunks
-
-
-async def get_current_user_id(authorization: str = Header(None), db: AsyncSession = None) -> str:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未授权")
-    token = authorization.replace("Bearer ", "")
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="令牌无效")
-    return payload.get("sub")
 
 
 @router.get("/")
@@ -598,7 +395,13 @@ async def _process_paper_async(
         kb = get_knowledge_base()
         chunker = SmartChunker()
         page_texts = _extract_pdf_page_texts(file_path)
-        text_chunks = _build_text_chunks(sections, chunker, page_texts)
+        page_contents = _extract_pdf_page_contents(file_path)
+        text_chunks = _build_complete_text_chunks(
+            sections,
+            chunker,
+            page_texts,
+            page_contents,
+        )
         if not text_chunks:
             text_chunks = chunker.chunk_text(raw_text[:100000], "全文")
         if not await kb.add_paper_chunks(paper_id, text_chunks):
@@ -1157,33 +960,19 @@ async def upload_paper(
     user_id = await get_current_user_id(authorization, db)
     logger.info(f"👤 用户ID: {user_id}")
     
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="只支持 PDF 格式")
-    
-    file_read_started_at = time.perf_counter()
-    content = await file.read()
-    initial_timings["file_read"] = time.perf_counter() - file_read_started_at
-    file_size = len(content)
-    logger.info(f"📄 文件名: {file.filename}, 大小: {file_size/1024/1024:.2f}MB")
-    
-    if file_size > settings.MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=400, detail=f"文件大小不能超过 {settings.MAX_UPLOAD_SIZE // 1024 // 1024}MB")
-    
     paper_id = str(uuid.uuid4())
     file_path = f"{settings.FILE_STORAGE_PATH}/{paper_id}.pdf"
-    os.makedirs(settings.FILE_STORAGE_PATH, exist_ok=True)
-    
     file_save_started_at = time.perf_counter()
-    with open(file_path, "wb") as f:
-        f.write(content)
+    file_size = await _save_validated_pdf(file, file_path, settings.MAX_UPLOAD_SIZE)
     initial_timings["file_save"] = time.perf_counter() - file_save_started_at
+    logger.info(f"📄 文件名: {file.filename}, 大小: {file_size/1024/1024:.2f}MB")
     logger.info(f"💾 文件已保存: {file_path}")
     
     # 提取文本
     raw_text = ""
     text_extraction_started_at = time.perf_counter()
     try:
-        raw_text, text_extraction_method = _extract_pdf_text(file_path)
+        raw_text, text_extraction_method = await asyncio.to_thread(_extract_pdf_text, file_path)
         logger.info(
             "📝 提取文本完成，方式: %s，长度: %s",
             text_extraction_method,
@@ -1191,10 +980,14 @@ async def upload_paper(
         )
     except Exception as e:
         logger.error(f"❌ PDF 解析失败: {e}")
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=500, detail=f"PDF 解析失败：{str(e)}")
     initial_timings["initial_text_extraction"] = time.perf_counter() - text_extraction_started_at
     
     if not raw_text.strip():
+        if os.path.exists(file_path):
+            os.remove(file_path)
         raise HTTPException(status_code=400, detail="无法从 PDF 中提取文字")
     
     # 创建任务
@@ -1210,9 +1003,9 @@ async def upload_paper(
     )
     logger.info(f"✅ 任务创建成功: {task.task_id}")
     
-    # 使用 asyncio.create_task 确保后台任务在响应返回后执行
+    # 登记后台任务，确保异常可见并在应用关闭时正确取消。
     logger.info("🚀 启动后台处理任务...")
-    asyncio.create_task(
+    spawn_background_task(
         _schedule_process_paper(
             paper_id,
             file_path,
@@ -1221,7 +1014,8 @@ async def upload_paper(
             initial_timings,
             pipeline_started_at,
             initial_counts,
-        )
+        ),
+        name=f"paper-upload-{paper_id}",
     )
     
     # 立即返回，不等待后台处理完成
@@ -1234,18 +1028,90 @@ async def upload_paper(
     }
 
 
+async def _recover_one_paper_task(task) -> None:
+    """Restart an interrupted pre-ready upload from its persisted PDF."""
+    file_path = f"{settings.FILE_STORAGE_PATH}/{task.paper_id}.pdf"
+    details = dict(task.details or {})
+    recovery_count = int(details.get("recovery_count", 0))
+    if recovery_count >= 2:
+        update_task(
+            task.task_id,
+            status="failed",
+            progress=0,
+            message="服务重启恢复次数已达上限，请重新上传",
+        )
+        return
+    if not os.path.exists(file_path):
+        update_task(
+            task.task_id,
+            status="failed",
+            progress=0,
+            message="恢复失败：原始 PDF 不存在，请重新上传",
+        )
+        return
+
+    details["recovery_count"] = recovery_count + 1
+    update_task(
+        task.task_id,
+        status="processing",
+        progress=5,
+        message=f"服务重启后正在恢复任务（第 {recovery_count + 1} 次）",
+        details=details,
+    )
+    raw_text, extraction_method = await asyncio.to_thread(_extract_pdf_text, file_path)
+    if not raw_text.strip():
+        update_task(task.task_id, status="failed", progress=0, message="恢复失败：PDF 无可提取文字")
+        return
+
+    # PROCESSING may have committed a partial core record before interruption.
+    # Remove it and rebuild from the persisted source to keep the pipeline idempotent.
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Paper).where(Paper.id == task.paper_id))
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            await db.delete(existing)
+            await db.commit()
+    await get_knowledge_base().delete_paper(task.paper_id)
+    await _schedule_process_paper(
+        task.paper_id,
+        file_path,
+        task.user_id,
+        raw_text,
+        initial_counts={"text_extraction_method": extraction_method, "recovered": True},
+    )
+
+
+def recover_incomplete_paper_tasks() -> int:
+    """Schedule persisted tasks after application startup; return scheduled count."""
+    from app.utils.task_manager import TaskStatus, list_tasks
+
+    scheduled = 0
+    for task in list_tasks({TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.READY}):
+        if task.status == TaskStatus.READY:
+            details = dict(task.details or {})
+            details["media_status"] = "interrupted"
+            update_task(
+                task.task_id,
+                status="completed",
+                message="论文正文可用；图表增强因服务重启中断",
+                details=details,
+            )
+            continue
+        spawn_background_task(
+            _recover_one_paper_task(task),
+            name=f"paper-recovery-{task.paper_id}",
+        )
+        scheduled += 1
+    return scheduled
+
+
 @router.get("/tasks/{task_id}")
 async def get_task_status(task_id: str, authorization: str = Header(None)):
     """查询任务状态"""
-    # 验证token
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.replace("Bearer ", "")
-        payload = decode_token(token)
-        if payload:
-            user_id = payload.get("sub")
-    
+    user_id = await get_current_user_id(authorization)
     task = get_task(task_id)
-    if not task:
+    # 对非任务所有者也返回 404，避免泄露任务是否存在。
+    if not task or task.user_id != user_id:
         raise HTTPException(status_code=404, detail="任务不存在")
     
     return {
@@ -1279,221 +1145,3 @@ async def delete_paper(paper_id: str, authorization: str = Header(None), db: Asy
         os.remove(paper.pdf_path)
     
     return {"message": "删除成功"}
-
-
-async def run_enhanced_qa_agent(paper_id: str, question: str, chunks: List[Dict], paper_metadata: Dict[str, Any]):
-    """增强版问答 Agent"""
-    return await run_enhanced_qa_agent_impl(paper_id, question, chunks, paper_metadata)
-
-
-@router.post("/{paper_id}/qa")
-async def ask_question(paper_id: str, data: dict, authorization: str = Header(None), db: AsyncSession = Depends(get_db)):
-    user_id = await get_current_user_id(authorization, db)
-    
-    question = data.get("question")
-    if not question:
-        raise HTTPException(status_code=400, detail="问题不能为空")
-    
-    result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(status_code=404, detail="论文不存在")
-    
-    kb = get_knowledge_base()
-    exact_table_chunks = await get_exact_table_chunks(db, paper_id, question)
-    semantic_chunks = await kb.query(paper_id, question, top_k=5)
-    chunks = merge_retrieval_chunks(exact_table_chunks, semantic_chunks, top_k=5)
-    
-    paper_metadata = {
-        "title": paper.title,
-        "authors": paper.authors,
-        "abstract": paper.abstract,
-        "keywords": paper.keywords or [],
-        "venue": getattr(paper, 'venue', None),
-        "publication_year": getattr(paper, 'publication_year', None),
-        "doi": getattr(paper, 'doi', None),
-    }
-    
-    qa_result = await run_enhanced_qa_agent(paper_id, question, chunks, paper_metadata)
-    
-    qa_count = await db.execute(select(func.count()).select_from(QAPair).where(QAPair.paper_id == paper_id))
-    order_index = qa_count.scalar() or 0
-    
-    qa_pair = QAPair(
-        paper_id=paper_id,
-        order_index=order_index + 1,
-        question=question,
-        answer=qa_result.get('answer'),
-        chunk_context="\n\n".join([c.get('content', '') for c in chunks[:3]]),
-        relevance_score=qa_result.get('confidence')
-    )
-    db.add(qa_pair)
-    await db.commit()
-    
-    return {
-        "answer": qa_result.get("answer"),
-        "intent": qa_result.get("intent"),
-        "sources": qa_result.get("sources", []),
-        "citations": qa_result.get("citations", []),
-        "follow_up_questions": qa_result.get("follow_up_questions", []),
-        "confidence": qa_result.get("confidence", 0.0),
-        "qa_id": str(qa_pair.id)
-    }
-
-
-@router.post("/{paper_id}/interpret")
-async def interpret_paper(paper_id: str, data: dict, authorization: str = Header(None), db: AsyncSession = Depends(get_db)):
-    """深度解读论文"""
-    user_id = await get_current_user_id(authorization, db)
-    
-    result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(status_code=404, detail="论文不存在")
-    
-    interpret_type = data.get("type", "concept")
-    
-    sections_result = await db.execute(
-        select(Section)
-        .where(Section.paper_id == paper_id)
-        .order_by(Section.order_index)
-    )
-    sections = sections_result.scalars().all()
-    
-    sections_data = []
-    if sections:
-        sections_data = [
-            {"title": s.section_title, "content": s.content or "", "order_index": s.order_index}
-            for s in sections
-        ]
-    elif paper.full_text:
-        paragraphs = [p.strip() for p in paper.full_text.split('\n\n') if p.strip()]
-        sections_data = [
-            {"title": f"段落 {i+1}", "content": p, "order_index": i}
-            for i, p in enumerate(paragraphs[:100])
-        ]
-    
-    if not sections_data:
-        raise HTTPException(status_code=400, detail="论文内容为空")
-    
-    llm = get_llm_client()
-    text = "\n\n".join([f"## {s['title']}\n{s['content'][:2000]}" for s in sections_data[:10]])
-    
-    prompts = {
-        "concept": f"""
-        请分析以下论文内容，提取并解释其中的关键概念和技术术语。
-        返回 JSON 格式：
-        {{
-            "concepts": [
-                {{"name": "概念名称", "explanation": "通俗解释（100字以内）", "context": "在论文中的作用"}}
-            ]
-        }}
-        论文内容：
-        {text[:8000]}
-        """,
-        "compare": f"""
-        请分析以下论文内容，对比论文中提到的不同方法、模型或实验设置。
-        返回 JSON 格式：
-        {{
-            "comparisons": [
-                {{"item_a": "方法A", "item_b": "方法B", "difference": "主要差异", "advantage": "各自优势"}}
-            ]
-        }}
-        论文内容：
-        {text[:8000]}
-        """,
-        "key_info": f"""
-        请分析以下论文内容，提取最关键的信息点。
-        返回 JSON 格式：
-        {{
-            "key_formulas": ["关键公式或算法描述"],
-            "key_figures": ["关键图表说明"],
-            "key_findings": ["关键发现"],
-            "takeaways": ["值得关注的要点"]
-        }}
-        论文内容：
-        {text[:8000]}
-        """
-    }
-    
-    prompt = prompts.get(interpret_type, prompts["concept"])
-    
-    try:
-        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
-        text_result = response.generations[0][0].text.strip()
-        if "```json" in text_result:
-            text_result = text_result.split("```json")[1].split("```")[0]
-        result_data = json.loads(text_result.strip())
-        
-        return {
-            "paper_id": paper_id,
-            "type": interpret_type,
-            "data": result_data
-        }
-    except Exception as e:
-        logger.error(f"❌ 深度解读失败：{e}")
-        raise HTTPException(status_code=500, detail=f"解读失败：{str(e)}")
-
-
-@router.post("/{paper_id}/summarize")
-async def generate_structured_summary(paper_id: str, authorization: str = Header(None), db: AsyncSession = Depends(get_db)):
-    """生成论文的结构化摘要"""
-    user_id = await get_current_user_id(authorization, db)
-    
-    result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(status_code=404, detail="论文不存在")
-    
-    sections_result = await db.execute(
-        select(Section)
-        .where(Section.paper_id == paper_id)
-        .order_by(Section.order_index)
-    )
-    sections = sections_result.scalars().all()
-    
-    if sections:
-        sections_data = [
-            {
-                "title": s.section_title,
-                "content": s.content or "",
-                "order_index": s.order_index
-            }
-            for s in sections
-        ]
-    elif paper.full_text:
-        paragraphs = [p.strip() for p in paper.full_text.split('\n\n') if p.strip()]
-        sections_data = [
-            {
-                "title": f"段落 {i+1}",
-                "content": p,
-                "order_index": i
-            }
-            for i, p in enumerate(paragraphs[:100])
-        ]
-    else:
-        raise HTTPException(status_code=400, detail="论文内容为空，无法生成摘要")
-    
-    summary_result = await run_summarizer_agent(paper_id, sections_data)
-    
-    return {
-        "paper_id": paper_id,
-        "overview": summary_result.get("overview", {}),
-        "methodology": summary_result.get("methodology", {}),
-        "experiments": summary_result.get("experiments", {}),
-        "contributions": summary_result.get("contributions", {})
-    }
-
-
-@router.get("/{paper_id}/summary")
-async def get_structured_summary(paper_id: str, authorization: str = Header(None), db: AsyncSession = Depends(get_db)):
-    """获取论文的结构化摘要（如果已生成）"""
-    user_id = await get_current_user_id(authorization, db)
-    
-    result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(status_code=404, detail="论文不存在")
-    
-    # 如果没有预先生成的摘要，临时生成
-    return await generate_structured_summary(paper_id, authorization, db)

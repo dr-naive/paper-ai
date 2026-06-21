@@ -1,45 +1,66 @@
 <template>
   <div class="paper-list-page">
-    <div class="header">
-      <div class="header-left">
-        <a-button type="text" @click="$router.push('/home')" style="margin-right: 8px">
-          <template #icon>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-          </template>
-          首页
-        </a-button>
-        <h1>📚 我的论文</h1>
+    <ProductHeader context="论文工作台" />
+
+    <main class="paper-list-shell">
+      <div class="header">
+        <div class="header-left">
+          <h1>我的论文</h1>
+          <p>管理已上传的论文，继续阅读或向论文提问。</p>
+        </div>
+        <a-button type="primary" size="large" @click="showUploadModal = true">上传论文</a-button>
       </div>
-      <a-button type="primary" @click="showUploadModal = true">上传论文</a-button>
-    </div>
-    <div class="paper-list">
-      <a-spin :loading="loading">
-        <a-list :data="papers" :bordered="false">
-          <template #item="{ item: paper }">
-            <a-list-item :key="paper.id">
-              <a-list-item-meta>
-                <template #avatar><a-avatar :style="{ backgroundColor: '#6366f1' }"></a-avatar></template>
-                <template #title><a-link @click="$router.push(`/paper/${paper.id}`)">{{ paper.title }}</a-link></template>
-                <template #description>
-                  <span>{{ paper.authors || '未知作者' }}</span><span> | </span><span>{{ formatDate(paper.uploaded_at) }}</span>
-                  <a-tag
-                    v-if="paper.media_status"
-                    size="small"
-                    :color="mediaStatusColor(paper.media_status)"
-                    class="media-status"
-                  >{{ paper.media_message }}</a-tag>
+      <section class="paper-list" aria-label="论文列表">
+        <a-spin :loading="loading">
+          <div v-if="!loading && papers.length === 0" class="empty-library">
+            <div class="empty-document" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h5"/>
+              </svg>
+            </div>
+            <h2>从第一篇论文开始</h2>
+            <p>上传 PDF 后即可阅读、生成摘要并核对 AI 引用。</p>
+            <a-button type="primary" @click="showUploadModal = true">上传论文</a-button>
+          </div>
+          <a-list v-else :data="papers" :bordered="false">
+            <template #item="{ item: paper }">
+              <a-list-item :key="paper.id" class="paper-row">
+                <a-list-item-meta>
+                  <template #avatar>
+                    <div class="paper-document" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7">
+                        <path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h5"/>
+                      </svg>
+                    </div>
+                  </template>
+                  <template #title><a-link @click="$router.push(`/paper/${paper.id}`)">{{ paper.title }}</a-link></template>
+                  <template #description>
+                    <div class="paper-meta">
+                      <span>{{ paper.authors || '未知作者' }}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{{ formatDate(paper.uploaded_at) }}</span>
+                      <a-tag
+                        v-if="paper.media_status"
+                        size="small"
+                        :color="mediaStatusColor(paper.media_status)"
+                        class="media-status"
+                      >{{ paper.media_message }}</a-tag>
+                    </div>
+                  </template>
+                </a-list-item-meta>
+                <template #actions>
+                  <div class="paper-actions">
+                    <a-button type="text" size="small" @click="$router.push(`/paper/${paper.id}`)">阅读</a-button>
+                    <a-button type="text" size="small" @click="$router.push(`/paper/${paper.id}`)">问答</a-button>
+                    <a-button type="text" size="small" status="danger" @click="handleDelete(paper.id)">删除</a-button>
+                  </div>
                 </template>
-              </a-list-item-meta>
-              <template #actions>
-                <a-button type="text" size="small" @click="$router.push(`/paper/${paper.id}`)">阅读</a-button>
-                <a-button type="text" size="small" @click="$router.push(`/paper/${paper.id}/qa`)">问答</a-button>
-                <a-button type="text" size="small" status="danger" @click="handleDelete(paper.id)">删除</a-button>
-              </template>
-            </a-list-item>
-          </template>
-        </a-list>
-      </a-spin>
-    </div>
+              </a-list-item>
+            </template>
+          </a-list>
+        </a-spin>
+      </section>
+    </main>
     <a-modal v-model:visible="showUploadModal" title="上传论文" :footer="false">
       <a-spin :spinning="uploading" tip="上传中...">
         <a-upload :limit="1" accept=".pdf" :auto-upload="false" action="" :custom-request="customUpload" @change="handleFileChange">
@@ -66,6 +87,7 @@ import type { FileItem } from '@arco-design/web-vue'
 import type { RequestOption, UploadRequest } from '@arco-design/web-vue/es/upload/interfaces'
 import { getPaperList, uploadPaper, deletePaper, getTaskStatus } from '@/api/paper'
 import dayjs from 'dayjs'
+import ProductHeader from '@/components/ProductHeader.vue'
 
 const loading = ref(false)
 const papers = ref<any[]>([])
@@ -177,11 +199,8 @@ const handleUpload = async () => {
   try { 
     // 异步上传，立即返回任务ID
     const response = await uploadPaper(selectedFile.value)
-    console.log('上传响应:', response)
-    
     const taskId = response.task_id || response.taskId
-    console.log('获取到的任务ID:', taskId)
-    
+
     if (!taskId) {
       throw new Error('未能获取任务ID')
     }
@@ -237,48 +256,130 @@ onMounted(() => { loadPapers() })
 <style scoped>
 .paper-list-page {
   min-height: 100vh;
-  background: #f5f7fa;
-  padding: 24px;
-  color: #1d2129;
+  background: var(--pa-bg);
+  color: var(--pa-ink);
+}
+
+.paper-list-shell {
+  width: min(100% - 48px, 1280px);
+  margin: 0 auto;
+  padding: 42px 0 64px;
 }
 
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
 }
 
 .header-left {
-  display: flex;
-  align-items: center;
+  min-width: 0;
 }
 
 .header h1 {
+  margin: 0 0 6px;
+  color: var(--pa-ink);
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.header p {
   margin: 0;
-  color: #1d2129;
+  color: var(--pa-muted);
+  font-size: 14px;
 }
 
 .paper-list {
-  background: #fff;
-  border: 1px solid #e5e6eb;
+  min-height: 220px;
+  background: var(--pa-surface);
+  border: 1px solid var(--pa-border);
   border-radius: 12px;
-  padding: 16px;
+  padding: 8px 20px;
+  box-shadow: 0 8px 30px oklch(0.35 0.02 45 / 0.05);
+}
+
+.paper-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 82px;
+  padding: 22px 8px !important;
+  transition: background 0.2s ease;
+}
+
+.paper-row:hover { background: var(--pa-primary-soft); }
+
+.paper-document,
+.empty-document {
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--pa-primary-soft);
+  color: var(--pa-primary-hover);
+}
+
+.paper-document {
+  width: 44px;
+  height: 44px;
+}
+
+.paper-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.paper-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.empty-library {
+  display: flex;
+  min-height: 300px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.empty-document {
+  width: 52px;
+  height: 52px;
+  margin-bottom: 16px;
+}
+
+.empty-library h2 {
+  margin: 0 0 8px;
+  color: var(--pa-ink);
+  font-size: 18px;
+}
+
+.empty-library p {
+  margin: 0 0 20px;
+  color: var(--pa-muted);
+  font-size: 14px;
 }
 
 .upload-trigger {
   padding: 40px;
-  border: 2px dashed #e5e6eb;
+  border: 1px dashed var(--pa-border);
   border-radius: 8px;
   text-align: center;
   cursor: pointer;
-  color: #86909c;
+  color: var(--pa-muted);
+  background: var(--pa-bg);
 }
+
+.upload-trigger:hover { border-color: var(--pa-primary); }
 
 .upload-progress {
   margin-top: 16px;
   padding: 16px;
-  background: #f5f7fa;
+  background: var(--pa-bg);
   border-radius: 8px;
 }
 
@@ -289,7 +390,7 @@ onMounted(() => { loadPapers() })
 
 .progress-bar {
   height: 8px;
-  background: #e5e6eb;
+  background: var(--pa-border);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 8px;
@@ -298,7 +399,7 @@ onMounted(() => { loadPapers() })
 .progress-fill {
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  background: var(--pa-primary);
   border-radius: 4px;
   transform-origin: left;
   transition: transform 0.3s ease;
@@ -307,7 +408,20 @@ onMounted(() => { loadPapers() })
 .progress-text {
   margin: 0;
   font-size: 14px;
-  color: #646a73;
+  color: var(--pa-text);
   text-align: center;
+}
+
+@media (max-width: 720px) {
+  .paper-list-shell { width: min(100% - 28px, 1280px); padding-top: 28px; }
+  .header { align-items: flex-start; gap: 20px; }
+  .header h1 { font-size: 24px; }
+  .paper-list { padding-inline: 10px; }
+  .paper-row :deep(.arco-list-item-main) { min-width: 0; }
+  .paper-actions { flex-direction: column; align-items: stretch; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .paper-row { transition: none; }
 }
 </style>

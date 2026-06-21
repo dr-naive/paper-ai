@@ -132,9 +132,14 @@ docker-compose.override.yml
 # 本地工具状态
 .codex/
 .agents/
+.impeccable/
 
 # 本地 Codex skill 安装包
 /impeccable.zip
+
+# 评测运行产物（保留代码、数据集和人工总结）
+backend/evals/reports/*
+!backend/evals/reports/EVALUATION_SUMMARY.md
 
 # ================ 其他 ================
 # Jupyter Notebook

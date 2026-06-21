@@ -4,21 +4,17 @@ After=network.target paperai-backend.service
 Wants=network.target paperai-backend.service
 
 [Service]
-Type=simple
+Type=oneshot
 User=ddd
 Group=ddd
 WorkingDirectory=/home/ddd/project/myAgent/frontend
 Environment=NODE_ENV=production
 Environment=PATH=/home/ddd/.nvm/versions/node/v24.16.0/bin:/usr/local/bin:/usr/bin:/bin
 ExecStartPre=/home/ddd/.nvm/versions/node/v24.16.0/bin/npm run build
-ExecStart=/home/ddd/.nvm/versions/node/v24.16.0/bin/npm run serve
-Restart=on-failure
-RestartSec=3
+ExecStart=/usr/bin/cp -a /home/ddd/project/myAgent/frontend/dist/. /var/www/paperai/
+RemainAfterExit=yes
 StandardOutput=append:/home/ddd/project/myAgent/logs/frontend.log
 StandardError=append:/home/ddd/project/myAgent/logs/frontend.log
-KillMode=control-group
-KillSignal=SIGINT
-TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target

@@ -1,10 +1,80 @@
-import { createApp } from 'vue'
+import { createApp, type Component } from 'vue'
 import { createPinia } from 'pinia'
-import ArcoVue from '@arco-design/web-vue'
-import '@arco-design/web-vue/dist/arco.css'
+import {
+  Avatar,
+  Button,
+  ConfigProvider,
+  Doption,
+  Dropdown,
+  Form,
+  FormItem,
+  Input,
+  InputPassword,
+  Link,
+  List,
+  ListItem,
+  ListItemMeta,
+  Modal,
+  Option,
+  Radio,
+  RadioGroup,
+  Result,
+  Select,
+  Spin,
+  TabPane,
+  Tabs,
+  Tag,
+  Textarea,
+  Upload
+} from '@arco-design/web-vue'
+import '@arco-design/web-vue/es/avatar/style/css.js'
+import '@arco-design/web-vue/es/button/style/css.js'
+import '@arco-design/web-vue/es/dropdown/style/css.js'
+import '@arco-design/web-vue/es/form/style/css.js'
+import '@arco-design/web-vue/es/input/style/css.js'
+import '@arco-design/web-vue/es/link/style/css.js'
+import '@arco-design/web-vue/es/list/style/css.js'
+import '@arco-design/web-vue/es/modal/style/css.js'
+import '@arco-design/web-vue/es/radio/style/css.js'
+import '@arco-design/web-vue/es/result/style/css.js'
+import '@arco-design/web-vue/es/select/style/css.js'
+import '@arco-design/web-vue/es/spin/style/css.js'
+import '@arco-design/web-vue/es/tabs/style/css.js'
+import '@arco-design/web-vue/es/tag/style/css.js'
+import '@arco-design/web-vue/es/textarea/style/css.js'
+import '@arco-design/web-vue/es/upload/style/css.js'
 import router from './router'
 import App from './App.vue'
 
 const app = createApp(App)
-app.use(createPinia()).use(router).use(ArcoVue)
+const arcoComponents: Array<[string, Component]> = [
+  ['AAvatar', Avatar],
+  ['AButton', Button],
+  ['AConfigProvider', ConfigProvider],
+  ['ADoption', Doption],
+  ['ADropdown', Dropdown],
+  ['AForm', Form],
+  ['AFormItem', FormItem],
+  ['AInput', Input],
+  ['AInputPassword', InputPassword],
+  ['ALink', Link],
+  ['AList', List],
+  ['AListItem', ListItem],
+  ['AListItemMeta', ListItemMeta],
+  ['AModal', Modal],
+  ['AOption', Option],
+  ['ARadio', Radio],
+  ['ARadioGroup', RadioGroup],
+  ['AResult', Result],
+  ['ASelect', Select],
+  ['ASpin', Spin],
+  ['ATabPane', TabPane],
+  ['ATabs', Tabs],
+  ['ATag', Tag],
+  ['ATextarea', Textarea],
+  ['AUpload', Upload]
+]
+
+app.use(createPinia()).use(router)
+arcoComponents.forEach(([name, component]) => app.component(name, component))
 app.mount('#app')

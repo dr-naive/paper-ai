@@ -9,6 +9,25 @@ import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn'
 </script>
 
 <style>
+:root {
+  --pa-primary: oklch(0.50 0.16 45);
+  --pa-primary-hover: oklch(0.45 0.18 45);
+  --pa-primary-soft: oklch(0.95 0.035 55);
+  --pa-ink: oklch(0.22 0.025 45);
+  --pa-text: oklch(0.34 0.022 50);
+  --pa-muted: oklch(0.50 0.018 50);
+  --pa-bg: oklch(0.975 0.008 55);
+  --pa-surface: oklch(0.995 0.003 55);
+  --pa-surface-soft: oklch(0.96 0.012 55);
+  --pa-border: oklch(0.88 0.018 55);
+  --pa-info: oklch(0.51 0.12 250);
+  --pa-info-soft: oklch(0.96 0.018 250);
+  --pa-success: oklch(0.52 0.12 145);
+  --pa-danger: oklch(0.52 0.17 28);
+  --pa-toolbar: oklch(0.28 0.018 45);
+  --pa-toolbar-control: oklch(0.36 0.02 45);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #app {
   width: 100%;
@@ -17,22 +36,22 @@ html, body, #app {
 }
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  color: oklch(0.25 0.02 50);
-  background: oklch(0.95 0.01 90);
+  color: var(--pa-ink);
+  background: var(--pa-bg);
 }
 
 /* ===== 全局 Arco 暖色调主题 ===== */
 
 /* 按钮 */
 .arco-btn-primary {
-  background: oklch(0.50 0.16 45) !important;
-  border-color: oklch(0.50 0.16 45) !important;
+  background: var(--pa-primary) !important;
+  border-color: var(--pa-primary) !important;
   color: oklch(0.98 0.01 95) !important;
 }
 
 .arco-btn-primary:hover {
-  background: oklch(0.45 0.18 45) !important;
-  border-color: oklch(0.45 0.18 45) !important;
+  background: var(--pa-primary-hover) !important;
+  border-color: var(--pa-primary-hover) !important;
 }
 
 .arco-btn-secondary {
@@ -52,8 +71,8 @@ body {
 }
 
 .arco-btn-text:hover {
-  color: oklch(0.40 0.10 45) !important;
-  background: oklch(0.50 0.16 45 / 0.1) !important;
+  color: var(--pa-primary-hover) !important;
+  background: var(--pa-primary-soft) !important;
 }
 
 /* 输入框 */
@@ -108,13 +127,6 @@ body {
 
 .arco-list-item-meta-description {
   color: oklch(0.45 0.02 50) !important;
-}
-
-/* 标签 */
-.arco-tag {
-  color: oklch(0.40 0.10 45) !important;
-  background: oklch(0.50 0.16 45 / 0.1) !important;
-  border-color: oklch(0.50 0.16 45 / 0.2) !important;
 }
 
 /* 下拉菜单 */

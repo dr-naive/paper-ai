@@ -11,7 +11,7 @@ from app.database import AsyncSessionLocal, get_db
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
 from app.models.paper import Paper, Section
 from app.api.auth import decode_token
-from app.api.papers import get_current_user_id
+from app.api.dependencies import get_current_user_id
 from app.agent.qa_agent.enhanced_graph import (
     detect_metadata_intent,
     generate_follow_up_questions,
@@ -218,6 +218,7 @@ async def get_session_messages(
                 "citations": m.citations,
                 "follow_up_questions": m.follow_up_questions,
                 "confidence": m.confidence,
+                "confidence_type": "legacy_mixed",
                 "created_at": m.created_at.isoformat() if m.created_at else None
             }
             for m in messages
@@ -313,7 +314,7 @@ async def ask_in_session(
         answer=qa_result.get('answer'),
         citations=qa_result.get('citations', []),
         follow_up_questions=[],
-        confidence=qa_result.get('confidence')
+        confidence=qa_result.get('evidence_confidence')
     )
     db.add(message)
     if order_index == 0:
@@ -335,7 +336,10 @@ async def ask_in_session(
         "follow_up_questions": [],
         "follow_up_pending": True,
         "title_pending": False,
-        "confidence": qa_result.get("confidence", 0.0),
+        "intent_confidence": qa_result.get("intent_confidence", 0.0),
+        "evidence_confidence": qa_result.get("evidence_confidence", 0.0),
+        "confidence": qa_result.get("evidence_confidence", 0.0),
+        "confidence_type": "evidence_support",
         "message_id": message_id
     }
 

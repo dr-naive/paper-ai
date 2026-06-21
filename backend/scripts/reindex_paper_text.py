@@ -12,7 +12,8 @@ from sqlalchemy import select
 import app.main  # noqa: F401 - register all SQLAlchemy models
 from app.agent.paper_parser.graph import _parse_sections_by_rules
 from app.api.papers import (
-    _build_text_chunks,
+    _build_complete_text_chunks,
+    _extract_pdf_page_contents,
     _extract_pdf_page_texts,
     _find_content_page,
 )
@@ -75,7 +76,12 @@ async def repair_paper(paper_id: str) -> None:
             await db.delete(obsolete)
         await db.commit()
 
-    chunks = _build_text_chunks(parsed_sections, SmartChunker(), page_texts)
+    chunks = _build_complete_text_chunks(
+        parsed_sections,
+        SmartChunker(),
+        page_texts,
+        _extract_pdf_page_contents(paper.pdf_path),
+    )
     kb = get_knowledge_base()
     current = kb.vectorstore._collection.get(where={"paper_id": paper_id})
     old_text_ids = [

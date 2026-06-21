@@ -29,7 +29,8 @@ class QAAgentState(TypedDict):
     citations: List[Dict[str, Any]]  # 引用溯源：[{section, text, position}]
     follow_up_questions: List[str]  # 智能追问
     generate_follow_up: bool  # 是否同步生成智能追问
-    confidence: float
+    intent_confidence: float  # 仅表示意图分类是否明确
+    evidence_confidence: float  # 回答被检索证据直接支持的程度，不是答案准确率
     error: Optional[str]
 
 

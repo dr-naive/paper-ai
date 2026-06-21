@@ -5,7 +5,11 @@ from app.rag.table_retrieval import (
     merge_retrieval_chunks,
     table_to_chunk,
 )
-from app.agent.qa_agent.enhanced_graph import _enrich_citations, detect_metadata_intent
+from app.agent.qa_agent.enhanced_graph import (
+    _enrich_citations,
+    calculate_evidence_confidence,
+    detect_metadata_intent,
+)
 
 
 def test_extract_table_numbers_supports_common_references():
@@ -70,3 +74,12 @@ def test_citation_enrichment_adds_table_page_and_exact_search_text():
     assert enriched[0]["position"] == "PDF 第7页"
     assert enriched[0]["table_number"] == 1
     assert "FakeShield" in enriched[0]["search_text"]
+
+
+def test_evidence_confidence_is_not_intent_confidence():
+    chunks = [{"content": "实验结果显示 FakeShield 的准确率为百分之九十五。"}]
+    grounded = [{"source_id": "S1", "text": "FakeShield 的准确率为百分之九十五"}]
+
+    assert calculate_evidence_confidence("答案", grounded, chunks) == 0.85
+    assert calculate_evidence_confidence("答案", [], chunks) == 0.0
+    assert calculate_evidence_confidence("作者是张三", [{"section": "论文元数据"}], [], "metadata") == 0.95

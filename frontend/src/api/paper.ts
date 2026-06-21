@@ -20,9 +20,6 @@ export const getPaper = (paperId: string) => request.get(`/api/v1/papers/${paper
 
 export const getPaperSections = (paperId: string) => request.get(`/api/v1/papers/${paperId}/sections`)
 
-export const askPaperQuestion = (paperId: string, question: string) =>
-  request.post(`/api/v1/papers/${paperId}/qa`, { question })
-
 export const deletePaper = (paperId: string) => request.delete(`/api/v1/papers/${paperId}`)
 
 export const getTaskStatus = (taskId: string) => {

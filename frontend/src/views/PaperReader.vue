@@ -1,27 +1,42 @@
 <template>
   <div class="paper-reader">
     <!-- 顶部工具栏 -->
-    <div class="top-bar">
-      <a-button @click="goBack" size="small">
-        <template #icon><icon-arrow-left /></template>
-        返回
-      </a-button>
+    <ProductHeader>
+      <template #navigation>
+        <a-button @click="goBack" size="small" type="text">
+          <template #icon><icon-arrow-left /></template>
+          我的论文
+        </a-button>
+      </template>
       <div class="paper-title-bar">
         <h2 class="paper-title">{{ paper?.title || '加载中...' }}</h2>
         <span class="paper-authors">{{ paper?.authors }}</span>
       </div>
-      <div class="top-actions">
-        <a-button size="small" @click="toggleSidebar">
-          <template #icon><icon-menu /></template>
-          AI 助手
-        </a-button>
-      </div>
-    </div>
+      <template #actions>
+        <div class="top-actions">
+          <span class="layout-label">工作区</span>
+          <div class="layout-switcher" role="group" aria-label="工作区布局">
+            <button
+              v-for="option in layoutOptions"
+              :key="option.value"
+              type="button"
+              class="layout-option"
+              :class="{ active: layoutMode === option.value }"
+              :aria-pressed="layoutMode === option.value"
+              :title="option.description"
+              @click="applyLayoutPreset(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+      </template>
+    </ProductHeader>
 
     <!-- 主内容区 -->
     <div class="main-content">
       <!-- 左侧 PDF 查看器 -->
-      <div class="pdf-viewer" :style="{ flex: sidebarWidth > 0 ? `0 0 calc(100% - ${sidebarWidth}px)` : '1' }">
+      <div class="pdf-viewer">
         <PdfViewer
           v-if="pdfUrl"
           ref="pdfViewerRef"
@@ -86,6 +101,11 @@
               </div>
               <!-- 问答历史 -->
               <div class="qa-history">
+                <div v-if="!qaHistory.length && !qaLoading" class="qa-empty">
+                  <div class="qa-empty-mark">AI</div>
+                  <strong>从论文内容开始提问</strong>
+                  <p>回答会附带引用，点击引用可回到 PDF 核对原文。</p>
+                </div>
                 <div v-for="qa in qaHistory" :key="qa.id" class="qa-item">
                   <div class="qa-question">
                     <span class="qa-label">问</span>
@@ -102,23 +122,38 @@
                           <span class="citation-hint">点击引用可定位到原文</span>
                         </div>
                         <div
-                          v-for="(cite, ci) in qa.citations"
+                          v-for="(cite, ci) in visibleCitations(qa)"
                           :key="ci"
                           class="citation-item"
-                          @click="locateInPdf(cite)"
+                          :class="{ active: activeCitationKey === citationKey(qa.id, ci) }"
+                          @click="locateInPdf(cite, citationKey(qa.id, ci))"
                         >
                           <div class="citation-header">
                             <a-tag size="small" color="arcoblue">{{ cite.section }}</a-tag>
                             <span v-if="cite.position" class="citation-position">{{ cite.position }}</span>
+                            <span
+                              v-if="activeCitationKey === citationKey(qa.id, ci) && activeCitationPage"
+                              class="citation-located"
+                            >
+                              已定位第 {{ activeCitationPage }} 页
+                            </span>
                           </div>
                           <p class="citation-text">{{ cite.text }}</p>
                         </div>
+                        <button
+                          v-if="qa.citations.length > 2"
+                          type="button"
+                          class="citation-toggle"
+                          @click="toggleCitationGroup(qa.id)"
+                        >
+                          {{ isCitationGroupExpanded(qa.id) ? '收起引用' : `查看全部 ${qa.citations.length} 条引用` }}
+                        </button>
                       </div>
                       <!-- 智能追问 -->
                       <div v-if="qa.follow_up_questions && qa.follow_up_questions.length" class="qa-followup">
                         <div class="followup-title">智能追问</div>
                         <a-tag
-                          v-for="(fq, fi) in qa.follow_up_questions"
+                          v-for="(fq, fi) in qa.follow_up_questions.slice(0, 3)"
                           :key="fi"
                           clickable
                           size="small"
@@ -134,35 +169,46 @@
                   <a-spin :size="12" /> 思考中...
                 </div>
               </div>
-              <!-- 快捷问题 -->
-              <div class="quick-questions">
-                <a-tag
-                  v-for="q in quickQuestions"
-                  :key="q"
-                  clickable
-                  size="small"
-                  @click="askQuestion(q)"
-                >
-                  {{ q }}
-                </a-tag>
-              </div>
-              <!-- 输入区 -->
-              <div class="qa-input">
-                <a-textarea
-                  v-model="question"
-                  placeholder="向这篇论文提问..."
-                  :auto-size="{ minRows: 2, maxRows: 4 }"
-                  @keydown.enter.ctrl="handleAsk"
-                />
-                <a-button
-                  type="primary"
-                  size="small"
-                  :loading="qaLoading"
-                  @click="handleAsk"
-                  style="margin-top: 8px; width: 100%"
-                >
-                  提问
-                </a-button>
+              <div class="qa-composer">
+                <!-- 快捷问题 -->
+                <div class="quick-question-header">
+                  <span>你可以这样问</span>
+                  <button type="button" @click="showAllQuickQuestions = !showAllQuickQuestions">
+                    {{ showAllQuickQuestions ? '收起' : '更多' }}
+                  </button>
+                </div>
+                <div class="quick-questions">
+                  <a-tag
+                    v-for="q in visibleQuickQuestions"
+                    :key="q"
+                    clickable
+                    size="small"
+                    @click="question = q"
+                  >
+                    {{ q }}
+                  </a-tag>
+                </div>
+                <!-- 输入区 -->
+                <div class="qa-input">
+                  <a-textarea
+                    v-model="question"
+                    placeholder="向这篇论文提问..."
+                    :auto-size="{ minRows: 2, maxRows: 4 }"
+                    @keydown.enter.ctrl="handleAsk"
+                  />
+                  <div class="qa-input-actions">
+                    <span>Ctrl + Enter 提问</span>
+                    <a-button
+                      type="primary"
+                      size="small"
+                      :loading="qaLoading"
+                      :disabled="!question.trim()"
+                      @click="handleAsk"
+                    >
+                      提问
+                    </a-button>
+                  </div>
+                </div>
               </div>
             </div>
           </a-tab-pane>
@@ -409,11 +455,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
-import { IconArrowLeft, IconMenu, IconRefresh, IconDelete } from '@arco-design/web-vue/es/icon'
-import PdfViewer from '@/components/PdfViewer.vue'
+import { IconArrowLeft, IconRefresh, IconDelete } from '@arco-design/web-vue/es/icon'
+import type PdfViewerComponent from '@/components/PdfViewer.vue'
+import ProductHeader from '@/components/ProductHeader.vue'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   getPaper, getPaperSections,
@@ -424,13 +471,21 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
 const paperId = route.params.id as string
 const paper = ref<any>(null)
 const pdfUrl = ref('')
 const pdfError = ref(false)
-const pdfViewerRef = ref<InstanceType<typeof PdfViewer> | null>(null)
+const pdfViewerRef = ref<InstanceType<typeof PdfViewerComponent> | null>(null)
 const showSidebar = ref(true)
 const sidebarWidth = ref(420)
+type LayoutMode = 'read' | 'compare' | 'ai'
+const layoutMode = ref<LayoutMode>('compare')
+const layoutOptions: Array<{ value: LayoutMode; label: string; description: string }> = [
+  { value: 'read', label: '阅读', description: '隐藏 AI 助手，专注阅读论文' },
+  { value: 'compare', label: '对照', description: '并排查看论文与 AI 回答' },
+  { value: 'ai', label: 'AI', description: '扩大 AI 助手区域' }
+]
 const sections = ref<any[]>([])
 const paperTables = ref<any[]>([])
 
@@ -449,6 +504,10 @@ const qaHistory = ref<any[]>([])
 const qaLoading = ref(false)
 const currentSessionId = ref<string>('')
 const sessions = ref<any[]>([])
+const showAllQuickQuestions = ref(false)
+const expandedCitationGroups = ref<Set<string>>(new Set())
+const activeCitationKey = ref('')
+const activeCitationPage = ref<number | null>(null)
 const quickQuestions = [
   '这篇论文的主要贡献是什么？',
   '论文使用的主要方法是什么？',
@@ -456,6 +515,47 @@ const quickQuestions = [
   '论文的创新性有哪些？',
   '这篇论文的局限性是什么？'
 ]
+const visibleQuickQuestions = computed(() => (
+  showAllQuickQuestions.value ? quickQuestions : quickQuestions.slice(0, 3)
+))
+
+const clampSidebarWidth = (width: number) => {
+  const viewportLimit = Math.max(360, window.innerWidth - 420)
+  return Math.round(Math.min(1120, viewportLimit, Math.max(360, width)))
+}
+
+const applyLayoutPreset = (mode: LayoutMode) => {
+  layoutMode.value = mode
+  if (mode === 'read') {
+    showSidebar.value = false
+    void nextTick(() => pdfViewerRef.value?.fitWidth())
+    return
+  }
+
+  showSidebar.value = true
+  const ratio = mode === 'compare' ? 0.38 : 0.56
+  sidebarWidth.value = clampSidebarWidth(window.innerWidth * ratio)
+  void nextTick(() => pdfViewerRef.value?.fitWidth())
+}
+
+const citationKey = (qaId: string | number, index: number) => `${qaId}:${index}`
+
+const isCitationGroupExpanded = (qaId: string | number) => expandedCitationGroups.value.has(String(qaId))
+
+const visibleCitations = (qa: any) => (
+  isCitationGroupExpanded(qa.id) ? qa.citations : qa.citations.slice(0, 2)
+)
+
+const toggleCitationGroup = (qaId: string | number) => {
+  const next = new Set(expandedCitationGroups.value)
+  const key = String(qaId)
+  next.has(key) ? next.delete(key) : next.add(key)
+  expandedCitationGroups.value = next
+}
+
+const handleWindowResize = () => {
+  if (showSidebar.value) sidebarWidth.value = clampSidebarWidth(sidebarWidth.value)
+}
 
 // 加载会话列表
 const loadSessions = async () => {
@@ -558,10 +658,6 @@ const handleDeleteSession = async (sessionId: string) => {
   })
 }
 
-const toggleSidebar = () => {
-  showSidebar.value = !showSidebar.value
-}
-
 // 侧边栏拖拽调节
 const startResize = (e: MouseEvent) => {
   e.preventDefault()
@@ -570,11 +666,11 @@ const startResize = (e: MouseEvent) => {
   
   const onMouseMove = (e: MouseEvent) => {
     const delta = startX - e.clientX
-    const newWidth = Math.min(800, Math.max(300, startWidth + delta))
-    sidebarWidth.value = newWidth
+    sidebarWidth.value = clampSidebarWidth(startWidth + delta)
   }
   
   const onMouseUp = () => {
+    layoutMode.value = sidebarWidth.value / window.innerWidth >= 0.48 ? 'ai' : 'compare'
     document.removeEventListener('mousemove', onMouseMove)
     document.removeEventListener('mouseup', onMouseUp)
   }
@@ -639,10 +735,10 @@ const findCitationPage = (cite: any): number | null => {
 }
 
 // 定位引用到 PDF 原文
-const locateInPdf = async (cite: any) => {
-  console.log('locateInPdf called with:', cite)
-  console.log('Current sections:', sections.value)
-  
+const locateInPdf = async (cite: any, key: string) => {
+  activeCitationKey.value = key
+  activeCitationPage.value = null
+
   if (!cite?.section) {
     Message.warning('引用信息不完整')
     return
@@ -672,11 +768,8 @@ const locateInPdf = async (cite: any) => {
   // 如果还是没找到，使用第一个章节（通常是"全文"）
   if (!targetSection && sections.value.length > 0) {
     targetSection = sections.value[0]
-    console.log('未找到匹配章节，使用默认章节:', targetSection.section_title)
   }
-  
-  console.log('Found section:', targetSection)
-  
+
   if (!pdfViewerRef.value) {
     Message.warning('PDF 阅读器尚未加载完成')
     return
@@ -686,6 +779,8 @@ const locateInPdf = async (cite: any) => {
   if (citationPage) {
     Message.info(`正在定位到第 ${citationPage} 页...`)
     await pdfViewerRef.value.scrollToPage(citationPage)
+    pdfViewerRef.value.highlightPage(citationPage)
+    activeCitationPage.value = citationPage
     Message.success(`已定位到第 ${citationPage} 页`)
     return
   }
@@ -698,6 +793,8 @@ const locateInPdf = async (cite: any) => {
     Message.info(`正在定位：${searchCandidates[0].substring(0, 30)}...`)
     const foundPage = await pdfViewerRef.value.searchText(searchCandidates)
     if (foundPage) {
+      pdfViewerRef.value.highlightPage(foundPage)
+      activeCitationPage.value = foundPage
       Message.success(`已定位到第 ${foundPage} 页`)
     } else {
       Message.warning('未在 PDF 中找到匹配的原文内容')
@@ -805,11 +902,17 @@ const loadInterpretCache = async () => {
 }
 
 onMounted(() => {
+  applyLayoutPreset('compare')
+  window.addEventListener('resize', handleWindowResize)
   loadPaper()
   loadSections()
   loadSessions()
   loadSummaryCache()
   loadInterpretCache()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleWindowResize)
 })
 
 // 监听解读类型变化，加载对应缓存
@@ -824,18 +927,7 @@ watch(interpretType, () => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f5f7fa;
-}
-
-/* 顶部工具栏 */
-.top-bar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 8px 16px;
-  background: #fff;
-  border-bottom: 1px solid #e5e6eb;
-  min-height: 48px;
+  background: var(--pa-bg);
 }
 
 .paper-title-bar {
@@ -847,7 +939,7 @@ watch(interpretType, () => {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--pa-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -855,12 +947,52 @@ watch(interpretType, () => {
 
 .paper-authors {
   font-size: 12px;
-  color: #86909c;
+  color: var(--pa-muted);
 }
 
 .top-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.layout-label {
+  font-size: 12px;
+  color: var(--pa-muted);
+}
+
+.layout-switcher {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--pa-border);
+  border-radius: 7px;
+  background: var(--pa-bg);
+}
+
+.layout-option {
+  min-width: 48px;
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pa-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.layout-option:hover { color: var(--pa-primary); }
+
+.layout-option.active {
+  background: var(--pa-surface);
+  color: var(--pa-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(29, 33, 41, 0.12);
+}
+
+.layout-option:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
 }
 
 /* 主内容区 */
@@ -874,7 +1006,7 @@ watch(interpretType, () => {
 .pdf-viewer {
   flex: 1;
   min-width: 0;
-  background: #525659;
+  background: oklch(0.36 0.012 45);
   overflow: hidden;
 }
 
@@ -884,7 +1016,7 @@ watch(interpretType, () => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #1d2129;
+  color: var(--pa-ink);
   gap: 16px;
 }
 
@@ -898,34 +1030,45 @@ watch(interpretType, () => {
 
 /* 拖拽调节条 */
 .sidebar-resizer {
-  width: 4px;
+  position: relative;
+  width: 12px;
   cursor: col-resize;
-  background: #e5e6eb;
-  transition: background 0.2s;
+  background: var(--pa-surface-soft);
   flex-shrink: 0;
 }
 
-.sidebar-resizer:hover {
-  background: #6366f1;
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  background: var(--pa-border);
+  transition: background 0.2s ease;
 }
+
+.sidebar-resizer:hover::after { background: var(--pa-primary); }
 
 .resizer-handle {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 2px;
-  height: 32px;
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 1px;
+  width: 6px;
+  height: 36px;
+  border: 1px solid var(--pa-border);
+  border-radius: 6px;
+  background: var(--pa-surface);
+  z-index: 1;
 }
 
 /* AI 侧边栏 */
 .ai-sidebar {
   width: 380px;
   min-width: 380px;
-  background: #fff;
-  border-left: 1px solid #e5e6eb;
+  background: var(--pa-surface);
+  border-left: 1px solid var(--pa-border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -959,7 +1102,7 @@ watch(interpretType, () => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 12px;
+  padding: 0;
 }
 
 /* 会话管理栏 */
@@ -967,9 +1110,9 @@ watch(interpretType, () => {
   display: flex;
   gap: 6px;
   align-items: center;
-  margin-bottom: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #e5e6eb;
+  padding: 10px 12px;
+  margin: 0;
+  border-bottom: 1px solid var(--pa-border);
 }
 
 .session-bar :deep(.arco-select) {
@@ -983,7 +1126,7 @@ watch(interpretType, () => {
   justify-content: space-between;
   margin-bottom: 12px;
   padding: 8px 12px;
-  background: #f5f7fa;
+  background: var(--pa-bg);
   border-radius: 6px;
 }
 
@@ -997,12 +1140,39 @@ watch(interpretType, () => {
 .qa-history {
   flex: 1;
   overflow-y: auto;
-  margin-bottom: 12px;
+  padding: 14px 16px 20px;
 }
 
 .qa-item {
-  margin-bottom: 16px;
+  margin-bottom: 24px;
 }
+
+.qa-empty {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--pa-text);
+}
+
+.qa-empty-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 12px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--pa-primary-soft);
+  color: var(--pa-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.qa-empty strong { color: var(--pa-ink); font-size: 14px; }
+.qa-empty p { max-width: 30em; margin: 6px 0 0; font-size: 12px; line-height: 1.6; }
 
 .qa-question,
 .qa-answer {
@@ -1020,9 +1190,10 @@ watch(interpretType, () => {
 
 .markdown-answer {
   margin-bottom: 8px;
-  color: #1d2129;
+  color: var(--pa-ink);
   overflow-x: auto;
   overflow-wrap: anywhere;
+  line-height: 1.72;
 }
 
 .markdown-answer :deep(p) {
@@ -1065,24 +1236,24 @@ watch(interpretType, () => {
 .markdown-answer :deep(th),
 .markdown-answer :deep(td) {
   padding: 7px 10px;
-  border: 1px solid #d9dde5;
+  border: 1px solid var(--pa-border);
   text-align: left;
   white-space: nowrap;
 }
 
 .markdown-answer :deep(th) {
-  background: #f2f3f5;
+  background: var(--pa-surface-soft);
   font-weight: 600;
 }
 
 .markdown-answer :deep(tr:nth-child(even) td) {
-  background: #fafbfc;
+  background: var(--pa-bg);
 }
 
 .markdown-answer :deep(code) {
   padding: 1px 5px;
   border-radius: 4px;
-  background: #f2f3f5;
+  background: var(--pa-surface-soft);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 0.92em;
 }
@@ -1101,41 +1272,108 @@ watch(interpretType, () => {
 }
 
 .qa-question .qa-label {
-  background: #6366f1;
+  background: var(--pa-info);
 }
 
 .qa-answer .qa-label {
-  background: #10b981;
+  background: var(--pa-success);
 }
 
 .qa-loading {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #86909c;
+  color: var(--pa-muted);
   font-size: 13px;
   padding: 12px;
+}
+
+.qa-composer {
+  flex-shrink: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--pa-border);
+  background: var(--pa-surface);
+  box-shadow: 0 -6px 18px rgba(29, 33, 41, 0.04);
+}
+
+.quick-question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--pa-muted);
+}
+
+.quick-question-header button,
+.citation-toggle {
+  border: 0;
+  padding: 2px 4px;
+  background: transparent;
+  color: var(--pa-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.quick-question-header button:focus-visible,
+.citation-toggle:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
 }
 
 .quick-questions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.quick-questions :deep(.arco-tag),
+.qa-followup :deep(.arco-tag) {
+  border-color: oklch(0.82 0.07 55);
+  background: var(--pa-primary-soft);
+  color: var(--pa-primary-hover);
 }
 
 .qa-input {
-  border-top: 1px solid #e5e6eb;
-  padding-top: 12px;
+  padding: 8px;
+  border: 1px solid var(--pa-border);
+  border-radius: 8px;
+  background: var(--pa-surface);
+}
+
+.qa-input:focus-within {
+  border-color: var(--pa-primary);
+  box-shadow: 0 0 0 2px oklch(0.50 0.16 45 / 0.1);
+}
+
+.qa-input :deep(.arco-textarea) {
+  padding: 2px 4px;
+  border: 0;
+  box-shadow: none;
+  resize: none;
+}
+
+.qa-input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.qa-input-actions > span {
+  font-size: 11px;
+  color: var(--pa-muted);
 }
 
 /* 引用溯源 */
 .qa-citations {
   margin-top: 10px;
   padding: 10px;
-  background: rgba(99, 102, 241, 0.06);
+  background: var(--pa-info-soft);
   border-radius: 8px;
-  border: 1px solid rgba(99, 102, 241, 0.22);
+  border: 1px solid oklch(0.82 0.05 250);
 }
 
 .citation-title {
@@ -1144,29 +1382,35 @@ watch(interpretType, () => {
   justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
-  color: #6366f1;
+  color: var(--pa-info);
   margin-bottom: 8px;
 }
 
 .citation-hint {
   font-size: 11px;
   font-weight: 400;
-  color: #86909c;
+  color: var(--pa-muted);
 }
 
 .citation-item {
-  background: #fff;
+  background: var(--pa-surface);
   border-radius: 6px;
   padding: 10px 12px;
   margin-bottom: 8px;
   cursor: pointer;
-  transition: all 0.2s;
-  border: 1px solid #e5e6eb;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  border: 1px solid var(--pa-border);
 }
 
 .citation-item:hover {
-  border-color: #6366f1;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+  border-color: var(--pa-info);
+  box-shadow: 0 2px 8px oklch(0.51 0.12 250 / 0.15);
+}
+
+.citation-item.active {
+  border-color: var(--pa-info);
+  background: var(--pa-info-soft);
+  box-shadow: 0 0 0 2px oklch(0.51 0.12 250 / 0.1);
 }
 
 .citation-item:last-child {
@@ -1182,34 +1426,58 @@ watch(interpretType, () => {
 
 .citation-position {
   font-size: 11px;
-  color: #86909c;
+  color: var(--pa-muted);
+}
+
+.citation-located {
+  margin-left: auto;
+  color: var(--pa-info);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .citation-text {
   margin: 0;
   font-size: 13px;
   line-height: 1.7;
-  color: #1d2129;
+  color: var(--pa-ink);
   word-break: break-word;
+}
+
+.citation-toggle {
+  display: block;
+  margin: 2px auto 0;
+  font-size: 12px;
 }
 
 /* 智能追问 */
 .qa-followup {
   margin-top: 8px;
   padding: 8px;
-  background: rgba(99, 102, 241, 0.06);
+  background: var(--pa-info-soft);
   border-radius: 6px;
 }
 
 .followup-title {
   font-size: 11px;
   font-weight: 600;
-  color: #6366f1;
+  color: var(--pa-info);
   margin-bottom: 6px;
 }
 
 .qa-followup .arco-tag {
   margin: 2px;
+}
+
+@media (max-width: 900px) {
+  .layout-label { display: none; }
+  .layout-option { min-width: 42px; padding-inline: 8px; }
+  .paper-authors { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-resizer::after,
+  .citation-item { transition: none; }
 }
 
 /* 摘要面板 */
@@ -1230,7 +1498,7 @@ watch(interpretType, () => {
 
 .summary-hint {
   font-size: 12px;
-  color: #86909c;
+  color: var(--pa-muted);
   margin: 0;
 }
 
@@ -1241,7 +1509,7 @@ watch(interpretType, () => {
 }
 
 .summary-section {
-  background: #f5f7fa;
+  background: var(--pa-bg);
   border-radius: 8px;
   padding: 12px;
 }
@@ -1250,7 +1518,7 @@ watch(interpretType, () => {
   margin: 0 0 12px 0;
   font-size: 14px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--pa-ink);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1259,7 +1527,7 @@ watch(interpretType, () => {
 .section-icon {
   width: 4px;
   height: 14px;
-  background: #6366f1;
+  background: var(--pa-info);
   border-radius: 2px;
 }
 
@@ -1278,14 +1546,14 @@ watch(interpretType, () => {
 .info-label {
   font-size: 12px;
   font-weight: 500;
-  color: #86909c;
+  color: var(--pa-muted);
 }
 
 .info-item p {
   margin: 0;
   font-size: 13px;
   line-height: 1.6;
-  color: #1d2129;
+  color: var(--pa-ink);
 }
 
 .tag-list {
@@ -1295,7 +1563,7 @@ watch(interpretType, () => {
 }
 
 .highlight {
-  color: #10b981;
+  color: var(--pa-success);
   font-weight: 500;
 }
 
@@ -1304,7 +1572,7 @@ watch(interpretType, () => {
   padding-left: 16px;
   font-size: 13px;
   line-height: 1.6;
-  color: #1d2129;
+  color: var(--pa-ink);
 }
 
 .bullet-list.warning {
@@ -1333,7 +1601,7 @@ watch(interpretType, () => {
 }
 
 .concept-item {
-  background: #f5f7fa;
+  background: var(--pa-bg);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 8px;
@@ -1343,25 +1611,25 @@ watch(interpretType, () => {
   margin: 0 0 6px 0;
   font-size: 14px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--pa-ink);
 }
 
 .concept-explanation {
   margin: 0 0 6px 0;
   font-size: 13px;
   line-height: 1.6;
-  color: #1d2129;
+  color: var(--pa-ink);
 }
 
 .concept-context {
   margin: 0;
   font-size: 12px;
-  color: #86909c;
+  color: var(--pa-muted);
   font-style: italic;
 }
 
 .compare-item {
-  background: #f5f7fa;
+  background: var(--pa-bg);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 8px;
@@ -1377,7 +1645,7 @@ watch(interpretType, () => {
 .vs {
   font-size: 12px;
   font-weight: 600;
-  color: #86909c;
+  color: var(--pa-muted);
 }
 
 .compare-diff,
@@ -1385,7 +1653,7 @@ watch(interpretType, () => {
   margin: 0 0 4px 0;
   font-size: 13px;
   line-height: 1.6;
-  color: #1d2129;
+  color: var(--pa-ink);
 }
 
 .info-section {
@@ -1396,6 +1664,6 @@ watch(interpretType, () => {
   margin: 0 0 8px 0;
   font-size: 13px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--pa-ink);
 }
 </style>

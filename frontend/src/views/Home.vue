@@ -16,11 +16,7 @@
 
     <header class="top-nav" :class="{ scrolled: isScrolled }">
       <div class="nav-brand">
-        <svg class="brand-icon" viewBox="0 0 32 32" width="28" height="28">
-          <rect x="2" y="2" width="28" height="28" rx="8" fill="oklch(0.50 0.16 45)"/>
-          <path d="M10 10h12M10 16h8M10 22h10" stroke="white" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-        <span>PaperAI</span>
+        <BrandMark :size="28" />
       </div>
       <div class="nav-right">
         <div v-if="isLoggedIn" class="user-info" @click="showDropdown = !showDropdown">
@@ -106,47 +102,51 @@
             :class="{ active: currentBgIndex === i }"
             :aria-label="`切换到背景图 ${i + 1}`"
             :aria-pressed="currentBgIndex === i"
-            @click="currentBgIndex = i"
+            @click="selectBackground(i)"
           ></button>
         </div>
       </div>
     </section>
 
     <section class="features-section" ref="featuresSectionRef">
-      <div class="section-header">
-        <h2>核心功能</h2>
-        <p>从上传到理解，全流程 AI 辅助</p>
-      </div>
-      <div class="features-grid">
-        <div class="feature-card" v-for="(f, i) in features" :key="i">
-          <div class="feature-icon-wrap" :style="{ background: f.color }">
-            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" v-html="f.icon"></svg>
-          </div>
-          <h3>{{ f.title }}</h3>
-          <p>{{ f.desc }}</p>
-          <div class="feature-tags">
-            <span v-for="tag in f.tags" :key="tag">{{ tag }}</span>
+      <div class="section-shell">
+        <div class="section-header">
+          <h2>核心功能</h2>
+          <p>从上传到理解，全流程 AI 辅助</p>
+        </div>
+        <div class="features-grid">
+          <div class="feature-card" v-for="(f, i) in features" :key="i">
+            <div class="feature-icon-wrap" :style="{ background: f.color }">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" v-html="f.icon"></svg>
+            </div>
+            <h3>{{ f.title }}</h3>
+            <p>{{ f.desc }}</p>
+            <div class="feature-tags">
+              <span v-for="tag in f.tags" :key="tag">{{ tag }}</span>
+            </div>
           </div>
         </div>
       </div>
     </section>
 
     <section class="workflow-section">
-      <div class="section-header">
-        <h2>三步开始</h2>
-        <p>简单几步，让 AI 成为你的研究助手</p>
-      </div>
-      <div class="workflow-steps">
-        <div class="workflow-step" v-for="(step, i) in workflowSteps" :key="i">
-          <div class="step-number">{{ String(i + 1).padStart(2, '0') }}</div>
-          <div class="step-content">
-            <h3>{{ step.title }}</h3>
-            <p>{{ step.desc }}</p>
-          </div>
-          <div class="step-connector" v-if="i < workflowSteps.length - 1">
-            <svg viewBox="0 0 40 40" width="40" height="40" fill="none" stroke="oklch(0.55 0.14 45)" stroke-width="2">
-              <path d="M10 20h20M24 14l6 6-6 6"/>
-            </svg>
+      <div class="section-shell workflow-shell">
+        <div class="section-header workflow-header">
+          <h2>三步开始</h2>
+          <p>从上传论文到追问原文，一次完成。</p>
+        </div>
+        <div class="workflow-steps">
+          <div class="workflow-step" v-for="(step, i) in workflowSteps" :key="i">
+            <div class="step-number">{{ String(i + 1).padStart(2, '0') }}</div>
+            <div class="step-content">
+              <h3>{{ step.title }}</h3>
+              <p>{{ step.desc }}</p>
+            </div>
+            <div class="step-connector" v-if="i < workflowSteps.length - 1">
+              <svg viewBox="0 0 40 40" width="40" height="40" fill="none" stroke="oklch(0.55 0.14 45)" stroke-width="2">
+                <path d="M10 20h20M24 14l6 6-6 6"/>
+              </svg>
+            </div>
           </div>
         </div>
       </div>
@@ -172,6 +172,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { IconDown, IconFile, IconExport } from '@arco-design/web-vue/es/icon'
+import BrandMark from '@/components/BrandMark.vue'
 
 const currentUser = ref<any>(null)
 const showDropdown = ref(false)
@@ -179,7 +180,7 @@ const isScrolled = ref(false)
 const featuresSectionRef = ref<HTMLElement | null>(null)
 const currentBgIndex = ref(0)
 
-const backgrounds = ['lib1.jpg', 'read2.jpg']
+const backgrounds = ['lib1.jpg', 'read2.jpg?v=20260621', 'research-reading.jpg']
 
 const isLoggedIn = computed(() => !!currentUser.value)
 const userInitial = computed(() => {
@@ -224,7 +225,19 @@ const workflowSteps = [
   { title: '交互探索', desc: '随时提问，AI 精准回答并引用原文' }
 ]
 
-let bgInterval: ReturnType<typeof setInterval>
+let bgInterval: ReturnType<typeof setInterval> | undefined
+
+const startBackgroundRotation = () => {
+  clearInterval(bgInterval)
+  bgInterval = setInterval(() => {
+    currentBgIndex.value = (currentBgIndex.value + 1) % backgrounds.length
+  }, 8000)
+}
+
+const selectBackground = (index: number) => {
+  currentBgIndex.value = index
+  startBackgroundRotation()
+}
 
 onMounted(() => {
   const userStr = localStorage.getItem('user')
@@ -237,10 +250,7 @@ onMounted(() => {
   }
   window.addEventListener('scroll', handleScroll)
 
-  // 图片轮播
-  bgInterval = setInterval(() => {
-    currentBgIndex.value = (currentBgIndex.value + 1) % backgrounds.length
-  }, 8000)
+  startBackgroundRotation()
 })
 
 onUnmounted(() => {
@@ -606,13 +616,19 @@ const handleLogout = () => {
 
 .features-section {
   width: 100%;
-  padding: clamp(72px, 9vw, 112px) clamp(24px, 7vw, 120px);
+  padding: clamp(64px, 7vw, 88px) clamp(24px, 7vw, 120px) clamp(52px, 6vw, 72px);
   background: oklch(0.985 0.006 255);
+  scroll-margin-top: 72px;
+}
+
+.section-shell {
+  width: min(100%, 1120px);
+  margin: 0 auto;
 }
 
 .section-header {
   text-align: center;
-  margin-bottom: 64px;
+  margin-bottom: clamp(36px, 4vw, 48px);
 }
 
 .section-header h2 {
@@ -632,8 +648,6 @@ const handleLogout = () => {
 .features-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-width: 1120px;
-  margin: 0 auto;
   border-top: 1px solid oklch(0.84 0.012 255);
 }
 
@@ -698,8 +712,31 @@ const handleLogout = () => {
 
 .workflow-section {
   width: 100%;
-  padding: clamp(72px, 9vw, 112px) clamp(24px, 7vw, 120px);
-  background: oklch(0.94 0.025 68);
+  padding: 0 clamp(24px, 7vw, 120px) clamp(68px, 8vw, 96px);
+  background: oklch(0.985 0.006 255);
+}
+
+.workflow-shell {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.72fr) minmax(0, 2.28fr);
+  gap: clamp(40px, 5vw, 72px);
+  align-items: start;
+  padding-top: clamp(48px, 5vw, 64px);
+  border-top: 1px solid oklch(0.84 0.012 255);
+}
+
+.workflow-header {
+  text-align: left;
+  margin-bottom: 0;
+}
+
+.workflow-header h2 {
+  font-size: 32px;
+}
+
+.workflow-header p {
+  max-width: 18em;
+  line-height: 1.7;
 }
 
 .workflow-steps {
@@ -707,19 +744,17 @@ const handleLogout = () => {
   align-items: center;
   justify-content: center;
   gap: 0;
-  max-width: 1000px;
-  margin: 0 auto;
-  border-top: 1px solid oklch(0.70 0.04 55 / 0.45);
+  margin-top: 2px;
 }
 
 .workflow-step {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 30px 20px;
+  padding: 16px clamp(12px, 1.5vw, 20px);
   background: transparent;
   flex: 1;
-  min-width: 220px;
+  min-width: 0;
   transition: transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
@@ -728,7 +763,7 @@ const handleLogout = () => {
 }
 
 .step-number {
-  font-size: 36px;
+  font-size: 32px;
   font-weight: 800;
   color: oklch(0.50 0.16 45);
   flex-shrink: 0;
@@ -755,9 +790,10 @@ const handleLogout = () => {
 
 .cta-section {
   width: 100%;
-  padding: clamp(72px, 9vw, 112px) 24px;
+  padding: clamp(68px, 8vw, 96px) 24px;
   text-align: center;
-  background: oklch(0.24 0.055 175);
+  background: oklch(0.15 0.025 255);
+  border-top: 1px solid oklch(1 0 / 0.08);
 }
 
 .cta-content {
@@ -769,13 +805,13 @@ const handleLogout = () => {
 .cta-content h2 {
   font-size: 28px;
   font-weight: 700;
-  color: oklch(0.98 0.008 175);
+  color: oklch(0.98 0.006 255);
   margin: 0 0 12px;
 }
 
 .cta-content p {
   font-size: 16px;
-  color: oklch(0.83 0.025 175);
+  color: oklch(0.78 0.018 255);
   margin: 0 0 32px;
 }
 
@@ -790,6 +826,17 @@ const handleLogout = () => {
   font-size: 13px;
   color: oklch(0.76 0.014 255);
   margin: 0;
+}
+
+@media (max-width: 960px) {
+  .workflow-shell {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+
+  .workflow-header p { max-width: 32em; }
+  .workflow-step:first-child { padding-left: 0; }
+  .workflow-step:last-child { padding-right: 0; }
 }
 
 @media (max-width: 768px) {
@@ -811,9 +858,27 @@ const handleLogout = () => {
     padding: 28px 0;
     border-left: 0;
   }
-  .workflow-steps { flex-direction: column; }
-  .step-connector { transform: rotate(90deg); }
-  .workflow-step { max-width: 100%; }
+  .workflow-steps {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .workflow-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+    padding: 14px 0 46px;
+  }
+  .workflow-step:last-child { padding-bottom: 14px; }
+  .step-number { grid-column: 1; }
+  .step-content { grid-column: 2; }
+  .step-connector {
+    position: absolute;
+    left: 4px;
+    bottom: 2px;
+    transform: rotate(90deg);
+  }
 }
 
 @media (max-width: 480px) {
@@ -821,7 +886,13 @@ const handleLogout = () => {
   .hero-section { padding: 100px 16px 60px; }
   .hero-title { font-size: 34px; }
   .username { display: none; }
-  .features-section, .workflow-section, .cta-section { padding: 60px 16px; }
+  .features-section { padding: 56px 16px 40px; }
+  .workflow-section { padding: 0 16px 64px; }
+  .workflow-shell { padding-top: 40px; }
+  .section-header h2 { font-size: 30px; }
+  .workflow-header h2 { font-size: 28px; }
+  .cta-section { padding: 60px 16px; }
+  .cta-content { padding: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -843,6 +914,12 @@ const handleLogout = () => {
   .hero-actions,
   .hero-stats {
     opacity: 1;
+  }
+
+  .feature-card,
+  .feature-icon-wrap,
+  .workflow-step {
+    transition: none !important;
   }
 }
 </style>

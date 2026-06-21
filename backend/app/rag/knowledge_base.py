@@ -363,6 +363,8 @@ class PaperKnowledgeBase:
                     metadata["caption"] = str(chunk["caption"])
                 if chunk.get("table_number") is not None:
                     metadata["table_number"] = str(chunk["table_number"])
+                if chunk.get("coverage_source"):
+                    metadata["coverage_source"] = str(chunk["coverage_source"])
                 
                 # 如果是表格内容，提取表格编号
                 if "【表格】" in content or "table" in content.lower():

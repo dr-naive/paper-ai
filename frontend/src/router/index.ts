@@ -7,7 +7,6 @@ const routes: RouteRecordRaw[] = [
   { path: '/register', name: 'Register', component: () => import('@/views/Register.vue') },
   { path: '/papers', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
   { path: '/paper/:id', name: 'PaperReader', component: () => import('@/views/PaperReader.vue') },
-  { path: '/paper/:id/qa', name: 'PaperQA', component: () => import('@/views/PaperQA.vue') },
 ]
 
 const router = createRouter({ history: createWebHistory(), routes })

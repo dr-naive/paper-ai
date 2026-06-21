@@ -1,6 +1,6 @@
 """应用程序配置模块"""
-from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator, model_validator
 from functools import lru_cache
 from typing import Any, Optional, List
 from pathlib import Path
@@ -15,9 +15,14 @@ ENV_FILE_PATH = BACKEND_DIR / ".env" if (BACKEND_DIR / ".env").exists() else PRO
 
 class Settings(BaseSettings):
     """应用配置类"""
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE_PATH),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
     APP_NAME: str = "PaperAI"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False
     DATABASE_URL: str = "sqlite+aiosqlite:///./paperai.db"
     REDIS_URL: str = "redis://localhost:6379/0"
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
@@ -30,6 +35,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4"
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    LLM_TIMEOUT_SECONDS: float = 60.0
+    LLM_MAX_RETRIES: int = 2
     VISION_MODEL: str = "qwen-vl-max"
     VISION_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -51,10 +58,18 @@ class Settings(BaseSettings):
                 return False
         return bool(value)
 
-    class Config:
-        env_file = str(ENV_FILE_PATH)  # <--- 使用计算出的绝对路径
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    @model_validator(mode="after")
+    def validate_security_defaults(self):
+        insecure_secret = "your-super-secret-key-change-in-production"
+        if not self.DEBUG and (
+            self.SECRET_KEY == insecure_secret or len(self.SECRET_KEY) < 32
+        ):
+            raise ValueError("生产模式必须设置至少 32 字符的 SECRET_KEY")
+        if self.LLM_TIMEOUT_SECONDS <= 0:
+            raise ValueError("LLM_TIMEOUT_SECONDS 必须大于 0")
+        if not 0 <= self.LLM_MAX_RETRIES <= 5:
+            raise ValueError("LLM_MAX_RETRIES 必须在 0 到 5 之间")
+        return self
 
 @lru_cache()
 def get_settings() -> Settings:
@@ -76,6 +91,5 @@ print(f"🔥 [Config] 当前 config.py 绝对路径: {Path(__file__).resolve()}"
 print(f"🔥 [Config] 尝试加载 .env 绝对路径: {ENV_FILE_PATH}", flush=True)
 print(f"🔥 [Config] 该文件是否存在: {ENV_FILE_PATH.exists()}", flush=True)
 print(f"🔥 [Config] 读取到的 LLM_PROVIDER: {settings.LLM_PROVIDER}", flush=True)
-print(f"🔥 [Config] 读取到的 OPENAI_API_KEY: {mask_secret(settings.OPENAI_API_KEY)}", flush=True)
 print(f"🔥 [Config] 读取到的 OPENAI_BASE_URL: {settings.OPENAI_BASE_URL}", flush=True)
 print("="*50, flush=True)
