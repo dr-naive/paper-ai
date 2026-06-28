@@ -122,8 +122,7 @@ backend/parse_*.py
 backend/*.skill
 
 # ================ Trae IDE 配置 ================
-# 保留 .trae/rules/ 和 .trae/skills/ 用于项目规则
-# .trae/
+.trae/
 
 # ================ 部署相关 ================
 # 仅忽略本机覆盖配置；Dockerfile、.dockerignore、Nginx 配置应纳入版本控制

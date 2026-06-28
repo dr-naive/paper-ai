@@ -212,6 +212,57 @@ def to_eval_case(
     return case
 
 
+def to_unanswerable_eval_case(
+    raw: dict[str, Any],
+    paper: dict[str, Any],
+    alias: str,
+    split: str,
+    index: int,
+) -> EvalCase:
+    return EvalCase.from_dict({
+        "id": f"{alias}_q{index:03d}",
+        "paper_id": paper["id"],
+        "paper_title": paper["title"],
+        "question": raw.get("question", ""),
+        "task_type": "unanswerable",
+        "difficulty": raw.get("difficulty", "medium"),
+        "split": split,
+        "answerable": False,
+        "must_abstain": True,
+        "reference_answer": raw.get("reference_answer", "论文未报告该信息。"),
+        "reference_claims": [],
+        "evidence": [],
+        "expected_tables": [],
+        "tags": sorted(set(["abstention", *raw.get("tags", [])])),
+        # Absence is hard to prove automatically, so these require human review.
+        "annotation_status": "draft",
+    })
+
+
+async def call_llm_json(prompt: str, timeout_seconds: int, retries: int) -> dict[str, Any]:
+    from app.llm.client import get_llm_client
+
+    response = None
+    for attempt in range(1, retries + 2):
+        try:
+            response = await asyncio.wait_for(
+                get_llm_client().agenerate(
+                    [prompt],
+                    json_mode=True,
+                    enable_thinking=False,
+                ),
+                timeout=timeout_seconds,
+            )
+            break
+        except (TimeoutError, asyncio.TimeoutError):
+            if attempt > retries:
+                raise RuntimeError(f"模型调用超过 {timeout_seconds} 秒，已重试 {retries} 次")
+            print(f"  模型调用超时，重试 {attempt}/{retries}...", flush=True)
+    if response is None:
+        raise RuntimeError("模型没有返回响应")
+    return parse_json_response(response.generations[0][0].text)
+
+
 async def generate_for_paper(
     paper: dict[str, Any],
     pages: dict[int, str],
@@ -219,8 +270,6 @@ async def generate_for_paper(
     timeout_seconds: int,
     retries: int,
 ) -> list[dict[str, Any]]:
-    from app.llm.client import get_llm_client
-
     selected_pages = choose_pages(pages, paper)
     context = build_context(paper, pages, selected_pages)
     prompt = f"""
@@ -258,25 +307,57 @@ async def generate_for_paper(
 论文内容：
 {context}
 """
-    response = None
-    for attempt in range(1, retries + 2):
-        try:
-            response = await asyncio.wait_for(
-                get_llm_client().agenerate(
-                    [prompt],
-                    json_mode=True,
-                    enable_thinking=False,
-                ),
-                timeout=timeout_seconds,
-            )
-            break
-        except (TimeoutError, asyncio.TimeoutError):
-            if attempt > retries:
-                raise RuntimeError(f"模型调用超过 {timeout_seconds} 秒，已重试 {retries} 次")
-            print(f"  模型调用超时，重试 {attempt}/{retries}...", flush=True)
-    if response is None:
-        raise RuntimeError("模型没有返回响应")
-    data = parse_json_response(response.generations[0][0].text)
+    data = await call_llm_json(prompt, timeout_seconds, retries)
+    return list(data.get("questions", []))[:count]
+
+
+async def generate_unanswerable_for_paper(
+    paper: dict[str, Any],
+    pages: dict[int, str],
+    count: int,
+    timeout_seconds: int,
+    retries: int,
+) -> list[dict[str, Any]]:
+    if count <= 0:
+        return []
+
+    selected_pages = choose_pages(pages, paper)
+    context = build_context(paper, pages, selected_pages)
+    prompt = f"""
+你正在为论文问答 RAG 系统建立拒答评测集。请根据给定论文内容生成 {count} 个不可回答问题。
+
+论文标题：{paper['title']}
+作者：{paper['authors']}
+
+要求：
+1. 问题必须看起来像真实用户会问的问题，并且与论文主题相关。
+2. 问题的答案不能从给定论文内容中直接得到，系统正确行为应是拒答或说明论文未报告。
+3. 不要生成荒谬问题，不要生成作者、标题等元数据问题。
+4. 避免问“论文没有提到什么”这种显式否定题；要问具体缺失信息，例如未报告的数据集、部署延迟、消融设置、成本、超参数或外部实验。
+5. reference_answer 必须明确指出论文未报告/未说明该信息。
+6. reference_claims、evidence、expected_tables 必须为空数组。
+7. 难度只能为 easy、medium、hard；task_type 必须为 unanswerable。
+
+返回严格 JSON：
+{{
+  "questions": [
+    {{
+      "question": "...",
+      "task_type": "unanswerable",
+      "difficulty": "medium",
+      "reference_answer": "论文未报告...",
+      "reference_claims": [],
+      "evidence": [],
+      "expected_tables": [],
+      "tags": ["abstention"]
+    }}
+  ]
+}}
+
+论文内容：
+{context}
+"""
+    data = await call_llm_json(prompt, timeout_seconds, retries)
     return list(data.get("questions", []))[:count]
 
 
@@ -329,6 +410,13 @@ async def run(args) -> list[EvalCase]:
                 args.timeout_seconds,
                 args.retries,
             )
+            raw_unanswerable = await generate_unanswerable_for_paper(
+                paper,
+                pages,
+                args.unanswerable_per_paper,
+                args.timeout_seconds,
+                args.retries,
+            )
             for index, raw in enumerate(raw_questions, 1):
                 case = to_eval_case(
                     raw,
@@ -343,9 +431,25 @@ async def run(args) -> list[EvalCase]:
                     print(f"  跳过 {case.id}：{'；'.join(errors)}")
                     continue
                 cases.append(case)
+            for offset, raw in enumerate(raw_unanswerable, len(raw_questions) + 1):
+                case = to_unanswerable_eval_case(
+                    raw,
+                    paper,
+                    paper_entry["alias"],
+                    paper_entry["split"],
+                    offset,
+                )
+                errors = validate_case(case)
+                if errors:
+                    print(f"  跳过 {case.id}：{'；'.join(errors)}")
+                    continue
+                cases.append(case)
             silver = sum(case.annotation_status == "silver" for case in cases if case.paper_id == paper["id"])
+            unanswerable = sum(
+                case.must_abstain for case in cases if case.paper_id == paper["id"]
+            )
             total = sum(case.paper_id == paper["id"] for case in cases)
-            print(f"  保留 {total} 条，其中 Silver {silver} 条")
+            print(f"  保留 {total} 条，其中 Silver {silver} 条，不可回答 {unanswerable} 条")
     finally:
         connection.close()
     return cases
@@ -356,12 +460,15 @@ def main() -> int:
     parser.add_argument("--manifest", default="evals/datasets/pilot_manifest.json")
     parser.add_argument("--database", default="paperai.db")
     parser.add_argument("--questions-per-paper", type=int, default=6)
+    parser.add_argument("--unanswerable-per-paper", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=int, default=120)
     parser.add_argument("--retries", type=int, default=1)
     parser.add_argument("--output", default="evals/datasets/paperqa_v1.jsonl")
     args = parser.parse_args()
     if not 2 <= args.questions_per_paper <= 10:
         parser.error("--questions-per-paper 必须在 2 到 10 之间")
+    if not 0 <= args.unanswerable_per_paper <= 5:
+        parser.error("--unanswerable-per-paper 必须在 0 到 5 之间")
 
     cases = asyncio.run(run(args))
     output = Path(args.output)

@@ -66,19 +66,9 @@ Router：`backend/app/api/chat.py`
 
 前端主要调用文件：`frontend/src/api/paper.ts`
 
-## 笔记
+## 已移除接口
 
-Router：`backend/app/api/notes.py`
-
-前缀：`/api/v1/notes`
-
-| Method | Path | 用途 |
-| --- | --- | --- |
-| GET | `/api/v1/notes/` | 获取笔记列表 |
-| GET | `/api/v1/notes/{note_id}` | 获取笔记详情 |
-| POST | `/api/v1/notes/` | 创建笔记 |
-| PUT | `/api/v1/notes/{note_id}` | 更新笔记 |
-| DELETE | `/api/v1/notes/{note_id}` | 删除笔记 |
+当前不提供笔记功能，`/api/v1/notes` 未挂载到 FastAPI 应用。
 
 ## 前端 Axios 约定
 
@@ -93,4 +83,3 @@ Router：`backend/app/api/notes.py`
 - `VITE_API_BASE_URL=http://localhost:8000`，或
 - Vite dev server proxy，或
 - 反向代理。
-

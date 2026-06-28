@@ -179,7 +179,7 @@ def render_html(data: dict[str, Any]) -> str:
     document.querySelector('#datasetStrip').innerHTML = `<span><b>${{DATA.dataset.total}}</b> 条样本</span><span><b>${{DATA.dataset.verified}}</b> Gold</span><span><b>${{DATA.dataset.silver}}</b> Silver</span><span><b>${{DATA.dataset.draft}}</b> Draft</span>`;
     if (DATA.e2e) {{
       const s=DATA.e2e.summary;
-      const items=[['要点覆盖代理',pct(s.claim_coverage_proxy)],['引用原文支持率',pct(s.citation_precision)],['Gold 证据覆盖率',pct(s.citation_recall)],['页码一致率',pct(s.page_accuracy)],['P50 端到端',`${{num(s.p50_latency_ms)}} ms`],['P95 端到端',`${{num(s.p95_latency_ms)}} ms`]];
+      const items=[['有效回答率',pct(s.valid_answer_rate)],['生成超时率',pct(s.timeout_rate)],['要点覆盖代理',pct(s.claim_coverage_proxy)],['引用原文支持率',pct(s.citation_precision)],['Gold 证据覆盖率',pct(s.citation_recall)],['页码一致率',pct(s.page_accuracy)],['拒答准确率',pct(s.abstention_accuracy)],['过度拒答率',pct(s.over_abstention_rate)],['无证据数字率',pct(s.unsupported_number_rate)],['关键幻觉率',pct(s.critical_hallucination_rate)],['P50 端到端',`${{num(s.p50_latency_ms)}} ms`],['P95 端到端',`${{num(s.p95_latency_ms)}} ms`]];
       document.querySelector('#e2ePanel').hidden=false;
       document.querySelector('#e2eMetrics').innerHTML=items.map(([label,value])=>`<div class="metric"><span>${{label}}</span><strong>${{value}}</strong></div>`).join('');
     }}

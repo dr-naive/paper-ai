@@ -23,6 +23,24 @@ def _case(case_id: str, split: str, status: str) -> EvalCase:
     })
 
 
+def _unanswerable_case(case_id: str, split: str, status: str) -> EvalCase:
+    return EvalCase.from_dict({
+        "id": case_id,
+        "paper_id": "paper",
+        "paper_title": "Paper",
+        "question": "论文是否报告了移动端部署延迟？",
+        "task_type": "unanswerable",
+        "difficulty": "medium",
+        "split": split,
+        "answerable": False,
+        "must_abstain": True,
+        "reference_answer": "论文未报告移动端部署延迟。",
+        "reference_claims": [],
+        "evidence": [],
+        "annotation_status": status,
+    })
+
+
 def test_select_cases_uses_only_verified_split_and_limit():
     cases = [
         _case("verified", "test", "verified"),
@@ -31,6 +49,14 @@ def test_select_cases_uses_only_verified_split_and_limit():
     ]
     assert [case.id for case in select_cases(cases, "test")] == ["verified"]
     assert select_cases(cases, "test", limit=1)[0].id == "verified"
+
+
+def test_select_cases_includes_verified_unanswerable_cases():
+    cases = [
+        _case("answerable", "test", "verified"),
+        _unanswerable_case("unanswerable", "test", "verified"),
+    ]
+    assert [case.id for case in select_cases(cases, "test")] == ["answerable", "unanswerable"]
 
 
 def test_report_is_checkpointed_and_resumed(tmp_path):
@@ -47,6 +73,8 @@ def test_report_is_checkpointed_and_resumed(tmp_path):
 
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert saved["summary"]["completed_count"] == 1
+    assert saved["summary"]["valid_answer_count"] == 1
+    assert saved["summary"]["valid_answer_rate"] == 1
     assert saved["summary"]["p50_latency_ms"] == 100
 
     args.resume = True
@@ -62,3 +90,21 @@ def test_report_p95_includes_tail_latency(tmp_path):
     ]}
     save_report(report, output)
     assert report["summary"]["p95_latency_ms"] == 505.0
+
+
+def test_report_counts_generation_timeout_separately(tmp_path):
+    output = tmp_path / "raw.json"
+    report = {"cases": [
+        {"case": {"id": "ok"}, "status": "completed", "latency_ms": 100},
+        {"case": {"id": "timeout"}, "status": "generation_timeout", "latency_ms": 65000},
+        {"case": {"id": "failed"}, "status": "failed", "latency_ms": 50},
+    ]}
+    save_report(report, output)
+    summary = report["summary"]
+    assert summary["case_count"] == 3
+    assert summary["completed_count"] == 1
+    assert summary["valid_answer_count"] == 1
+    assert summary["generation_timeout_count"] == 1
+    assert summary["failed_count"] == 1
+    assert summary["valid_answer_rate"] == 0.3333
+    assert summary["timeout_rate"] == 0.3333

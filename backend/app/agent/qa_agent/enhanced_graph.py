@@ -52,14 +52,26 @@ COMPLEX_REASONING_PATTERNS = [
     r"数学",
     r"公式",
     r"为什么.*成立",
-    r"机制",
-    r"原理",
-    r"复杂",
     r"derive",
     r"prove",
     r"equation",
     r"formula",
-    r"mechanism",
+]
+
+DEEP_REASONING_CONTEXT_PATTERNS = [
+    r"复杂",
+    r"多步",
+    r"严格",
+    r"数学",
+    r"推导",
+    r"证明",
+    r"公式",
+    r"成立",
+    r"derive",
+    r"prove",
+    r"equation",
+    r"formula",
+    r"theorem",
 ]
 
 
@@ -88,7 +100,16 @@ def detect_simple_intent(question: str) -> str | None:
 
 def needs_deep_thinking(question: str) -> bool:
     q = question.lower().strip()
-    return any(re.search(pattern, q, re.IGNORECASE) for pattern in COMPLEX_REASONING_PATTERNS)
+    if any(re.search(pattern, q, re.IGNORECASE) for pattern in COMPLEX_REASONING_PATTERNS):
+        return True
+    # “机制/原理/mechanism”类问题常常只是证据抽取与归纳，不应单独触发
+    # thinking；只有同时出现证明、公式、多步推理等强信号时才开启。
+    has_mechanism_word = bool(re.search(r"机制|原理|mechanism|principle", q, re.IGNORECASE))
+    has_deep_context = any(
+        re.search(pattern, q, re.IGNORECASE)
+        for pattern in DEEP_REASONING_CONTEXT_PATTERNS
+    )
+    return has_mechanism_word and has_deep_context
 
 
 def safe_json_loads(text: str) -> dict:

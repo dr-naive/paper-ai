@@ -9,6 +9,7 @@ from app.agent.qa_agent.enhanced_graph import (
     _enrich_citations,
     calculate_evidence_confidence,
     detect_metadata_intent,
+    needs_deep_thinking,
 )
 
 
@@ -83,3 +84,13 @@ def test_evidence_confidence_is_not_intent_confidence():
     assert calculate_evidence_confidence("答案", grounded, chunks) == 0.85
     assert calculate_evidence_confidence("答案", [], chunks) == 0.0
     assert calculate_evidence_confidence("作者是张三", [{"section": "论文元数据"}], [], "metadata") == 0.95
+
+
+def test_mechanism_question_does_not_force_deep_thinking():
+    question = "H-PSRO 框架旨在解决什么核心问题，并通过什么机制实现？"
+    assert needs_deep_thinking(question) is False
+
+
+def test_proof_and_formula_questions_use_deep_thinking():
+    assert needs_deep_thinking("请推导公式 3 为什么成立") is True
+    assert needs_deep_thinking("prove why this mechanism guarantees convergence") is True

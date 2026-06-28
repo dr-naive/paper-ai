@@ -12,6 +12,10 @@ from typing import Any
 from evals.models import EvalCase, load_jsonl, validate_dataset
 
 
+GENERATION_FAILURE_ANSWER = "抱歉，无法生成回答，请尝试重新提问。"
+DEFAULT_TIMEOUT_FLOOR_MS = 60_000
+
+
 def select_cases(cases: list[EvalCase], split: str, limit: int | None = None) -> list[EvalCase]:
     selected = [
         case for case in cases
@@ -45,6 +49,23 @@ def _chunk_snapshot(chunk: dict[str, Any], rank: int) -> dict[str, Any]:
     }
 
 
+def is_generation_failure_row(row: dict[str, Any]) -> bool:
+    return str(row.get("answer", "")).strip() == GENERATION_FAILURE_ANSWER
+
+
+def is_generation_timeout_row(row: dict[str, Any]) -> bool:
+    if row.get("status") == "generation_timeout":
+        return True
+    if not is_generation_failure_row(row):
+        return False
+    latency = float(row.get("generation_latency_ms") or row.get("latency_ms") or 0)
+    return latency >= DEFAULT_TIMEOUT_FLOOR_MS
+
+
+def is_valid_completed_row(row: dict[str, Any]) -> bool:
+    return row.get("status") == "completed" and not is_generation_failure_row(row)
+
+
 def _new_report(args: Any, dataset_path: Path) -> dict[str, Any]:
     return {
         "report_type": "e2e_raw",
@@ -72,7 +93,8 @@ def load_or_create_report(output: Path, args: Any, dataset_path: Path) -> dict[s
 
 def save_report(report: dict[str, Any], output: Path) -> None:
     rows = report["cases"]
-    successful = [row for row in rows if row.get("status") == "completed"]
+    successful = [row for row in rows if is_valid_completed_row(row)]
+    timeouts = [row for row in rows if is_generation_timeout_row(row)]
     latencies = sorted(float(row.get("latency_ms", 0)) for row in successful)
 
     def percentile(ratio: float) -> float | None:
@@ -90,7 +112,11 @@ def save_report(report: dict[str, Any], output: Path) -> None:
     report["summary"] = {
         "case_count": len(rows),
         "completed_count": len(successful),
-        "failed_count": len(rows) - len(successful),
+        "valid_answer_count": len(successful),
+        "generation_timeout_count": len(timeouts),
+        "failed_count": len(rows) - len(successful) - len(timeouts),
+        "valid_answer_rate": round(len(successful) / len(rows), 4) if rows else 0.0,
+        "timeout_rate": round(len(timeouts) / len(rows), 4) if rows else 0.0,
         "p50_latency_ms": percentile(0.5),
         "p95_latency_ms": percentile(0.95),
     }
@@ -114,7 +140,7 @@ async def run(args: Any) -> dict[str, Any]:
     completed_ids = {
         row["case"]["id"]
         for row in report["cases"]
-        if row.get("status") == "completed"
+        if is_valid_completed_row(row)
     }
 
     # 延迟导入，避免 --help 和数据校验初始化数据库、向量库及模型。
@@ -128,6 +154,7 @@ async def run(args: Any) -> dict[str, Any]:
     from app.models.paper import Paper
     from app.rag.knowledge_base import get_knowledge_base
     from app.rag.table_retrieval import get_exact_table_chunks, merge_retrieval_chunks
+    from app.config import settings
 
     knowledge_base = get_knowledge_base()
     async with AsyncSessionLocal() as db:
@@ -150,6 +177,8 @@ async def run(args: Any) -> dict[str, Any]:
                     "question": case.question,
                     "task_type": case.task_type,
                     "difficulty": case.difficulty,
+                    "answerable": case.answerable,
+                    "must_abstain": case.must_abstain,
                     "reference_answer": case.reference_answer,
                     "reference_claims": list(case.reference_claims),
                     "evidence": [evidence.__dict__ for evidence in case.evidence],
@@ -194,6 +223,18 @@ async def run(args: Any) -> dict[str, Any]:
                         for rank, chunk in enumerate(chunks, 1)
                     ],
                 })
+                if row["answer"].strip() == GENERATION_FAILURE_ANSWER:
+                    timeout_ms = (settings.LLM_TIMEOUT_SECONDS + 5) * 1000
+                    row["status"] = (
+                        "generation_timeout"
+                        if generation_ms >= timeout_ms * 0.95
+                        else "generation_failed"
+                    )
+                    row["error"] = (
+                        "LLM generation timed out"
+                        if row["status"] == "generation_timeout"
+                        else "LLM generation returned fallback failure answer"
+                    )
             except Exception as exc:  # 保留失败样本，避免整轮结果丢失。
                 row["error"] = f"{type(exc).__name__}: {exc}"
 

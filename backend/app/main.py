@@ -64,7 +64,6 @@ app.add_middleware(
 from app.api.auth import router as auth_router
 from app.api.papers import router as papers_router
 from app.api.paper_analysis import router as paper_analysis_router
-from app.api.notes import router as notes_router
 from app.api.chat import router as chat_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
@@ -75,7 +74,6 @@ from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCac
 app.include_router(auth_router)
 app.include_router(papers_router)
 app.include_router(paper_analysis_router)
-app.include_router(notes_router)
 app.include_router(chat_router)
 
 

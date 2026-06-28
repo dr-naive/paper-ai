@@ -7,7 +7,7 @@
 PaperAI 是前后端分离应用：
 
 - 前端位于 `frontend/`，负责登录注册、论文列表、PDF 阅读、论文问答和摘要/解读展示。
-- 后端位于 `backend/app/`，提供认证、论文管理、笔记、聊天会话、PDF 解析、RAG 检索和 LLM 调用。
+- 后端位于 `backend/app/`，提供认证、论文管理、聊天会话、PDF 解析、RAG 检索和 LLM 调用。
 - 本地默认使用 SQLite 数据库 `paperai.db`。
 - Docker Compose 路径配置了 PostgreSQL 和 Redis，但当前本地脚本主要围绕 SQLite + systemd 开发服务运行。
 
@@ -26,7 +26,6 @@ PaperAI 是前后端分离应用：
 
 - `app.api.auth.router`，前缀 `/api/auth`
 - `app.api.papers.router`，前缀 `/api/v1/papers`
-- `app.api.notes.router`，前缀 `/api/v1/notes`
 - `app.api.chat.router`，前缀 `/api/v1/chat`
 
 ## 后端模块
@@ -36,12 +35,11 @@ PaperAI 是前后端分离应用：
 - `auth.py`：注册、登录、JWT 签发、当前用户读取。
 - `papers.py`：论文上传、列表、详情、PDF 文件、章节、任务状态、删除、问答、解读、结构化摘要。
 - `chat.py`：对话会话、会话消息、会话内问答、摘要缓存、解读缓存。
-- `notes.py`：笔记 CRUD。
 
 `backend/app/models/`
 
 - `user.py`：用户表。
-- `paper.py`：论文、章节、问答、笔记、文件夹、表格、图片。
+- `paper.py`：论文、章节、问答、表格、图片；遗留的笔记/文件夹模型未挂载为业务 API。
 - `chat.py`：聊天会话、聊天消息、摘要缓存、解读缓存。
 
 `backend/app/agent/`
@@ -155,4 +153,3 @@ Docker Compose 提供另一套部署形态：
 - redis
 
 当前 Compose 配置使用 PostgreSQL URL，而本地配置默认 SQLite。切换部署方式时要确认数据库 URL、迁移策略和数据文件位置。
-

@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from evals.metrics.e2e import aggregate_e2e_metrics, score_e2e_case
+from evals.run_e2e_eval import is_generation_timeout_row, is_valid_completed_row
 
 
 def score_report(raw: dict) -> dict:
-    completed = [row for row in raw.get("cases", []) if row.get("status") == "completed"]
+    raw_cases = raw.get("cases", [])
+    completed = [row for row in raw_cases if is_valid_completed_row(row)]
+    timeout_count = sum(1 for row in raw_cases if is_generation_timeout_row(row))
     cases = []
     metrics = []
     for row in completed:
@@ -23,7 +26,13 @@ def score_report(raw: dict) -> dict:
             "latency_ms": row.get("latency_ms"),
         })
     summary = aggregate_e2e_metrics(metrics)
+    raw_case_count = len(raw_cases)
     summary.update({
+        "raw_case_count": raw_case_count,
+        "valid_answer_count": len(completed),
+        "generation_timeout_count": timeout_count,
+        "valid_answer_rate": round(len(completed) / raw_case_count, 4) if raw_case_count else 0.0,
+        "timeout_rate": round(timeout_count / raw_case_count, 4) if raw_case_count else 0.0,
         "p50_latency_ms": raw.get("summary", {}).get("p50_latency_ms"),
         "p95_latency_ms": raw.get("summary", {}).get("p95_latency_ms"),
     })
@@ -38,6 +47,12 @@ def score_report(raw: dict) -> dict:
             "citation_recall": "Gold 证据被已引用检索块覆盖的比例",
             "page_accuracy": "引用页码与 source_id 指向检索块页码一致的比例",
             "claim_coverage_proxy": "答案与 Gold 原子事实的字符重合代理，不等同于答案准确率",
+            "abstention_accuracy": "必须拒答样本中，答案被判定为拒答的比例",
+            "over_abstention_rate": "可回答样本中，答案被判定为拒答的比例",
+            "unsupported_number_rate": "答案中的数字未出现在 Gold 或检索/引用证据中的比例",
+            "critical_hallucination_rate": "出现硬幻觉的样本比例：应拒答未拒答，或答案含无证据数字",
+            "valid_answer_rate": "原始样本中成功生成有效答案的比例；质量指标只在这些样本上计算",
+            "timeout_rate": "原始样本中回答生成阶段超时的比例",
         },
     }
 

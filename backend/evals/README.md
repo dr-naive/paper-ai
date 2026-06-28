@@ -10,8 +10,20 @@
 - 明确表格问题的 Table Hit@K
 - 按问题类型和难度输出切片指标
 - 保存每条问题的原始检索结果，便于定位失败原因
+- 端到端引用、页码、拒答和硬幻觉指标
 
 检索基线已建立。端到端采集器可保存真实回答、引用、检索上下文和延迟；答案与引用评分在采集真实结果后执行。
+
+## 评测分层
+
+当前优先评估可定性判对错的能力，不评价语言风格。
+
+1. 检索层：系统是否把 Gold 证据找回来，以及证据是否排得足够靠前。
+2. 回答层：系统是否覆盖标准原子事实、引用是否真实、页码是否可靠。
+3. 拒答层：论文没有答案时是否拒答，可回答问题是否过度拒答。
+4. 硬幻觉层：回答是否出现证据或标准答案中没有的关键数字，或在必须拒答时给出确定答案。
+
+`silver` 是 AI 生成且通过程序硬校验的候选样本；`verified` 是人工确认过的 Gold 样本。Silver 可用于开发调试和扩充覆盖面，最终质量报告应优先使用 verified 样本。
 
 ## 1. 查看当前可用于评测的论文
 
@@ -143,6 +155,48 @@ cp evals/datasets/paperqa_v1.example.jsonl evals/datasets/paperqa_v1.jsonl
 
 先完成 3 篇论文 × 8 个问题的 24 条试标数据。确认字段和标注尺度稳定后，再扩展到 10 篇、80～120 条。不要一次标完 100 条后才发现证据尺度不一致。
 
+可用 LLM 先生成候选 Silver/Draft 数据：
+
+```bash
+../.venv/bin/python -m evals.generate_silver_dataset \
+  --manifest evals/datasets/pilot_manifest.json \
+  --questions-per-paper 6 \
+  --unanswerable-per-paper 2 \
+  --output evals/datasets/paperqa_v1.jsonl
+```
+
+`--questions-per-paper` 生成可回答题。`--unanswerable-per-paper` 生成必须拒答的候选题，这类题默认标为 `draft`，因为“论文未报告某信息”需要人工复核后才能升级为 verified。
+
+导出待审核队列：
+
+```bash
+../.venv/bin/python -m evals.review_dataset \
+  --dataset evals/datasets/paperqa_v1.jsonl \
+  --status silver \
+  --status draft \
+  --limit 20 \
+  --export-md evals/reports/review_queue.md
+```
+
+人工核对某条样本后，将其升级为 verified：
+
+```bash
+../.venv/bin/python -m evals.review_dataset \
+  --dataset evals/datasets/paperqa_v1.jsonl \
+  --case-id p04_q001 \
+  --set-status verified \
+  --review-note "人工核对问题、答案、claims 和 evidence 通过"
+```
+
+确认候选题质量较差时，可从 JSONL 中丢弃：
+
+```bash
+../.venv/bin/python -m evals.review_dataset \
+  --dataset evals/datasets/paperqa_v1.jsonl \
+  --case-id p04_q009 \
+  --discard
+```
+
 ## 7. 采集端到端回答与引用
 
 先运行一条样本，确认模型、数据库和向量库连接正常：
@@ -165,4 +219,33 @@ cp evals/datasets/paperqa_v1.example.jsonl evals/datasets/paperqa_v1.jsonl
   --resume
 ```
 
-报告逐题落盘，中断后可继续。报告中的 `intent_confidence` 仅表示意图分类置信度，不能解释为答案准确率。
+报告逐题落盘，中断后可继续。报告中的 `intent_confidence` 仅表示意图分类置信度，不能解释为答案准确率。回答生成超时会标记为 `generation_timeout`，不会伪装成正常完成样本。
+
+## 8. 端到端评分指标
+
+对原始报告执行确定性评分：
+
+```bash
+../.venv/bin/python -m evals.score_e2e_eval \
+  --input evals/reports/e2e_test_raw.json \
+  --output evals/reports/e2e_test_scored.json
+```
+
+当前端到端质量指标只在成功生成有效答案的样本上计算；服务稳定性用 `valid_answer_rate` 和 `timeout_rate` 单独展示。
+
+当前端到端指标：
+
+| 指标 | 含义 |
+| --- | --- |
+| `citation_precision` | 引用文字可由其 `source_id` 指向的检索块支持的比例 |
+| `citation_recall` | Gold 证据被已引用检索块覆盖的比例 |
+| `page_accuracy` | 引用页码与其指向检索块页码一致的比例 |
+| `claim_coverage_proxy` | 答案与 Gold 原子事实的字符重合代理，不等同于答案准确率 |
+| `valid_answer_rate` | 原始样本中成功生成有效答案的比例 |
+| `timeout_rate` | 原始样本中回答生成阶段超时的比例 |
+| `abstention_accuracy` | 必须拒答样本中，系统实际拒答的比例 |
+| `over_abstention_rate` | 可回答样本中，系统错误拒答的比例 |
+| `unsupported_number_rate` | 答案中的数字未出现在 Gold 或检索/引用证据中的比例 |
+| `critical_hallucination_rate` | 出现硬幻觉的样本比例：应拒答未拒答，或答案含无证据数字 |
+
+硬幻觉指标是第一版保守定义，用于稳定自动化回归。语义级幻觉后续应通过“答案原子事实抽取 + 证据支持判断”扩展，而不是直接让模型笼统评价整段回答。
