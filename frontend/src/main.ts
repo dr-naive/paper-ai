@@ -21,6 +21,7 @@ import {
   Result,
   Select,
   Spin,
+  Switch,
   TabPane,
   Tabs,
   Tag,
@@ -39,6 +40,7 @@ import '@arco-design/web-vue/es/radio/style/css.js'
 import '@arco-design/web-vue/es/result/style/css.js'
 import '@arco-design/web-vue/es/select/style/css.js'
 import '@arco-design/web-vue/es/spin/style/css.js'
+import '@arco-design/web-vue/es/switch/style/css.js'
 import '@arco-design/web-vue/es/tabs/style/css.js'
 import '@arco-design/web-vue/es/tag/style/css.js'
 import '@arco-design/web-vue/es/textarea/style/css.js'
@@ -68,6 +70,7 @@ const arcoComponents: Array<[string, Component]> = [
   ['AResult', Result],
   ['ASelect', Select],
   ['ASpin', Spin],
+  ['ASwitch', Switch],
   ['ATabPane', TabPane],
   ['ATabs', Tabs],
   ['ATag', Tag],

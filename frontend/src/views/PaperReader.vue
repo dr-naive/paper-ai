@@ -127,6 +127,23 @@
                   <div class="qa-answer">
                     <span class="qa-label">答</span>
                     <div class="qa-answer-content">
+                      <div v-if="qa.thinking" class="qa-thinking">
+                        <button
+                          type="button"
+                          class="qa-thinking-header"
+                          :aria-expanded="qa.thinkingExpanded"
+                          @click="qa.thinkingExpanded = !qa.thinkingExpanded"
+                        >
+                          <span class="qa-thinking-title">
+                            <a-spin v-if="qa.thinkingStreaming" :size="11" />
+                            {{ qa.thinkingStreaming ? '正在思考' : '思考过程' }}
+                          </span>
+                          <span>{{ qa.thinkingExpanded ? '收起' : '展开' }}</span>
+                        </button>
+                        <div v-show="qa.thinkingExpanded" class="qa-thinking-content">
+                          {{ qa.thinking }}
+                        </div>
+                      </div>
                       <div
                         v-if="qa.answer"
                         class="markdown-answer"
@@ -142,6 +159,11 @@
                       </div>
                       <div v-if="qa.streamError" class="qa-stream-error">
                         {{ qa.streamError }}
+                      </div>
+                      <div v-if="!qa.streaming" class="qa-message-actions">
+                        <button type="button" @click="askQuestion(qa.question)">
+                          重新生成
+                        </button>
                       </div>
                       <!-- 引用溯源 -->
                       <div v-if="qa.citations && qa.citations.length" class="qa-citations">
@@ -222,12 +244,39 @@
                     @keydown.enter.ctrl="handleAsk"
                   />
                   <div class="qa-input-actions">
-                    <span>Ctrl + Enter 提问</span>
+                    <div class="qa-input-options">
+                      <div
+                        class="qa-thinking-option"
+                        title="开启后会展示模型的思考过程，回答时间可能更长"
+                      >
+                        <a-switch
+                          v-model="thinkingEnabled"
+                          size="small"
+                          :disabled="qaLoading"
+                        />
+                        <button
+                          type="button"
+                          :disabled="qaLoading"
+                          @click="thinkingEnabled = !thinkingEnabled"
+                        >
+                          深度思考
+                        </button>
+                      </div>
+                      <span>Ctrl + Enter 发送</span>
+                    </div>
                     <a-button
+                      v-if="qaLoading"
+                      size="small"
+                      status="danger"
+                      @click="stopCurrentAnswer"
+                    >
+                      停止生成
+                    </a-button>
+                    <a-button
+                      v-else
                       type="primary"
                       size="small"
-                      :loading="qaLoading"
-                      :disabled="!question.trim() || qaLoading"
+                      :disabled="!question.trim()"
                       @click="handleAsk"
                     >
                       提问
@@ -491,10 +540,12 @@ import ProductHeader from '@/components/ProductHeader.vue'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   getPaper, getPaperSections, rebuildPaperSections,
-  listSessions, createSession, deleteSession, getSessionMessages, streamAskInSession,
+  listSessions, createSession, deleteSession, getSessionMessages,
+  getAnswerTask, resumeAnswerTask, stopAnswerTask, streamAskInSession,
   generateSummary, getSummaryCache,
   interpretPaper, getInterpretCache
 } from '@/api/paper'
+import type { AskStreamHandlers } from '@/api/paper'
 
 const route = useRoute()
 const router = useRouter()
@@ -533,8 +584,10 @@ const interpretLoading = ref(false)
 const question = ref('')
 const qaHistory = ref<any[]>([])
 const qaLoading = ref(false)
+const thinkingEnabled = ref(false)
 const qaHistoryRef = ref<HTMLElement | null>(null)
 let qaAbortController: AbortController | null = null
+const currentAnswerTaskId = ref('')
 const currentSessionId = ref<string>('')
 const sessions = ref<any[]>([])
 const showAllQuickQuestions = ref(false)
@@ -636,8 +689,12 @@ const switchSession = async (sessionId: string) => {
       question: m.question,
       answer: m.answer,
       citations: m.citations || [],
-      follow_up_questions: m.follow_up_questions || []
+      follow_up_questions: m.follow_up_questions || [],
+      thinking: '',
+      thinkingExpanded: false,
+      thinkingStreaming: false
     }))
+    await recoverActiveAnswer(sessionId)
   } catch (error) {
     Message.error('加载会话失败')
   }
@@ -882,7 +939,66 @@ const handleAsk = async () => {
   await askQuestion(question.value)
 }
 
-const askQuestion = async (q: string) => {
+const activeTaskStorageKey = (sessionId: string) => `paperai:active-answer:${sessionId}`
+
+const rememberActiveTask = (sessionId: string, taskId: string, taskQuestion: string) => {
+  localStorage.setItem(
+    activeTaskStorageKey(sessionId),
+    JSON.stringify({ taskId, question: taskQuestion })
+  )
+}
+
+const forgetActiveTask = (sessionId: string) => {
+  localStorage.removeItem(activeTaskStorageKey(sessionId))
+}
+
+const recoverActiveAnswer = async (sessionId: string) => {
+  if (qaLoading.value) return
+  const raw = localStorage.getItem(activeTaskStorageKey(sessionId))
+  if (!raw) return
+  try {
+    const saved = JSON.parse(raw)
+    if (!saved.taskId || !saved.question) {
+      forgetActiveTask(sessionId)
+      return
+    }
+    const task = await getAnswerTask(saved.taskId)
+    if (
+      task.status === 'completed'
+      && task.result?.message_id
+      && qaHistory.value.some(item => item.id === task.result.message_id)
+    ) {
+      forgetActiveTask(sessionId)
+      return
+    }
+    await askQuestion(saved.question, saved.taskId, Boolean(task.enable_thinking))
+  } catch (error: any) {
+    forgetActiveTask(sessionId)
+    if (error?.response?.status !== 404) {
+      console.error('恢复回答任务失败:', error)
+    }
+  }
+}
+
+const stopCurrentAnswer = async () => {
+  if (!currentAnswerTaskId.value) {
+    qaAbortController?.abort()
+    return
+  }
+  const pending = qaHistory.value.find(item => item.streaming)
+  if (pending) pending.status = '正在停止生成'
+  try {
+    await stopAnswerTask(currentAnswerTaskId.value)
+  } catch (error) {
+    Message.error('停止生成失败，请重试')
+  }
+}
+
+const askQuestion = async (
+  q: string,
+  resumeTaskId = '',
+  resumeThinking: boolean | null = null
+) => {
   const normalizedQuestion = q.trim()
   if (!normalizedQuestion || qaLoading.value) return
   if (!currentSessionId.value) {
@@ -890,6 +1006,7 @@ const askQuestion = async (q: string) => {
   }
 
   const sessionId = currentSessionId.value
+  const enableThinking = resumeThinking ?? thinkingEnabled.value
   const temporaryId = `stream-${Date.now()}`
   const pendingMessageData: any = {
     id: temporaryId,
@@ -899,18 +1016,25 @@ const askQuestion = async (q: string) => {
     follow_up_questions: [],
     streaming: true,
     status: '正在检索论文',
-    streamError: ''
+    streamError: '',
+    thinking: '',
+    thinkingExpanded: enableThinking,
+    thinkingStreaming: false
   }
   qaHistory.value.push(pendingMessageData)
   // Mutate the reactive proxy stored in the array, not the original raw object.
   const pendingMessage = qaHistory.value[qaHistory.value.length - 1]
   question.value = ''
   qaLoading.value = true
+  currentAnswerTaskId.value = resumeTaskId
   qaAbortController = new AbortController()
   let receivedAnswer = ''
+  let receivedReasoning = ''
   let displayedOffset = 0
   let typingTimer: number | null = null
+  let reasoningTimer: number | null = null
   let streamDoneData: any = null
+  let streamStopped = false
   let pendingCitations: any[] = []
   let resolveTyping: (() => void) | null = null
   const typingComplete = new Promise<void>(resolve => {
@@ -962,10 +1086,45 @@ const askQuestion = async (q: string) => {
     }, prefersReducedMotion ? 0 : 28)
   }
 
+  const scheduleReasoning = () => {
+    if (reasoningTimer !== null) return
+    reasoningTimer = window.setTimeout(() => {
+      reasoningTimer = null
+      const displayedLength = pendingMessage.thinking.length
+      const remaining = receivedReasoning.slice(displayedLength)
+      if (!remaining) return
+      const characters = Array.from(remaining)
+      const batchSize = prefersReducedMotion
+        ? characters.length
+        : characters.length > 160 ? 8 : characters.length > 60 ? 4 : 2
+      pendingMessage.thinking += characters.slice(0, batchSize).join('')
+      if (pendingMessage.thinking.length < receivedReasoning.length) {
+        scheduleReasoning()
+      }
+    }, prefersReducedMotion ? 0 : 28)
+  }
+
   try {
     await nextTick()
     if (qaHistoryRef.value) qaHistoryRef.value.scrollTop = qaHistoryRef.value.scrollHeight
-    await streamAskInSession(sessionId, normalizedQuestion, {
+    const handlers: AskStreamHandlers = {
+      onTask: (data: any) => {
+        currentAnswerTaskId.value = data.task_id
+        rememberActiveTask(sessionId, data.task_id, normalizedQuestion)
+      },
+      onReasoningDelta: text => {
+        receivedReasoning += text
+        pendingMessage.thinkingStreaming = true
+        pendingMessage.thinkingExpanded = true
+        pendingMessage.status = '正在深度思考'
+        scheduleReasoning()
+      },
+      onReasoningDone: () => {
+        pendingMessage.thinkingStreaming = false
+        window.setTimeout(() => {
+          pendingMessage.thinkingExpanded = false
+        }, prefersReducedMotion ? 0 : 220)
+      },
       onStatus: data => {
         pendingMessage.status = data.message
       },
@@ -985,9 +1144,60 @@ const askQuestion = async (q: string) => {
         } else {
           scheduleTyping()
         }
+      },
+      onStopped: () => {
+        streamStopped = true
+        streamDoneData = { stopped: true }
+        if (displayedOffset >= receivedAnswer.length) {
+          resolveTyping?.()
+          resolveTyping = null
+        } else {
+          scheduleTyping()
+        }
       }
-    }, qaAbortController.signal)
+    }
+
+    let reconnectAttempt = 0
+    while (true) {
+      try {
+        if (resumeTaskId || reconnectAttempt > 0) {
+          const taskId = currentAnswerTaskId.value || resumeTaskId
+          await resumeAnswerTask(
+            taskId,
+            receivedAnswer.length,
+            receivedReasoning.length,
+            handlers,
+            qaAbortController.signal
+          )
+        } else {
+          await streamAskInSession(
+            sessionId,
+            normalizedQuestion,
+            enableThinking,
+            handlers,
+            qaAbortController.signal
+          )
+        }
+        break
+      } catch (connectionError: any) {
+        const canReconnect = currentAnswerTaskId.value
+          && connectionError?.name !== 'AbortError'
+          && connectionError?.retriable !== false
+          && reconnectAttempt < 3
+        if (!canReconnect) throw connectionError
+        reconnectAttempt += 1
+        pendingMessage.status = `网络中断，正在恢复连接（${reconnectAttempt}/3）`
+        await new Promise(resolve => setTimeout(resolve, reconnectAttempt * 800))
+      }
+    }
     await typingComplete
+    forgetActiveTask(sessionId)
+    if (streamStopped) {
+      pendingMessage.streaming = false
+      pendingMessage.status = ''
+      pendingMessage.streamError = '回答已停止'
+      return
+    }
     pendingMessage.citations = pendingCitations
     pendingMessage.id = streamDoneData.message_id
     pendingMessage.streaming = false
@@ -998,18 +1208,23 @@ const askQuestion = async (q: string) => {
     await loadSessions()
   } catch (error: any) {
     if (typingTimer !== null) window.clearTimeout(typingTimer)
+    if (reasoningTimer !== null) window.clearTimeout(reasoningTimer)
     updateDisplayedAnswer(receivedAnswer)
+    pendingMessage.thinking = receivedReasoning
+    pendingMessage.thinkingStreaming = false
     pendingMessage.streaming = false
     pendingMessage.streamError = error?.name === 'AbortError'
       ? '回答已停止'
       : (error?.message || '回答生成失败，请重试')
+    if (error?.retriable === false) forgetActiveTask(sessionId)
+    if (!question.value) question.value = normalizedQuestion
     if (!receivedAnswer) {
       qaHistory.value = qaHistory.value.filter(item => item.id !== temporaryId)
-      if (!question.value) question.value = normalizedQuestion
     }
     if (error?.name !== 'AbortError') Message.error(pendingMessage.streamError)
   } finally {
     qaAbortController = null
+    currentAnswerTaskId.value = ''
     qaLoading.value = false
   }
 }
@@ -1353,6 +1568,44 @@ watch(interpretType, () => {
   min-width: 0;
 }
 
+.qa-thinking {
+  margin-bottom: 9px;
+  border: 1px solid var(--pa-border);
+  border-radius: 7px;
+  background: var(--pa-surface-soft);
+}
+
+.qa-thinking-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--pa-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.qa-thinking-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--pa-text);
+  font-weight: 600;
+}
+
+.qa-thinking-content {
+  max-height: 220px;
+  overflow: auto;
+  padding: 0 9px 9px;
+  color: var(--pa-text);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 .markdown-answer {
   margin-bottom: 8px;
   color: var(--pa-ink);
@@ -1465,6 +1718,31 @@ watch(interpretType, () => {
   font-size: 12px;
 }
 
+.qa-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.qa-message-actions button {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--pa-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.qa-message-actions button:hover {
+  color: var(--pa-primary);
+}
+
+.qa-message-actions button:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
+}
+
 .markdown-answer.streaming::after {
   display: inline-block;
   width: 2px;
@@ -1554,7 +1832,62 @@ watch(interpretType, () => {
   margin-top: 6px;
 }
 
-.qa-input-actions > span {
+.qa-input-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.qa-thinking-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--pa-text);
+  font-size: 11px;
+}
+
+.qa-thinking-option :deep(.arco-switch) {
+  min-width: 30px;
+  background-color: oklch(0.72 0.018 50) !important;
+  box-shadow: inset 0 0 0 1px oklch(0.58 0.02 50 / 0.35);
+}
+
+.qa-thinking-option :deep(.arco-switch-checked) {
+  background-color: var(--pa-primary) !important;
+  box-shadow: none;
+}
+
+.qa-thinking-option :deep(.arco-switch-handle) {
+  background-color: white !important;
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.22);
+}
+
+.qa-thinking-option :deep(.arco-switch:focus-visible) {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
+}
+
+.qa-thinking-option button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.qa-thinking-option button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.qa-thinking-option button:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
+}
+
+.qa-input-options > span {
   font-size: 11px;
   color: var(--pa-muted);
 }

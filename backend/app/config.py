@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "PaperAI"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
-    DATABASE_URL: str = "sqlite+aiosqlite:///./paperai.db"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:paperai-local@localhost:5432/paperai"
     REDIS_URL: str = "redis://localhost:6379/0"
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
     ALGORITHM: str = "HS256"

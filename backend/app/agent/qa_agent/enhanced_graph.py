@@ -198,6 +198,26 @@ def _enrich_citations(citations: list, chunks: list) -> list:
     return enriched
 
 
+def build_deterministic_citations(answer: str, chunks: list) -> list:
+    """Resolve model source markers to exact retrieval metadata."""
+    source_indexes = []
+    for value in re.findall(r"\[S(\d+)\]", answer or "", flags=re.IGNORECASE):
+        index = int(value) - 1
+        if 0 <= index < len(chunks) and index not in source_indexes:
+            source_indexes.append(index)
+
+    citations = []
+    for index in source_indexes:
+        chunk = chunks[index]
+        content = str(chunk.get("content") or "").strip()
+        citations.append({
+            "source_id": f"S{index + 1}",
+            "section": chunk.get("section", "未知章节"),
+            "text": _best_source_excerpt("", content),
+        })
+    return _enrich_citations(citations, chunks)
+
+
 def calculate_evidence_confidence(
     answer: str,
     citations: list,
@@ -422,10 +442,6 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
     
     context = "\n\n---\n\n".join(context_parts)
     
-    # 提取所有可用的章节名，让 AI 只能从这些中选择
-    available_sections = [c.get('section', '未知章节') for c in chunks]
-    sections_list = "、".join(set(available_sections))
-    
     # 构建历史对话提示
     history_prompt = ""
     if history_context:
@@ -452,11 +468,11 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
     prompt = f"""
     请根据以下论文内容回答问题。要求：
     1. 回答准确、完整、专业
-    2. 在回答中用 [章节名] 标注引用来源
+    2. 每个关键结论后只标注对应来源编号，如 [S1]、[S2]
     3. 如果内容不足以回答问题，请明确说明"论文中未提及"
     4. 回答要有条理，使用分点或分段
-    5. **重要**：citations 中必须填写对应上下文的 source_id（如 S1），section 字段必须严格使用以下章节名之一：{sections_list}
-    6. answer 使用 Markdown 排版：段落之间空一行；并列内容每项单独一行；适合比较的数据使用表格。不要把编号、项目符号和多个数据项挤在同一行。
+    5. 只能使用上下文中提供的来源编号，不要生成章节、页码、引用原文或 JSON
+    6. 使用 Markdown 排版：段落之间空一行；并列内容每项单独一行；适合比较的数据使用表格。不要把编号、项目符号和多个数据项挤在同一行。
     {table_prompt}
     {history_prompt}
     问题：{question}
@@ -464,40 +480,18 @@ async def generate_answer(state: QAAgentState) -> QAAgentState:
     相关内容：
     {context}
     
-    请返回 JSON 格式：
-    {{
-        "answer": "回答内容，在关键信息后标注 [章节名]",
-        "citations": [
-            {{"source_id": "对应来源编号，如S1", "section": "必须从可用章节名中选择", "text": "原文关键句（至少30字，完整保留关键信息）", "position": "章节中的位置描述"}}
-        ]
-    }}
+    直接返回回答正文，不要使用 JSON。
     """
     
     try:
         response = await llm.agenerate(
             [prompt],
-            json_mode=True,
+            json_mode=False,
             enable_thinking=needs_deep_thinking(question)
         )
-        text = response.generations[0][0].text.strip()
-        try:
-            result = safe_json_loads(text)
-        except json.JSONDecodeError as json_err:
-            logger.warning(f"⚠️ JSON 解析失败，尝试修复: {json_err}")
-            # 尝试提取 answer 字段
-            answer_match = re.search(r'"answer"\s*:\s*"(.*?)"\s*,\s*"citations"', text, re.DOTALL)
-            if answer_match:
-                answer_text = answer_match.group(1)
-                # 处理转义的引号
-                answer_text = answer_text.replace('\\"', '"')
-                result = {"answer": answer_text, "citations": []}
-            else:
-                # 如果无法提取，直接使用原始文本作为回答
-                logger.warning("⚠️ 无法提取 JSON，直接使用原始文本")
-                result = {"answer": text, "citations": []}
-        
-        state['answer'] = result.get('answer', '暂无回答')
-        state['citations'] = _enrich_citations(result.get('citations', []), chunks)
+        answer = response.generations[0][0].text.strip()
+        state['answer'] = answer or '暂无回答'
+        state['citations'] = build_deterministic_citations(answer, chunks)
         state['sources'] = [c.get('section', '') for c in state['citations']]
         logger.info(f"✅ 回答生成成功，长度：{len(state['answer'])}")
     except Exception as e:

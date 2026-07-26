@@ -25,13 +25,18 @@ class PaperUploadResult:
     paper_id: str
     file_path: str
     file_size: int
-    raw_text: str
-    text_extraction_method: str
     timings: dict[str, float]
 
 
+@dataclass(frozen=True)
+class PaperTextResult:
+    raw_text: str
+    extraction_method: str
+    elapsed_seconds: float
+
+
 class PaperUploadService:
-    """Stable boundary for the synchronous intake portion of an upload."""
+    """Stable boundary for upload intake and deferred text extraction."""
 
     async def receive(
         self,
@@ -48,25 +53,30 @@ class PaperUploadService:
         file_size = await save_validated_pdf(upload, file_path, max_upload_size)
         timings["file_save"] = time.perf_counter() - started_at
 
+        return PaperUploadResult(
+            paper_id=paper_id,
+            file_path=file_path,
+            file_size=file_size,
+            timings=timings,
+        )
+
+    async def extract_text(self, file_path: str) -> PaperTextResult:
+        """Extract PDF text outside the request path."""
         started_at = time.perf_counter()
         try:
             raw_text, extraction_method = await asyncio.to_thread(extract_pdf_text, file_path)
         except Exception as exc:
             self._remove_file(file_path)
             raise PaperTextExtractionError(str(exc)) from exc
-        timings["initial_text_extraction"] = time.perf_counter() - started_at
 
         if not raw_text.strip():
             self._remove_file(file_path)
             raise PaperTextMissingError("无法从 PDF 中提取文字")
 
-        return PaperUploadResult(
-            paper_id=paper_id,
-            file_path=file_path,
-            file_size=file_size,
+        return PaperTextResult(
             raw_text=raw_text,
-            text_extraction_method=extraction_method,
-            timings=timings,
+            extraction_method=extraction_method,
+            elapsed_seconds=time.perf_counter() - started_at,
         )
 
     @staticmethod

@@ -18,11 +18,6 @@ class AsyncUpload:
 
 
 def test_upload_service_returns_stable_intake_result(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "app.services.paper_upload.extract_pdf_text",
-        lambda path: ("论文正文", "test-parser"),
-    )
-
     result = asyncio.run(PaperUploadService().receive(
         upload=AsyncUpload(b"%PDF-1.7\ncontent"),
         paper_id="paper-1",
@@ -31,10 +26,23 @@ def test_upload_service_returns_stable_intake_result(tmp_path, monkeypatch):
     ))
 
     assert result.paper_id == "paper-1"
-    assert result.raw_text == "论文正文"
-    assert result.text_extraction_method == "test-parser"
-    assert set(result.timings) == {"file_save", "initial_text_extraction"}
+    assert set(result.timings) == {"file_save"}
     assert (tmp_path / "paper-1.pdf").exists()
+
+
+def test_upload_service_extracts_text_in_deferred_stage(tmp_path, monkeypatch):
+    paper_path = tmp_path / "paper-1.pdf"
+    paper_path.write_bytes(b"%PDF-1.7\ncontent")
+    monkeypatch.setattr(
+        "app.services.paper_upload.extract_pdf_text",
+        lambda path: ("论文正文", "test-parser"),
+    )
+
+    result = asyncio.run(PaperUploadService().extract_text(str(paper_path)))
+
+    assert result.raw_text == "论文正文"
+    assert result.extraction_method == "test-parser"
+    assert result.elapsed_seconds >= 0
 
 
 def test_core_structure_service_keeps_parser_and_outline_stages_separate(monkeypatch):

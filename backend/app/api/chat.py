@@ -1,14 +1,16 @@
 """对话历史和缓存 API 模块"""
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import Optional
+from typing import Any, AsyncIterator, Optional
 from datetime import datetime
+from dataclasses import dataclass, field
 import asyncio
 import json
 import logging
 import re
+import uuid
 
 from app.database import AsyncSessionLocal, get_db
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
@@ -16,21 +18,153 @@ from app.models.paper import Paper, Section
 from app.api.auth import decode_token
 from app.api.dependencies import get_current_user_id
 from app.agent.qa_agent.enhanced_graph import (
-    _enrich_citations,
+    build_deterministic_citations,
     calculate_evidence_confidence,
     detect_metadata_intent,
     generate_follow_up_questions,
-    needs_deep_thinking,
     run_enhanced_qa_agent,
 )
 from app.agent.summarizer.graph import run_summarizer_agent
 from app.rag.knowledge_base import get_knowledge_base
 from app.rag.table_retrieval import get_exact_table_chunks, merge_retrieval_chunks
 from app.llm.client import get_llm_client
+from app.utils.background_tasks import spawn_background_task
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/chat")
+
+
+@dataclass
+class _AnswerTask:
+    task_id: str
+    session_id: str
+    user_id: str
+    question: str
+    enable_thinking: bool = False
+    status: str = "running"
+    stage: str = "queued"
+    stage_message: str = "正在准备回答"
+    answer: str = ""
+    reasoning: str = ""
+    reasoning_done: bool = False
+    citations: list = field(default_factory=list)
+    result: dict = field(default_factory=dict)
+    error: str = ""
+
+
+_answer_tasks: dict[str, _AnswerTask] = {}
+_answer_task_handles: dict[str, asyncio.Task] = {}
+
+
+def _decode_sse_event(block: str) -> tuple[str, dict]:
+    event = "message"
+    data_lines = []
+    for line in block.splitlines():
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    return event, json.loads("\n".join(data_lines) or "{}")
+
+
+async def _consume_answer_events(
+    task: _AnswerTask,
+    source: AsyncIterator[str],
+) -> None:
+    try:
+        async for block in source:
+            event, payload = _decode_sse_event(block)
+            if event == "status":
+                task.stage = payload.get("stage", task.stage)
+                task.stage_message = payload.get("message", task.stage_message)
+                if task.stage == "organizing_citations":
+                    # Keep this short stage observable without delaying generation.
+                    await asyncio.sleep(0.12)
+            elif event == "answer_delta":
+                task.answer += payload.get("text", "")
+            elif event == "reasoning_delta":
+                task.reasoning += payload.get("text", "")
+            elif event == "reasoning_done":
+                task.reasoning_done = True
+            elif event == "citations":
+                task.citations = payload.get("items", [])
+            elif event == "done":
+                task.result = payload
+                task.status = "completed"
+                task.stage = "completed"
+                task.stage_message = "回答完成"
+            elif event == "error":
+                task.status = "failed"
+                task.error = payload.get("message", "回答生成失败")
+        if task.status == "running":
+            task.status = "failed"
+            task.error = f"{task.stage_message}时连接意外结束"
+    except asyncio.CancelledError:
+        task.status = "stopped"
+        task.stage = "stopped"
+        task.stage_message = "回答已停止"
+    except Exception:
+        logger.exception("后台回答任务异常 task_id=%s", task.task_id)
+        task.status = "failed"
+        task.error = f"{task.stage_message}时发生异常"
+    finally:
+        _answer_task_handles.pop(task.task_id, None)
+
+
+async def _stream_answer_task(
+    task: _AnswerTask,
+    offset: int = 0,
+    reasoning_offset: int = 0,
+) -> AsyncIterator[str]:
+    sent = max(0, min(offset, len(task.answer)))
+    reasoning_sent = max(0, min(reasoning_offset, len(task.reasoning)))
+    reasoning_done_sent = False
+    last_stage = ""
+    yield _sse_event("task", {
+        "task_id": task.task_id,
+        "question": task.question,
+        "status": task.status,
+        "answer_length": len(task.answer),
+        "reasoning_length": len(task.reasoning),
+        "enable_thinking": task.enable_thinking,
+    })
+    while True:
+        if task.stage != last_stage:
+            last_stage = task.stage
+            yield _sse_event("status", {
+                "stage": task.stage,
+                "message": task.stage_message,
+            })
+        if reasoning_sent < len(task.reasoning):
+            reasoning_delta = task.reasoning[reasoning_sent:]
+            reasoning_sent = len(task.reasoning)
+            yield _sse_event("reasoning_delta", {"text": reasoning_delta})
+        if task.reasoning_done and not reasoning_done_sent:
+            reasoning_done_sent = True
+            yield _sse_event("reasoning_done", {})
+        if sent < len(task.answer):
+            delta = task.answer[sent:]
+            sent = len(task.answer)
+            yield _sse_event("answer_delta", {"text": delta})
+
+        if task.status == "completed":
+            yield _sse_event("citations", {"items": task.citations})
+            yield _sse_event("done", task.result)
+            return
+        if task.status == "stopped":
+            yield _sse_event("stopped", {
+                "message": "回答已停止",
+                "answer_length": len(task.answer),
+            })
+            return
+        if task.status == "failed":
+            yield _sse_event("error", {
+                "stage": task.stage,
+                "message": task.error or f"{task.stage_message}失败",
+            })
+            return
+        await asyncio.sleep(0.06)
 
 
 def _sse_event(event: str, data: dict) -> str:
@@ -55,11 +189,13 @@ def _streaming_prompt(question: str, chunks: list, history_context: str) -> str:
 请只依据下方论文资料回答用户问题。
 
 要求：
-1. 直接输出 Markdown 正文，不要输出 JSON，不要写“答案：”。
-2. 回答准确、有条理；论文未提及时明确说明，不得自行补全。
-3. 每个关键结论后必须标注对应来源编号，如 [S1]、[S2]；只能使用已提供的来源编号。
-4. 段落之间空一行，并列内容分行；比较数据适合时使用 Markdown 表格。
-5. 表格数据必须逐项核对，缺失值写“-”，不要推测。
+1. 推理过程和最终回答均使用简体中文。专业术语、模型名称、变量、公式和通用缩写可保留英文；英文术语首次出现时，适合的情况下补充中文含义。
+2. 即使用户问题、历史对话或论文资料包含英文，也不要因此切换为整段英文推理或回答。
+3. 直接输出 Markdown 正文，不要输出 JSON，不要写“答案：”。
+4. 回答准确、有条理；论文未提及时明确说明，不得自行补全。
+5. 每个关键结论后必须标注对应来源编号，如 [S1]、[S2]；只能使用已提供的来源编号。
+6. 段落之间空一行，并列内容分行；比较数据适合时使用 Markdown 表格。
+7. 表格数据必须逐项核对，缺失值写“-”，不要推测。
 {history}
 【用户问题】
 {question}
@@ -70,21 +206,7 @@ def _streaming_prompt(question: str, chunks: list, history_context: str) -> str:
 
 
 def _citations_from_streamed_answer(answer: str, chunks: list) -> list:
-    source_indexes = []
-    for value in re.findall(r"\[S(\d+)\]", answer or "", flags=re.IGNORECASE):
-        index = int(value) - 1
-        if 0 <= index < len(chunks) and index not in source_indexes:
-            source_indexes.append(index)
-
-    citations = []
-    for index in source_indexes:
-        chunk = chunks[index]
-        citations.append({
-            "source_id": f"S{index + 1}",
-            "section": chunk.get("section", "未知章节"),
-            "text": str(chunk.get("content", "")).strip()[:180],
-        })
-    return _enrich_citations(citations, chunks)
+    return build_deterministic_citations(answer, chunks)
 
 
 def _fallback_session_title(question: str) -> str:
@@ -425,8 +547,10 @@ async def stream_ask_in_session(
     question = str(data.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
+    enable_thinking = bool(data.get("enable_thinking", False))
 
     async def event_stream():
+        current_stage = "retrieving"
         try:
             yield _sse_event("status", {
                 "stage": "retrieving",
@@ -499,6 +623,7 @@ async def stream_ask_in_session(
                     yield _sse_event("answer_delta", {"text": answer})
                     citations = []
                 else:
+                    current_stage = "generating"
                     yield _sse_event("status", {
                         "stage": "generating",
                         "message": "正在组织回答",
@@ -507,15 +632,31 @@ async def stream_ask_in_session(
                     prompt = _streaming_prompt(question, chunks, history_context)
                     answer_parts = []
                     llm = get_llm_client()
-                    async for delta in llm.astream_text(
+                    reasoning_started = False
+                    reasoning_finished = False
+                    async for content_kind, delta in llm.astream_content(
                         prompt,
-                        enable_thinking=needs_deep_thinking(question),
+                        enable_thinking=enable_thinking,
                     ):
+                        if content_kind == "reasoning":
+                            reasoning_started = True
+                            yield _sse_event("reasoning_delta", {"text": delta})
+                            continue
+                        if reasoning_started and not reasoning_finished:
+                            reasoning_finished = True
+                            yield _sse_event("reasoning_done", {})
                         answer_parts.append(delta)
                         yield _sse_event("answer_delta", {"text": delta})
+                    if reasoning_started and not reasoning_finished:
+                        yield _sse_event("reasoning_done", {})
                     answer = "".join(answer_parts).strip()
                     if not answer:
                         raise RuntimeError("模型未返回回答内容")
+                    current_stage = "organizing_citations"
+                    yield _sse_event("status", {
+                        "stage": "organizing_citations",
+                        "message": "正在整理引用",
+                    })
                     citations = _citations_from_streamed_answer(answer, chunks)
 
                 evidence_confidence = calculate_evidence_confidence(
@@ -564,19 +705,130 @@ async def stream_ask_in_session(
             raise
         except Exception:
             logger.exception("流式回答失败 session_id=%s", session_id)
+            stage_messages = {
+                "retrieving": "检索论文失败",
+                "generating": "生成回答失败",
+                "organizing_citations": "整理引用失败",
+            }
             yield _sse_event("error", {
-                "message": "回答生成失败，请稍后重试",
+                "stage": current_stage,
+                "message": stage_messages.get(current_stage, "回答生成失败"),
             })
 
+    active_task = next(
+        (
+            task for task in _answer_tasks.values()
+            if task.session_id == session_id
+            and task.user_id == user_id
+            and task.question == question
+            and task.enable_thinking == enable_thinking
+            and task.status == "running"
+        ),
+        None,
+    )
+    if active_task is None:
+        if len(_answer_tasks) >= 200:
+            removable = next(
+                (key for key, task in _answer_tasks.items() if task.status != "running"),
+                None,
+            )
+            if removable:
+                _answer_tasks.pop(removable, None)
+        active_task = _AnswerTask(
+            task_id=str(uuid.uuid4()),
+            session_id=session_id,
+            user_id=user_id,
+            question=question,
+            enable_thinking=enable_thinking,
+        )
+        _answer_tasks[active_task.task_id] = active_task
+        handle = spawn_background_task(
+            _consume_answer_events(active_task, event_stream()),
+            name=f"chat-answer-{active_task.task_id}",
+        )
+        _answer_task_handles[active_task.task_id] = handle
+
     return StreamingResponse(
-        event_stream(),
+        _stream_answer_task(active_task),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "X-Chat-Task-Id": active_task.task_id,
         },
     )
+
+
+@router.get("/answer-tasks/{task_id}")
+async def get_answer_task(
+    task_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = await get_current_user_id(authorization, db)
+    task = _answer_tasks.get(task_id)
+    if not task or task.user_id != user_id:
+        raise HTTPException(status_code=404, detail="回答任务不存在或已过期")
+    return {
+        "task_id": task.task_id,
+        "session_id": task.session_id,
+        "question": task.question,
+        "enable_thinking": task.enable_thinking,
+        "status": task.status,
+        "stage": task.stage,
+        "message": task.stage_message,
+        "answer": task.answer,
+        "reasoning": task.reasoning,
+        "reasoning_done": task.reasoning_done,
+        "citations": task.citations,
+        "result": task.result,
+        "error": task.error,
+    }
+
+
+@router.get("/answer-tasks/{task_id}/stream")
+async def resume_answer_task(
+    task_id: str,
+    offset: int = Query(0, ge=0),
+    reasoning_offset: int = Query(0, ge=0),
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = await get_current_user_id(authorization, db)
+    task = _answer_tasks.get(task_id)
+    if not task or task.user_id != user_id:
+        raise HTTPException(status_code=404, detail="回答任务不存在或已过期")
+    return StreamingResponse(
+        _stream_answer_task(task, offset, reasoning_offset),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Chat-Task-Id": task.task_id,
+        },
+    )
+
+
+@router.post("/answer-tasks/{task_id}/stop")
+async def stop_answer_task(
+    task_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = await get_current_user_id(authorization, db)
+    task = _answer_tasks.get(task_id)
+    if not task or task.user_id != user_id:
+        raise HTTPException(status_code=404, detail="回答任务不存在或已过期")
+    handle = _answer_task_handles.get(task_id)
+    if handle and not handle.done():
+        handle.cancel()
+    elif task.status == "running":
+        task.status = "stopped"
+        task.stage = "stopped"
+        task.stage_message = "回答已停止"
+    return {"task_id": task_id, "status": "stopping"}
 
 
 # ==================== 摘要缓存 ====================

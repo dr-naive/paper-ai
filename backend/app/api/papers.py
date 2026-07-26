@@ -9,6 +9,7 @@ import uuid
 import logging
 import asyncio
 import time
+from email.utils import formatdate, parsedate_to_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +42,41 @@ from app.services.paper_indexing import (
 from app.services.paper_outline import enrich_sections_with_pdf as _enrich_sections_with_pdf
 from app.services.paper_core_processing import paper_core_processing_service
 from app.services.paper_upload import (
-    PaperTextExtractionError,
-    PaperTextMissingError,
     paper_upload_service,
 )
 
 router = APIRouter(prefix="/api/v1/papers")
+
+
+def _build_pdf_cache_headers(file_path: str, paper_id: str) -> Dict[str, str]:
+    stat = os.stat(file_path)
+    etag = f'"{paper_id}-{stat.st_size:x}-{stat.st_mtime_ns:x}"'
+    return {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{paper_id}.pdf"',
+        "Cache-Control": "private, max-age=86400, immutable",
+        "ETag": etag,
+        "Last-Modified": formatdate(stat.st_mtime, usegmt=True),
+        "Vary": "Authorization",
+    }
+
+
+def _pdf_not_modified(
+    headers: Dict[str, str],
+    if_none_match: Optional[str],
+    if_modified_since: Optional[str],
+) -> bool:
+    if if_none_match:
+        candidates = {value.strip() for value in if_none_match.split(",")}
+        return "*" in candidates or headers["ETag"] in candidates
+    if if_modified_since:
+        try:
+            cached_at = parsedate_to_datetime(if_modified_since).timestamp()
+            modified_at = parsedate_to_datetime(headers["Last-Modified"]).timestamp()
+            return modified_at <= cached_at
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return False
 
 
 def _get_paper_media_state(paper_id: str) -> Dict[str, Any]:
@@ -157,6 +187,8 @@ async def get_paper_pdf(
     token: str = Query(None),
     authorization: str = Header(None),
     range_header: str = Header(None, alias="Range"),
+    if_none_match: str = Header(None, alias="If-None-Match"),
+    if_modified_since: str = Header(None, alias="If-Modified-Since"),
     db: AsyncSession = Depends(get_db),
 ):
     """Serve the PDF file for a paper. Supports token via query param for iframe embedding."""
@@ -177,14 +209,13 @@ async def get_paper_pdf(
     if not paper.pdf_path or not os.path.exists(paper.pdf_path):
         raise HTTPException(status_code=404, detail="PDF 文件不存在")
     
-    safe_filename = f"{paper_id}.pdf"
-    
     file_size = os.path.getsize(paper.pdf_path)
-    common_headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Disposition": f'inline; filename="{safe_filename}"',
-        "Cache-Control": "private, max-age=3600",
-    }
+    common_headers = _build_pdf_cache_headers(paper.pdf_path, paper_id)
+
+    if not range_header and _pdf_not_modified(
+        common_headers, if_none_match, if_modified_since
+    ):
+        return Response(status_code=304, headers=common_headers)
 
     if range_header:
         byte_range = _parse_byte_range(range_header, file_size)
@@ -388,7 +419,7 @@ async def _process_paper_async(
     paper_id: str, 
     file_path: str, 
     user_id: str, 
-    raw_text: str,
+    raw_text: Optional[str] = None,
     initial_timings: Optional[Dict[str, float]] = None,
     pipeline_started_at: Optional[float] = None,
     initial_counts: Optional[Dict[str, Any]] = None,
@@ -419,6 +450,19 @@ async def _process_paper_async(
         )
 
     try:
+        if raw_text is None:
+            update_task(task_id, status="processing", progress=5, message="正在提取 PDF 文字...")
+            text_extraction_started_at = time.perf_counter()
+            text_result = await paper_upload_service.extract_text(file_path)
+            raw_text = text_result.raw_text
+            counts["text_extraction_method"] = text_result.extraction_method
+            finish_stage("initial_text_extraction", text_extraction_started_at)
+            logger.info(
+                "📝 后台文本提取完成，方式: %s，长度: %s",
+                text_result.extraction_method,
+                len(raw_text),
+            )
+
         update_task(task_id, status="processing", progress=10, message="正在解析论文结构...")
         
         # 解析论文结构
@@ -975,7 +1019,7 @@ async def _schedule_process_paper(
     paper_id: str,
     file_path: str,
     user_id: str,
-    raw_text: str,
+    raw_text: Optional[str] = None,
     initial_timings: Optional[Dict[str, float]] = None,
     pipeline_started_at: Optional[float] = None,
     initial_counts: Optional[Dict[str, Any]] = None,
@@ -1009,38 +1053,25 @@ async def upload_paper(
     
     paper_id = str(uuid.uuid4())
     original_filename = file.filename
-    try:
-        upload_result = await paper_upload_service.receive(
-            upload=file,
-            paper_id=paper_id,
-            storage_path=settings.FILE_STORAGE_PATH,
-            max_upload_size=settings.MAX_UPLOAD_SIZE,
-        )
-    except PaperTextExtractionError as exc:
-        logger.error("❌ PDF 解析失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"PDF 解析失败：{exc}") from exc
-    except PaperTextMissingError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    upload_result = await paper_upload_service.receive(
+        upload=file,
+        paper_id=paper_id,
+        storage_path=settings.FILE_STORAGE_PATH,
+        max_upload_size=settings.MAX_UPLOAD_SIZE,
+    )
 
     initial_timings.update(upload_result.timings)
     file_path = upload_result.file_path
-    raw_text = upload_result.raw_text
-    text_extraction_method = upload_result.text_extraction_method
     logger.info(
         "📄 文件名: %s, 大小: %.2fMB",
         original_filename,
         upload_result.file_size / 1024 / 1024,
     )
     logger.info("💾 文件已保存: %s", file_path)
-    logger.info(
-        "📝 提取文本完成，方式: %s，长度: %s",
-        text_extraction_method,
-        len(raw_text),
-    )
     
     # 创建任务
     task = create_task(paper_id, user_id)
-    initial_counts = {"text_extraction_method": text_extraction_method}
+    initial_counts = {"original_filename": original_filename}
     update_task(
         task.task_id,
         details=_build_timing_details(
@@ -1058,7 +1089,7 @@ async def upload_paper(
             paper_id,
             file_path,
             user_id,
-            raw_text,
+            None,
             initial_timings,
             pipeline_started_at,
             initial_counts,

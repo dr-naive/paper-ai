@@ -1,6 +1,12 @@
+import asyncio
+import json
+
 from app.api.chat import (
+    _AnswerTask,
     _citations_from_streamed_answer,
+    _consume_answer_events,
     _sse_event,
+    _stream_answer_task,
     _streaming_prompt,
     router,
 )
@@ -22,6 +28,8 @@ def test_streaming_prompt_requires_grounded_inline_source_ids():
     )
 
     assert "直接输出 Markdown 正文" in prompt
+    assert "推理过程和最终回答均使用简体中文" in prompt
+    assert "不要因此切换为整段英文推理或回答" in prompt
     assert "[来源 S1]" in prompt
     assert "每个关键结论后必须标注" in prompt
     assert "历史对话" in prompt
@@ -57,3 +65,37 @@ def test_stream_route_is_registered():
     paths = {route.path for route in router.routes}
 
     assert "/api/v1/chat/sessions/{session_id}/ask/stream" in paths
+    assert "/api/v1/chat/answer-tasks/{task_id}/stream" in paths
+    assert "/api/v1/chat/answer-tasks/{task_id}/stop" in paths
+
+
+def test_background_answer_task_can_be_resumed_from_offset():
+    task = _AnswerTask(
+        task_id="task-1",
+        session_id="session-1",
+        user_id="user-1",
+        question="测试问题",
+    )
+
+    async def source():
+        yield _sse_event("status", {"stage": "generating", "message": "正在生成回答"})
+        yield _sse_event("reasoning_delta", {"text": "先分析"})
+        yield _sse_event("reasoning_done", {})
+        yield _sse_event("answer_delta", {"text": "前半段"})
+        yield _sse_event("answer_delta", {"text": "后半段"})
+        yield _sse_event("citations", {"items": [{"source_id": "S1"}]})
+        yield _sse_event("done", {"message_id": "message-1"})
+
+    async def run():
+        await _consume_answer_events(task, source())
+        return [event async for event in _stream_answer_task(task, offset=3)]
+
+    events = asyncio.run(run())
+    delta_blocks = [block for block in events if block.startswith("event: answer_delta")]
+
+    assert task.status == "completed"
+    assert task.reasoning == "先分析"
+    assert task.reasoning_done is True
+    assert task.answer == "前半段后半段"
+    assert len(delta_blocks) == 1
+    assert json.loads(delta_blocks[0].split("data: ", 1)[1])["text"] == "后半段"

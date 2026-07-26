@@ -54,33 +54,20 @@ export const askInSession = (sessionId: string, question: string) =>
   request.post(`/api/v1/chat/sessions/${sessionId}/ask`, { question })
 
 export interface AskStreamHandlers {
+  onTask?: (data: { task_id: string; question?: string; status?: string; enable_thinking?: boolean }) => void
   onStatus?: (data: { stage: string; message: string; source_count?: number }) => void
+  onReasoningDelta?: (text: string) => void
+  onReasoningDone?: () => void
   onDelta?: (text: string) => void
   onCitations?: (items: any[]) => void
   onDone?: (data: any) => void
+  onStopped?: (data: { message: string; answer_length: number }) => void
 }
 
-export const streamAskInSession = async (
-  sessionId: string,
-  question: string,
+const consumeAskStream = async (
+  response: Response,
   handlers: AskStreamHandlers,
-  signal?: AbortSignal
 ) => {
-  const token = localStorage.getItem('access_token')
-  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
-  const response = await fetch(
-    `${baseURL}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/ask/stream`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({ question }),
-      signal
-    }
-  )
-
   if (response.status === 401) {
     localStorage.removeItem('access_token')
     window.location.href = '/login'
@@ -88,9 +75,14 @@ export const streamAskInSession = async (
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))
-    throw new Error(payload.detail || `请求失败（${response.status}）`)
+    const error: any = new Error(payload.detail || `请求失败（${response.status}）`)
+    error.retriable = false
+    error.status = response.status
+    throw error
   }
   if (!response.body) throw new Error('当前浏览器不支持流式回答')
+  const headerTaskId = response.headers.get('X-Chat-Task-Id')
+  if (headerTaskId) handlers.onTask?.({ task_id: headerTaskId })
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -105,11 +97,20 @@ export const streamAskInSession = async (
     })
     if (!dataLines.length) return
     const payload = JSON.parse(dataLines.join('\n'))
+    if (event === 'task') handlers.onTask?.(payload)
     if (event === 'status') handlers.onStatus?.(payload)
+    if (event === 'reasoning_delta') handlers.onReasoningDelta?.(payload.text || '')
+    if (event === 'reasoning_done') handlers.onReasoningDone?.()
     if (event === 'answer_delta') handlers.onDelta?.(payload.text || '')
     if (event === 'citations') handlers.onCitations?.(payload.items || [])
     if (event === 'done') handlers.onDone?.(payload)
-    if (event === 'error') throw new Error(payload.message || '回答生成失败')
+    if (event === 'stopped') handlers.onStopped?.(payload)
+    if (event === 'error') {
+      const error: any = new Error(payload.message || '回答生成失败')
+      error.retriable = false
+      error.stage = payload.stage
+      throw error
+    }
   }
 
   while (true) {
@@ -122,6 +123,57 @@ export const streamAskInSession = async (
   }
   if (buffer.trim()) dispatch(buffer)
 }
+
+const chatFetch = (path: string, init: RequestInit = {}) => {
+  const token = localStorage.getItem('access_token')
+  const baseURL = import.meta.env.VITE_API_BASE_URL || ''
+  return fetch(`${baseURL}${path}`, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers || {})
+    }
+  })
+}
+
+export const streamAskInSession = async (
+  sessionId: string,
+  question: string,
+  enableThinking: boolean,
+  handlers: AskStreamHandlers,
+  signal?: AbortSignal
+) => {
+  const response = await chatFetch(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/ask/stream`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ question, enable_thinking: enableThinking }),
+      signal
+    }
+  )
+  return consumeAskStream(response, handlers)
+}
+
+export const resumeAnswerTask = async (
+  taskId: string,
+  offset: number,
+  reasoningOffset: number,
+  handlers: AskStreamHandlers,
+  signal?: AbortSignal
+) => {
+  const response = await chatFetch(
+    `/api/v1/chat/answer-tasks/${encodeURIComponent(taskId)}/stream?offset=${offset}&reasoning_offset=${reasoningOffset}`,
+    { signal }
+  )
+  return consumeAskStream(response, handlers)
+}
+
+export const getAnswerTask = (taskId: string) =>
+  request.get(`/api/v1/chat/answer-tasks/${encodeURIComponent(taskId)}`)
+
+export const stopAnswerTask = (taskId: string) =>
+  request.post(`/api/v1/chat/answer-tasks/${encodeURIComponent(taskId)}/stop`)
 
 // 结构化摘要（带缓存）
 export const generateSummary = (paperId: string) =>

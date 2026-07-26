@@ -88,6 +88,7 @@ import type { RequestOption, UploadRequest } from '@arco-design/web-vue/es/uploa
 import { getPaperList, uploadPaper, deletePaper, getTaskStatus } from '@/api/paper'
 import dayjs from 'dayjs'
 import ProductHeader from '@/components/ProductHeader.vue'
+import { removeCachedPdf } from '@/utils/pdfCache'
 
 const loading = ref(false)
 const papers = ref<any[]>([])
@@ -239,6 +240,7 @@ const handleDelete = (paperId: string) => {
     onOk: async () => {
       try {
         await deletePaper(paperId)
+        await removeCachedPdf(paperId)
         Message.success('删除成功')
         loadPapers()
       } catch (error) {

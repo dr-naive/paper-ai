@@ -82,6 +82,12 @@
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
+import {
+  paperIdFromPdfUrl,
+  readCachedPdf,
+  removeCachedPdf,
+  writeCachedPdf
+} from '@/utils/pdfCache'
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new pdfWorker()
 
@@ -280,14 +286,26 @@ const loadPdf = async () => {
       pdfDoc = null
     }
 
-    loadingTask = pdfjsLib.getDocument({
-      url: props.pdfUrl,
-      disableRange: false,
-      disableStream: false,
-      disableAutoFetch: false,
-      rangeChunkSize: 1024 * 1024,
-      verbosity: 0
-    })
+    const paperId = paperIdFromPdfUrl(props.pdfUrl)
+    const forceReload = new URL(props.pdfUrl, window.location.origin).searchParams.has('t')
+    if (paperId && forceReload) await removeCachedPdf(paperId)
+    const cachedPdf = paperId && !forceReload
+      ? await readCachedPdf(paperId)
+      : null
+
+    loadingTask = pdfjsLib.getDocument(cachedPdf
+      ? {
+          data: new Uint8Array(cachedPdf),
+          verbosity: 0
+        }
+      : {
+          url: props.pdfUrl,
+          disableRange: false,
+          disableStream: false,
+          disableAutoFetch: false,
+          rangeChunkSize: 1024 * 1024,
+          verbosity: 0
+        })
     const pdf = await loadingTask.promise
     if (sequence !== loadSequence) {
       await pdf.destroy()
@@ -315,6 +333,14 @@ const loadPdf = async () => {
     emit('load-success')
     renderVisiblePages()
     prefetchNearbyPages(0)
+
+    if (paperId && !cachedPdf) {
+      void pdf.getData()
+        .then((data: Uint8Array) => writeCachedPdf(paperId, data))
+        .catch((cacheError: unknown) => {
+          console.warn('准备 PDF 本地缓存失败:', cacheError)
+        })
+    }
   } catch (e: any) {
     if (sequence !== loadSequence) return
     console.error('加载 PDF 失败:', e.message || e)
