@@ -35,9 +35,8 @@ PaperAI 是一个面向学术论文阅读的 AI 辅助系统。用户上传 PDF 
 部署：
 
 - Nginx
-- systemd
 - Docker Compose
-- SQLite / PostgreSQL
+- PostgreSQL
 
 ## 目录结构
 
@@ -60,18 +59,15 @@ PaperAI 是一个面向学术论文阅读的 AI 辅助系统。用户上传 PDF 
 │   └── src/api/
 ├── deploy/nginx/
 ├── docs/
-├── docker-compose.yml
-├── paperai-backend.service
-└── paperai-frontend.service
+└── docker-compose.yml
 ```
 
-## 本地开发
+## 启动项目
 
 ### 环境要求
 
-- Python 3.10+
-- Node.js 20+
-- npm
+- Docker
+- Docker Compose v2
 - 可用的 Chat / Embedding 模型服务
 
 ### 配置环境变量
@@ -91,60 +87,55 @@ OPENAI_MODEL=qwen-plus
 EMBEDDING_MODEL=text-embedding-v3
 ```
 
-### 启动后端
+### 启动服务
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.txt
-cd backend
-../.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+docker compose up -d --build
 ```
 
-### 启动前端
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-开发地址：
+服务地址：
 
 - Web：`http://localhost:5173`
 - API：`http://localhost:8000`
 - OpenAPI：`http://localhost:8000/docs`
+
+常用命令：
+
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose restart backend frontend
+docker compose down
+```
+
+仓库也提供只封装 Docker Compose 的快捷脚本：
+
+```bash
+./start.sh             # 构建并启动
+./start.sh --no-build  # 使用现有镜像启动
+./restart.sh           # 重新构建并重启
+./stop.sh              # 停止容器并保留数据卷
+```
+
+不要使用 `docker compose down -v`，除非明确需要删除 PostgreSQL 和 PaperAI 数据卷。
 
 ## 测试与构建
 
 后端测试：
 
 ```bash
-cd backend
-PYTHONPATH=. ../.venv/bin/pytest -q
+docker compose exec backend pytest -q
 ```
 
 前端构建：
 
 ```bash
-cd frontend
-npm run build
+docker compose build frontend
 ```
 
 ## 生产部署
 
-### systemd + Nginx
-
-前端构建后发布到 `/var/www/paperai`，Nginx 负责 HTTPS、静态资源和 `/api/` 反向代理。
-
-```bash
-sudo cp paperai-backend.service paperai-frontend.service /etc/systemd/system/
-sudo cp deploy/nginx/paper.dongli.icu.conf /etc/nginx/sites-available/paper.dongli.icu.conf
-sudo systemctl daemon-reload
-sudo systemctl enable --now paperai-backend paperai-frontend
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-### Docker Compose
+项目统一使用 Docker Compose 部署：
 
 ```bash
 SECRET_KEY='replace-with-at-least-32-characters' docker compose up -d --build

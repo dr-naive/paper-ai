@@ -6,9 +6,12 @@ from typing import AsyncGenerator
 import os
 
 settings = get_settings()
-os.makedirs(os.path.dirname(settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "")), exist_ok=True)
 
 if "sqlite" in settings.DATABASE_URL:
+    database_path = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "")
+    database_dir = os.path.dirname(database_path)
+    if database_dir:
+        os.makedirs(database_dir, exist_ok=True)
     engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG)
 else:
     engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG, pool_pre_ping=True, pool_size=10, max_overflow=20)

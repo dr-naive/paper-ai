@@ -7,13 +7,13 @@
 确认服务运行：
 
 ```bash
-sudo systemctl status paperai-backend paperai-frontend
+docker compose ps
 ```
 
 如果未运行：
 
 ```bash
-sudo systemctl restart paperai-backend paperai-frontend
+docker compose up -d
 ```
 
 确认基础地址：
@@ -84,7 +84,7 @@ curl http://localhost:8000/
 如果任务失败，检查：
 
 ```bash
-tail -n 200 logs/backend.log
+docker compose logs --tail 200 backend
 ```
 
 ## 论文阅读

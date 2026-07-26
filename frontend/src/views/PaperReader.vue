@@ -35,12 +35,25 @@
 
     <!-- 主内容区 -->
     <div class="main-content">
+      <PaperOutline
+        v-model:collapsed="outlineCollapsed"
+        :sections="sections"
+        :current-page="currentPdfPage"
+        :loading="sectionsLoading"
+        :refreshing="sectionsRebuilding"
+        @navigate="navigateToSection"
+        @refresh="rebuildSections"
+      />
+
       <!-- 左侧 PDF 查看器 -->
       <div class="pdf-viewer">
         <PdfViewer
           v-if="pdfUrl"
           ref="pdfViewerRef"
           :pdf-url="pdfUrl"
+          @page-change="currentPdfPage = $event"
+          @load-error="pdfError = true"
+          @load-success="pdfError = false"
         />
         <div v-if="pdfError" class="pdf-error">
           <a-result status="warning" title="PDF 加载失败">
@@ -100,7 +113,7 @@
                 </a-button>
               </div>
               <!-- 问答历史 -->
-              <div class="qa-history">
+              <div ref="qaHistoryRef" class="qa-history">
                 <div v-if="!qaHistory.length && !qaLoading" class="qa-empty">
                   <div class="qa-empty-mark">AI</div>
                   <strong>从论文内容开始提问</strong>
@@ -114,7 +127,22 @@
                   <div class="qa-answer">
                     <span class="qa-label">答</span>
                     <div class="qa-answer-content">
-                      <div class="markdown-answer" v-html="renderMarkdown(qa.answer)"></div>
+                      <div
+                        v-if="qa.answer"
+                        class="markdown-answer"
+                        :class="{ streaming: qa.streaming }"
+                        v-html="renderMarkdown(qa.answer)"
+                      ></div>
+                      <div v-if="qa.streaming && !qa.answer" class="qa-stream-status">
+                        <a-spin :size="12" />
+                        <span>{{ qa.status || '正在准备回答' }}</span>
+                      </div>
+                      <div v-else-if="qa.streaming" class="qa-stream-progress">
+                        {{ qa.status || '正在生成' }}
+                      </div>
+                      <div v-if="qa.streamError" class="qa-stream-error">
+                        {{ qa.streamError }}
+                      </div>
                       <!-- 引用溯源 -->
                       <div v-if="qa.citations && qa.citations.length" class="qa-citations">
                         <div class="citation-title">
@@ -165,9 +193,6 @@
                     </div>
                   </div>
                 </div>
-                <div v-if="qaLoading" class="qa-loading">
-                  <a-spin :size="12" /> 思考中...
-                </div>
               </div>
               <div class="qa-composer">
                 <!-- 快捷问题 -->
@@ -202,7 +227,7 @@
                       type="primary"
                       size="small"
                       :loading="qaLoading"
-                      :disabled="!question.trim()"
+                      :disabled="!question.trim() || qaLoading"
                       @click="handleAsk"
                     >
                       提问
@@ -460,11 +485,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconArrowLeft, IconRefresh, IconDelete } from '@arco-design/web-vue/es/icon'
 import type PdfViewerComponent from '@/components/PdfViewer.vue'
+import type { OutlineNode } from '@/components/PaperOutlineNode.vue'
+import PaperOutline from '@/components/PaperOutline.vue'
 import ProductHeader from '@/components/ProductHeader.vue'
 import { renderMarkdown } from '@/utils/markdown'
 import {
-  getPaper, getPaperSections,
-  listSessions, createSession, deleteSession, getSessionMessages, askInSession,
+  getPaper, getPaperSections, rebuildPaperSections,
+  listSessions, createSession, deleteSession, getSessionMessages, streamAskInSession,
   generateSummary, getSummaryCache,
   interpretPaper, getInterpretCache
 } from '@/api/paper'
@@ -488,6 +515,10 @@ const layoutOptions: Array<{ value: LayoutMode; label: string; description: stri
 ]
 const sections = ref<any[]>([])
 const paperTables = ref<any[]>([])
+const sectionsLoading = ref(true)
+const sectionsRebuilding = ref(false)
+const outlineCollapsed = ref(false)
+const currentPdfPage = ref(1)
 
 // 结构化摘要相关
 const structuredSummary = ref<any>(null)
@@ -502,6 +533,8 @@ const interpretLoading = ref(false)
 const question = ref('')
 const qaHistory = ref<any[]>([])
 const qaLoading = ref(false)
+const qaHistoryRef = ref<HTMLElement | null>(null)
+let qaAbortController: AbortController | null = null
 const currentSessionId = ref<string>('')
 const sessions = ref<any[]>([])
 const showAllQuickQuestions = ref(false)
@@ -555,6 +588,13 @@ const toggleCitationGroup = (qaId: string | number) => {
 
 const handleWindowResize = () => {
   if (showSidebar.value) sidebarWidth.value = clampSidebarWidth(sidebarWidth.value)
+  if (window.innerWidth <= 1100) outlineCollapsed.value = true
+}
+
+const navigateToSection = async (section: OutlineNode) => {
+  if (!pdfViewerRef.value) return
+  await pdfViewerRef.value.scrollToPage(section.startPage)
+  pdfViewerRef.value.highlightPage(section.startPage)
 }
 
 // 加载会话列表
@@ -805,12 +845,32 @@ const locateInPdf = async (cite: any, key: string) => {
 }
 
 const loadSections = async () => {
+  sectionsLoading.value = true
   try {
     const response = await getPaperSections(paperId)
     sections.value = response.sections || []
     paperTables.value = response.tables || []
   } catch (error) {
     console.error('加载章节失败:', error)
+  } finally {
+    sectionsLoading.value = false
+  }
+}
+
+const rebuildSections = async () => {
+  if (sectionsRebuilding.value) return
+  sectionsRebuilding.value = true
+  try {
+    const result = await rebuildPaperSections(paperId) as any
+    await loadSections()
+    Message.success(result.added > 0
+      ? `目录已更新，补充 ${result.added} 个章节`
+      : '目录已重新校验')
+  } catch (error) {
+    console.error('重新抽取目录失败:', error)
+    Message.error('重新抽取目录失败')
+  } finally {
+    sectionsRebuilding.value = false
   }
 }
 
@@ -823,30 +883,133 @@ const handleAsk = async () => {
 }
 
 const askQuestion = async (q: string) => {
+  const normalizedQuestion = q.trim()
+  if (!normalizedQuestion || qaLoading.value) return
   if (!currentSessionId.value) {
     await createNewSession()
   }
-  
-  question.value = q
+
+  const sessionId = currentSessionId.value
+  const temporaryId = `stream-${Date.now()}`
+  const pendingMessageData: any = {
+    id: temporaryId,
+    question: normalizedQuestion,
+    answer: '',
+    citations: [],
+    follow_up_questions: [],
+    streaming: true,
+    status: '正在检索论文',
+    streamError: ''
+  }
+  qaHistory.value.push(pendingMessageData)
+  // Mutate the reactive proxy stored in the array, not the original raw object.
+  const pendingMessage = qaHistory.value[qaHistory.value.length - 1]
+  question.value = ''
   qaLoading.value = true
-  try {
-    const response = await askInSession(currentSessionId.value, q)
-    qaHistory.value.push({
-      id: response.message_id,
-      question: q,
-      answer: response.answer,
-      citations: response.citations || [],
-      follow_up_questions: response.follow_up_questions || []
-    })
-    question.value = ''
-    if (response.follow_up_pending && response.message_id) {
-      void syncPendingQaMessage(currentSessionId.value, response.message_id)
+  qaAbortController = new AbortController()
+  let receivedAnswer = ''
+  let displayedOffset = 0
+  let typingTimer: number | null = null
+  let streamDoneData: any = null
+  let pendingCitations: any[] = []
+  let resolveTyping: (() => void) | null = null
+  const typingComplete = new Promise<void>(resolve => {
+    resolveTyping = resolve
+  })
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+  const updateDisplayedAnswer = (answer: string) => {
+    const element = qaHistoryRef.value
+    const shouldFollow = !element
+      || element.scrollHeight - element.scrollTop - element.clientHeight < 140
+    pendingMessage.answer = answer
+    if (shouldFollow) {
+      void nextTick(() => {
+        if (qaHistoryRef.value) {
+          qaHistoryRef.value.scrollTop = qaHistoryRef.value.scrollHeight
+        }
+      })
     }
-    // 刷新会话列表（更新标题）
+  }
+
+  const scheduleTyping = () => {
+    if (typingTimer !== null) return
+    typingTimer = window.setTimeout(() => {
+      typingTimer = null
+      const remaining = receivedAnswer.slice(displayedOffset)
+      if (remaining) {
+        const backlog = Array.from(remaining)
+        const batchSize = prefersReducedMotion
+          ? backlog.length
+          : backlog.length > 240
+            ? 10
+            : backlog.length > 100
+              ? 5
+              : backlog.length > 40
+                ? 3
+                : 2
+        const nextText = backlog.slice(0, batchSize).join('')
+        displayedOffset += nextText.length
+        updateDisplayedAnswer(receivedAnswer.slice(0, displayedOffset))
+      }
+
+      if (displayedOffset < receivedAnswer.length) {
+        scheduleTyping()
+      } else if (streamDoneData) {
+        resolveTyping?.()
+        resolveTyping = null
+      }
+    }, prefersReducedMotion ? 0 : 28)
+  }
+
+  try {
+    await nextTick()
+    if (qaHistoryRef.value) qaHistoryRef.value.scrollTop = qaHistoryRef.value.scrollHeight
+    await streamAskInSession(sessionId, normalizedQuestion, {
+      onStatus: data => {
+        pendingMessage.status = data.message
+      },
+      onDelta: text => {
+        receivedAnswer += text
+        pendingMessage.status = '正在生成回答'
+        scheduleTyping()
+      },
+      onCitations: items => {
+        pendingCitations = items
+      },
+      onDone: data => {
+        streamDoneData = data
+        if (displayedOffset >= receivedAnswer.length) {
+          resolveTyping?.()
+          resolveTyping = null
+        } else {
+          scheduleTyping()
+        }
+      }
+    }, qaAbortController.signal)
+    await typingComplete
+    pendingMessage.citations = pendingCitations
+    pendingMessage.id = streamDoneData.message_id
+    pendingMessage.streaming = false
+    pendingMessage.status = ''
+    if (streamDoneData.follow_up_pending && streamDoneData.message_id) {
+      void syncPendingQaMessage(sessionId, streamDoneData.message_id)
+    }
     await loadSessions()
-  } catch (error) {
-    Message.error('回答生成失败')
+  } catch (error: any) {
+    if (typingTimer !== null) window.clearTimeout(typingTimer)
+    updateDisplayedAnswer(receivedAnswer)
+    pendingMessage.streaming = false
+    pendingMessage.streamError = error?.name === 'AbortError'
+      ? '回答已停止'
+      : (error?.message || '回答生成失败，请重试')
+    if (!receivedAnswer) {
+      qaHistory.value = qaHistory.value.filter(item => item.id !== temporaryId)
+      if (!question.value) question.value = normalizedQuestion
+    }
+    if (error?.name !== 'AbortError') Message.error(pendingMessage.streamError)
   } finally {
+    qaAbortController = null
     qaLoading.value = false
   }
 }
@@ -903,6 +1066,7 @@ const loadInterpretCache = async () => {
 
 onMounted(() => {
   applyLayoutPreset('compare')
+  outlineCollapsed.value = window.innerWidth <= 1100
   window.addEventListener('resize', handleWindowResize)
   loadPaper()
   loadSections()
@@ -913,6 +1077,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleWindowResize)
+  qaAbortController?.abort()
 })
 
 // 监听解读类型变化，加载对应缓存
@@ -1279,13 +1444,40 @@ watch(interpretType, () => {
   background: var(--pa-success);
 }
 
-.qa-loading {
+.qa-stream-status {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--pa-muted);
   font-size: 13px;
-  padding: 12px;
+  min-height: 28px;
+}
+
+.qa-stream-progress {
+  margin-top: 5px;
+  color: var(--pa-muted);
+  font-size: 11px;
+}
+
+.qa-stream-error {
+  margin-top: 8px;
+  color: rgb(var(--danger-6));
+  font-size: 12px;
+}
+
+.markdown-answer.streaming::after {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  background: var(--pa-primary);
+  content: '';
+  vertical-align: -0.12em;
+  animation: qa-cursor 0.9s steps(1) infinite;
+}
+
+@keyframes qa-cursor {
+  50% { opacity: 0; }
 }
 
 .qa-composer {

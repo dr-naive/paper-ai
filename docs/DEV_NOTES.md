@@ -11,37 +11,19 @@
 
 ## 启动约定
 
-用户倾向使用 systemd 自动维护服务。后续默认以 systemd 作为推荐运行方式。
-
-服务：
-
-- `paperai-backend.service`
-- `paperai-frontend.service`
+项目统一使用 Docker Compose v2，不再维护 systemd 或直接运行 Python/Node 的启动脚本。根目录的 `start.sh`、`stop.sh` 和 `restart.sh` 仅封装 Docker Compose。
 
 日常命令：
 
 ```bash
-sudo systemctl status paperai-backend paperai-frontend
-sudo systemctl restart paperai-backend paperai-frontend
-journalctl -u paperai-backend -n 100
-journalctl -u paperai-frontend -n 100
+docker compose up -d --build
+docker compose ps
+docker compose logs -f backend
+docker compose restart backend frontend
+docker compose down
 ```
 
-项目日志：
-
-```bash
-tail -f logs/backend.log
-tail -f logs/frontend.log
-```
-
-脚本：
-
-- `start.sh`：复制 service 文件、reload systemd、启动后端、启动前端。
-- `restart.sh`：重启服务。
-- `stop.sh`：停止服务。
-- `run_backend.sh`：后端 systemd 实际执行入口，运行 `uvicorn app.main:app --reload`。
-
-注意：这些脚本和 service 文件包含绝对路径 `/home/ddd/project/myAgent`。移动项目目录时必须同步修改。
+不要使用旧版 `docker-compose`，也不要在停止服务时添加 `-v`。
 
 ## 环境变量
 
@@ -56,21 +38,13 @@ tail -f logs/frontend.log
 
 ## 数据库
 
-默认配置：
-
-```text
-sqlite+aiosqlite:///./paperai.db
-```
-
-因为后端 service 的 working directory 是项目根目录，而 `run_backend.sh` 会 `cd backend`，实际 SQLite 相对路径需要以运行时 working directory 为准。调整启动方式时要特别核对数据库文件位置。
-
 Docker Compose 使用 PostgreSQL：
 
 ```text
 postgresql+asyncpg://postgres:postgres@db:5432/paperai
 ```
 
-切换 SQLite/PostgreSQL 前需要确认数据迁移和表结构兼容。
+数据库保存在 `postgres_data` volume，文件和向量数据保存在 `paperai_data` volume。
 
 ## 前端开发约定
 
@@ -123,15 +97,14 @@ npm run build
 后端改动：
 
 ```bash
-cd backend
-../.venv/bin/python -m pytest
+docker compose exec backend pytest -q
 ```
 
 如果当前测试不完整，至少执行：
 
 ```bash
-cd backend
-../.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+docker compose up -d --build backend
+curl http://localhost:8000/health
 ```
 
 然后访问：
@@ -140,4 +113,3 @@ cd backend
 http://localhost:8000/health
 http://localhost:8000/docs
 ```
-

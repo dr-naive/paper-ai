@@ -72,7 +72,8 @@
     <div v-if="error" class="pdf-error">
       <div class="error-icon">⚠️</div>
       <h3>PDF 加载失败</h3>
-      <p>无法加载 PDF 文件</p>
+      <p>{{ errorMessage }}</p>
+      <button type="button" class="pdf-retry-button" @click="loadPdf">重新加载</button>
     </div>
   </div>
 </template>
@@ -99,17 +100,26 @@ const props = defineProps<{
   pdfUrl: string
 }>()
 
+const emit = defineEmits<{
+  'page-change': [page: number]
+  'load-error': [message: string]
+  'load-success': []
+}>()
+
 const containerRef = ref<HTMLElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 const canvasRefs = ref<(HTMLCanvasElement | null)[]>([])
 const loading = ref(true)
 const error = ref(false)
+const errorMessage = ref('无法加载 PDF 文件')
 const numPages = ref(0)
 const scale = ref(1.0)
 const currentPage = ref(1)
 const highlightedPage = ref<number | null>(null)
 
 let pdfDoc: any = null
+let loadingTask: any = null
+let loadSequence = 0
 let pageHeights: number[] = []
 let pageWidths: number[] = []
 const renderedPages = new Set<number>()
@@ -218,12 +228,24 @@ const renderVisiblePages = () => {
   updateCurrentPage(scrollTop)
 }
 
+const prefetchNearbyPages = (pageIndex: number) => {
+  for (const index of [pageIndex, pageIndex - 1, pageIndex + 1]) {
+    if (index >= 0 && index < numPages.value && !renderedPages.has(index)) {
+      void renderPage(index)
+    }
+  }
+}
+
 const updateCurrentPage = (scrollTop: number) => {
   let cumulativeHeight = 0
   for (let i = 0; i < numPages.value; i++) {
     cumulativeHeight += (pageHeights[i] || 800) + 10
     if (cumulativeHeight > scrollTop + 50) {
-      currentPage.value = i + 1
+      const nextPage = i + 1
+      if (currentPage.value !== nextPage) {
+        currentPage.value = nextPage
+        emit('page-change', nextPage)
+      }
       break
     }
   }
@@ -238,8 +260,10 @@ const onScroll = () => {
 }
 
 const loadPdf = async () => {
+  const sequence = ++loadSequence
   loading.value = true
   error.value = false
+  errorMessage.value = '无法加载 PDF 文件'
   numPages.value = 0
   renderedPages.clear()
   pageHeights = []
@@ -247,16 +271,31 @@ const loadPdf = async () => {
   currentPage.value = 1
   
   try {
-    const pdf = await pdfjsLib.getDocument({
+    if (loadingTask) {
+      await loadingTask.destroy().catch(() => undefined)
+      loadingTask = null
+    }
+    if (pdfDoc) {
+      await pdfDoc.destroy().catch(() => undefined)
+      pdfDoc = null
+    }
+
+    loadingTask = pdfjsLib.getDocument({
       url: props.pdfUrl,
       disableRange: false,
-      disableStream: true,
-      disableAutoFetch: true,
-      rangeChunkSize: 256 * 1024,
+      disableStream: false,
+      disableAutoFetch: false,
+      rangeChunkSize: 1024 * 1024,
       verbosity: 0
-    }).promise
+    })
+    const pdf = await loadingTask.promise
+    if (sequence !== loadSequence) {
+      await pdf.destroy()
+      return
+    }
 
     pdfDoc = pdf
+    loadingTask = null
     const firstPage = await pdf.getPage(1)
     const firstViewport = firstPage.getViewport({ scale: scale.value })
     pageHeights = new Array(pdf.numPages).fill(firstViewport.height)
@@ -273,11 +312,19 @@ const loadPdf = async () => {
     // 【第二步：立即显示首页】用户马上能看到内容
     loading.value = false
     loadingProgress.value = 100
+    emit('load-success')
     renderVisiblePages()
+    prefetchNearbyPages(0)
   } catch (e: any) {
+    if (sequence !== loadSequence) return
     console.error('加载 PDF 失败:', e.message || e)
+    loadingTask = null
+    errorMessage.value = e?.message
+      ? `无法读取 PDF：${e.message}`
+      : '无法读取 PDF 文件，请重试'
     error.value = true
     loading.value = false
+    emit('load-error', errorMessage.value)
   }
 }
 
@@ -375,12 +422,6 @@ const scrollToPage = async (pageNum: number) => {
     return
   }
   
-  // 只先渲染目标页，滚动后由视口逻辑加载附近页面。
-  await renderPage(targetIndex)
-  
-  // 等待渲染完成后再计算滚动位置
-  await nextTick()
-  
   // 计算目标滚动位置
   let targetScrollTop = 0
   for (let i = 0; i < targetIndex; i++) {
@@ -400,7 +441,11 @@ const scrollToPage = async (pageNum: number) => {
   }, 100)
   
   currentPage.value = pageNum
-  renderVisiblePages()
+  emit('page-change', pageNum)
+
+  // 先完成导航反馈，再异步渲染目标页和相邻页，避免 Canvas 渲染阻塞点击。
+  await nextTick()
+  prefetchNearbyPages(targetIndex)
 }
 
 const highlightPage = (pageNum: number) => {
@@ -481,12 +526,12 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  loadSequence += 1
   if (scrollFrame !== null) {
     cancelAnimationFrame(scrollFrame)
   }
-  if (pdfDoc && typeof pdfDoc.destroy === 'function') {
-    pdfDoc.destroy()
-  }
+  if (loadingTask && typeof loadingTask.destroy === 'function') loadingTask.destroy()
+  if (pdfDoc && typeof pdfDoc.destroy === 'function') pdfDoc.destroy()
   if (highlightTimer) clearTimeout(highlightTimer)
 })
 

@@ -157,7 +157,6 @@ def _parse_sections_by_rules(raw_text: str) -> list[dict]:
     meaningful_sections = [
         section for section in sections
         if len(section.get("content", "")) >= 20
-        and not re.search(r"^(references|参考文献)$", section["title"], re.IGNORECASE)
     ]
     return meaningful_sections
 

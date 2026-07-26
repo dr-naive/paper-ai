@@ -8,8 +8,7 @@ PaperAI 是前后端分离应用：
 
 - 前端位于 `frontend/`，负责登录注册、论文列表、PDF 阅读、论文问答和摘要/解读展示。
 - 后端位于 `backend/app/`，提供认证、论文管理、聊天会话、PDF 解析、RAG 检索和 LLM 调用。
-- 本地默认使用 SQLite 数据库 `paperai.db`。
-- Docker Compose 路径配置了 PostgreSQL 和 Redis，但当前本地脚本主要围绕 SQLite + systemd 开发服务运行。
+- 运行环境统一由 Docker Compose 管理，数据库使用 PostgreSQL，并使用 Redis。
 
 ## 后端入口
 
@@ -130,26 +129,17 @@ API 客户端：
 
 ## 数据与文件位置
 
-- 本地 SQLite：`paperai.db`
-- 上传 PDF：默认 `backend/data/papers` 或配置项 `FILE_STORAGE_PATH`
-- 向量库：默认 `backend/data/vectorstore` 或配置项 `VECTOR_STORE_PATH`
-- 任务状态：`backend/data/tasks` 或 `data/tasks`
-- 日志：`logs/backend.log`、`logs/frontend.log`
+- PostgreSQL：`postgres_data` Docker volume
+- 上传 PDF、向量库和任务状态：`paperai_data` Docker volume，容器内位于 `/app/data`
+- 服务日志：通过 `docker compose logs` 查看
 
 ## 启动与部署
 
-推荐由 systemd 管理：
-
-- `paperai-backend.service`
-- `paperai-frontend.service`
-
-服务文件当前指向固定路径 `/home/ddd/project/myAgent`。迁移项目目录时需要同步修改 service 文件和脚本中的绝对路径。
-
-Docker Compose 提供另一套部署形态：
+项目统一由 Docker Compose 管理：
 
 - backend
 - frontend
 - postgres
 - redis
 
-当前 Compose 配置使用 PostgreSQL URL，而本地配置默认 SQLite。切换部署方式时要确认数据库 URL、迁移策略和数据文件位置。
+启动和更新使用 `docker compose up -d --build`。停止服务使用 `docker compose down`，不要附加 `-v`，否则会删除数据卷。

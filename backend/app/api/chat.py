@@ -1,11 +1,14 @@
 """对话历史和缓存 API 模块"""
 from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import Optional
 from datetime import datetime
 import asyncio
+import json
 import logging
+import re
 
 from app.database import AsyncSessionLocal, get_db
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
@@ -13,8 +16,11 @@ from app.models.paper import Paper, Section
 from app.api.auth import decode_token
 from app.api.dependencies import get_current_user_id
 from app.agent.qa_agent.enhanced_graph import (
+    _enrich_citations,
+    calculate_evidence_confidence,
     detect_metadata_intent,
     generate_follow_up_questions,
+    needs_deep_thinking,
     run_enhanced_qa_agent,
 )
 from app.agent.summarizer.graph import run_summarizer_agent
@@ -25,6 +31,60 @@ from app.llm.client import get_llm_client
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/chat")
+
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _streaming_prompt(question: str, chunks: list, history_context: str) -> str:
+    context_parts = []
+    for index, chunk in enumerate(chunks):
+        table_label = "[表格]\n" if chunk.get("chunk_type") == "table" else ""
+        context_parts.append(
+            f"[来源 S{index + 1}]\n"
+            f"[章节 {chunk.get('section', '未知章节')}]\n"
+            f"{table_label}{chunk.get('content', '')}"
+        )
+    context = "\n\n---\n\n".join(context_parts)
+    history = (
+        f"\n【历史对话】\n{history_context}\n"
+        if history_context else ""
+    )
+    return f"""
+请只依据下方论文资料回答用户问题。
+
+要求：
+1. 直接输出 Markdown 正文，不要输出 JSON，不要写“答案：”。
+2. 回答准确、有条理；论文未提及时明确说明，不得自行补全。
+3. 每个关键结论后必须标注对应来源编号，如 [S1]、[S2]；只能使用已提供的来源编号。
+4. 段落之间空一行，并列内容分行；比较数据适合时使用 Markdown 表格。
+5. 表格数据必须逐项核对，缺失值写“-”，不要推测。
+{history}
+【用户问题】
+{question}
+
+【论文资料】
+{context}
+""".strip()
+
+
+def _citations_from_streamed_answer(answer: str, chunks: list) -> list:
+    source_indexes = []
+    for value in re.findall(r"\[S(\d+)\]", answer or "", flags=re.IGNORECASE):
+        index = int(value) - 1
+        if 0 <= index < len(chunks) and index not in source_indexes:
+            source_indexes.append(index)
+
+    citations = []
+    for index in source_indexes:
+        chunk = chunks[index]
+        citations.append({
+            "source_id": f"S{index + 1}",
+            "section": chunk.get("section", "未知章节"),
+            "text": str(chunk.get("content", "")).strip()[:180],
+        })
+    return _enrich_citations(citations, chunks)
 
 
 def _fallback_session_title(question: str) -> str:
@@ -342,6 +402,181 @@ async def ask_in_session(
         "confidence_type": "evidence_support",
         "message_id": message_id
     }
+
+
+@router.post("/sessions/{session_id}/ask/stream")
+async def stream_ask_in_session(
+    session_id: str,
+    data: dict,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream an answer over SSE, then persist the completed message."""
+    user_id = await get_current_user_id(authorization, db)
+    result = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == session_id,
+            ChatSession.user_id == user_id,
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    question = str(data.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+
+    async def event_stream():
+        try:
+            yield _sse_event("status", {
+                "stage": "retrieving",
+                "message": "正在检索论文",
+            })
+
+            async with AsyncSessionLocal() as stream_db:
+                session_result = await stream_db.execute(
+                    select(ChatSession).where(
+                        ChatSession.id == session_id,
+                        ChatSession.user_id == user_id,
+                    )
+                )
+                session = session_result.scalar_one_or_none()
+                if not session:
+                    yield _sse_event("error", {"message": "会话不存在"})
+                    return
+
+                paper_result = await stream_db.execute(
+                    select(Paper).where(Paper.id == session.paper_id)
+                )
+                paper = paper_result.scalar_one_or_none()
+                if not paper:
+                    yield _sse_event("error", {"message": "论文不存在"})
+                    return
+
+                history_result = await stream_db.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.session_id == session_id)
+                    .order_by(ChatMessage.order_index)
+                )
+                history_messages = history_result.scalars().all()
+                history_context = "\n\n".join(
+                    f"用户: {message.question}\nAI: {message.answer}"
+                    for message in history_messages[-5:]
+                )
+
+                metadata_field = detect_metadata_intent(question)
+                if metadata_field:
+                    metadata_text = "\n".join([
+                        f"标题：{paper.title or '-'}",
+                        f"作者：{paper.authors or '-'}",
+                        f"摘要：{paper.abstract or '-'}",
+                        f"关键词：{'、'.join(paper.keywords or []) or '-'}",
+                        f"期刊或会议：{getattr(paper, 'venue', '') or '-'}",
+                        f"发表年份：{getattr(paper, 'publication_year', '') or '-'}",
+                        f"DOI：{getattr(paper, 'doi', '') or '-'}",
+                    ])
+                    chunks = [{
+                        "section": "论文元数据",
+                        "content": metadata_text,
+                        "chunk_type": "metadata",
+                    }]
+                    intent = "metadata"
+                else:
+                    knowledge_base = get_knowledge_base()
+                    exact_chunks = await get_exact_table_chunks(
+                        stream_db, session.paper_id, question
+                    )
+                    semantic_chunks = await knowledge_base.query(
+                        session.paper_id, question, top_k=5
+                    )
+                    chunks = merge_retrieval_chunks(
+                        exact_chunks, semantic_chunks, top_k=5
+                    )
+                    intent = "general"
+
+                if not chunks:
+                    answer = "未在论文中找到相关内容，请尝试换一种问法。"
+                    yield _sse_event("answer_delta", {"text": answer})
+                    citations = []
+                else:
+                    yield _sse_event("status", {
+                        "stage": "generating",
+                        "message": "正在组织回答",
+                        "source_count": len(chunks),
+                    })
+                    prompt = _streaming_prompt(question, chunks, history_context)
+                    answer_parts = []
+                    llm = get_llm_client()
+                    async for delta in llm.astream_text(
+                        prompt,
+                        enable_thinking=needs_deep_thinking(question),
+                    ):
+                        answer_parts.append(delta)
+                        yield _sse_event("answer_delta", {"text": delta})
+                    answer = "".join(answer_parts).strip()
+                    if not answer:
+                        raise RuntimeError("模型未返回回答内容")
+                    citations = _citations_from_streamed_answer(answer, chunks)
+
+                evidence_confidence = calculate_evidence_confidence(
+                    answer, citations, chunks, intent
+                )
+                message_count = await stream_db.execute(
+                    select(func.count())
+                    .select_from(ChatMessage)
+                    .where(ChatMessage.session_id == session_id)
+                )
+                order_index = message_count.scalar() or 0
+                message = ChatMessage(
+                    session_id=session_id,
+                    order_index=order_index + 1,
+                    question=question,
+                    answer=answer,
+                    citations=citations,
+                    follow_up_questions=[],
+                    confidence=evidence_confidence,
+                )
+                stream_db.add(message)
+                if order_index == 0:
+                    session.title = _fallback_session_title(question)
+                    session.updated_at = datetime.utcnow()
+                await stream_db.flush()
+                message_id = str(message.id)
+                await stream_db.commit()
+
+            yield _sse_event("citations", {"items": citations})
+            yield _sse_event("done", {
+                "message_id": message_id,
+                "intent": intent,
+                "sources": [item.get("section", "") for item in citations],
+                "evidence_confidence": evidence_confidence,
+                "confidence": evidence_confidence,
+                "confidence_type": "evidence_support",
+                "follow_up_pending": True,
+            })
+            asyncio.create_task(
+                _generate_followups_background(
+                    message_id, question, answer, intent
+                )
+            )
+        except asyncio.CancelledError:
+            logger.info("客户端取消流式回答 session_id=%s", session_id)
+            raise
+        except Exception:
+            logger.exception("流式回答失败 session_id=%s", session_id)
+            yield _sse_event("error", {
+                "message": "回答生成失败，请稍后重试",
+            })
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ==================== 摘要缓存 ====================

@@ -558,7 +558,7 @@ def create_enhanced_qa_agent_graph():
     graph.add_node("recognize_intent", recognize_intent)
     graph.add_node("answer_metadata", answer_metadata)
     graph.add_node("generate_answer", generate_answer)
-    graph.add_node("generate_follow_up", generate_follow_up)
+    graph.add_node("generate_follow_up_questions", generate_follow_up)
     
     graph.set_entry_point("recognize_intent")
     
@@ -569,9 +569,9 @@ def create_enhanced_qa_agent_graph():
         return "generate_answer"
     
     graph.add_conditional_edges("recognize_intent", route_by_intent)
-    graph.add_edge("answer_metadata", "generate_follow_up")
-    graph.add_edge("generate_answer", "generate_follow_up")
-    graph.add_edge("generate_follow_up", END)
+    graph.add_edge("answer_metadata", "generate_follow_up_questions")
+    graph.add_edge("generate_answer", "generate_follow_up_questions")
+    graph.add_edge("generate_follow_up_questions", END)
     
     return graph.compile()
 

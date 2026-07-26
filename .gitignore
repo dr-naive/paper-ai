@@ -136,6 +136,9 @@ docker-compose.override.yml
 # 本地 Codex skill 安装包
 /impeccable.zip
 
+# 只读参考项目（不纳入 PaperAI 版本控制）
+/deploy_idps_stable-11.6.0_stable/
+
 # 评测运行产物（保留代码、数据集和人工总结）
 backend/evals/reports/*
 !backend/evals/reports/EVALUATION_SUMMARY.md

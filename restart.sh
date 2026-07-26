@@ -1,19 +1,8 @@
-#!/bin/bash
-# PaperAI 重启脚本
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-echo "======================================"
-echo "        PaperAI 重启脚本"
-echo "======================================"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# 先停止服务
-echo ""
-echo "1. 停止现有服务..."
-./stop.sh
-
-# 等待服务停止
-sleep 2
-
-# 启动服务
-echo ""
-echo "2. 启动服务..."
-./start.sh
+echo "正在重建并重启 PaperAI Docker 服务..."
+"$PROJECT_DIR/stop.sh"
+"$PROJECT_DIR/start.sh"

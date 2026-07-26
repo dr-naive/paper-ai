@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -121,10 +122,16 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
 
 @router.post("/register", response_model=UserResponse)
 async def register_user(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).filter(User.email == user_data.email))
+    result = await db.execute(
+        select(User).filter(
+            (User.email == user_data.email) | (User.username == user_data.username)
+        )
+    )
     existing_user = result.scalars().first()
     if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        if existing_user.email == user_data.email:
+            raise HTTPException(status_code=400, detail="该邮箱已注册")
+        raise HTTPException(status_code=400, detail="该用户名已被使用")
     
     hashed_password = get_password_hash(user_data.password)
     new_user = User(
@@ -134,7 +141,11 @@ async def register_user(user_data: UserCreate, db: AsyncSession = Depends(get_db
     )
     
     db.add(new_user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="用户名或邮箱已被使用")
     await db.refresh(new_user)
     return UserResponse.from_orm(new_user)
 

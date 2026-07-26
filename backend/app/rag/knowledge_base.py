@@ -418,9 +418,22 @@ class PaperKnowledgeBase:
                 logger.warning(f"top_k={top_k} 无效，返回空结果")
                 return []
             
+            retrieval_filter = {
+                "$and": [
+                    {"paper_id": paper_id},
+                    {
+                        "$or": [
+                            {"chunk_type": "small"},
+                            {"chunk_type": "table"},
+                            {"chunk_type": "image"},
+                        ]
+                    },
+                ]
+            }
+
             try:
                 filtered_results = self.vectorstore.similarity_search_with_score(
-                    query=query, k=top_k * 8, filter={"paper_id": paper_id}
+                    query=query, k=top_k * 8, filter=retrieval_filter
                 )
             except TypeError:
                 results = self.vectorstore.similarity_search_with_score(
@@ -429,6 +442,7 @@ class PaperKnowledgeBase:
                 filtered_results = [
                     (doc, score) for doc, score in results
                     if doc.metadata.get("paper_id") == paper_id
+                    and doc.metadata.get("chunk_type") in {"small", "table", "image"}
                 ]
             
             # 检查查询是否包含表格编号（如"表1"、"Table 1"），如果有则优先返回匹配的表格
@@ -452,8 +466,6 @@ class PaperKnowledgeBase:
             
             small_chunks = [(doc, score) for doc, score in filtered_results 
                            if doc.metadata.get("chunk_type") == "small"]
-            large_chunks = [(doc, score) for doc, score in filtered_results 
-                           if doc.metadata.get("chunk_type") == "large"]
             table_chunks = [(doc, score) for doc, score in filtered_results
                             if doc.metadata.get("chunk_type") == "table"]
             image_chunks = [(doc, score) for doc, score in filtered_results
@@ -462,11 +474,11 @@ class PaperKnowledgeBase:
             table_intent = bool(re.search(r"表格|(?:表|table)\s*\d+", query, re.IGNORECASE))
             image_intent = bool(re.search(r"图片|图像|插图|(?:图|figure)\s*\d+", query, re.IGNORECASE))
 
-            ordered_groups = [small_chunks, large_chunks, table_chunks, image_chunks]
+            ordered_groups = [small_chunks, table_chunks, image_chunks]
             if table_intent:
-                ordered_groups = [table_chunks, small_chunks, large_chunks, image_chunks]
+                ordered_groups = [table_chunks, small_chunks, image_chunks]
             elif image_intent:
-                ordered_groups = [image_chunks, small_chunks, large_chunks, table_chunks]
+                ordered_groups = [image_chunks, small_chunks, table_chunks]
             
             final_results = []
             for group in ordered_groups:

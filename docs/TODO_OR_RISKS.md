@@ -74,61 +74,11 @@ allow_credentials=True
 
 建议：生产环境进一步收敛配置打印，或接入标准 logger 并按 `DEBUG` 控制。
 
-## 绝对路径绑定
+## Docker Compose 是唯一运行方式
 
-这些文件包含 `/home/ddd/project/myAgent`：
+旧的 systemd service 和直接运行 Python/Node 的脚本已移除。根目录快捷脚本只封装 Docker Compose v2，运行、更新和排查统一使用 Docker。
 
-- `start.sh`
-- `stop.sh`
-- `restart.sh`
-- `run_backend.sh`
-- `paperai-backend.service`
-- `paperai-frontend.service`
-
-影响：项目移动目录或换机器部署时会失败。
-
-建议：systemd service 可以继续使用绝对路径，但需要在部署文档中明确；脚本可逐步改为根据自身路径计算项目根目录。
-
-## 本地数据库路径需确认
-
-默认数据库 URL：
-
-```text
-sqlite+aiosqlite:///./paperai.db
-```
-
-后端 service `WorkingDirectory` 是项目根目录，但 `run_backend.sh` 会 `cd backend` 后启动 uvicorn。
-
-影响：SQLite 文件可能根据实际启动目录落在不同位置。
-
-建议：明确 SQLite 绝对路径，或统一启动目录。
-
-## 前端 systemd 服务未安装
-
-本次冒烟测试中，后端 `paperai-backend.service` 已安装并运行，但系统中未找到 `paperai-frontend.service`。
-
-影响：`5173` 端口无法由 systemd 自动守护；普通 `start.sh` 在没有 sudo/systemd bus 权限时只能尝试后台启动前端。
-
-建议：在服务器终端执行：
-
-```bash
-sudo cp /home/ddd/project/myAgent/paperai-frontend.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable paperai-frontend
-sudo systemctl start paperai-frontend
-```
-
-## 前端文件 watcher 上限
-
-普通 `npm run dev` 会因为系统 watcher 上限报错：
-
-```text
-ENOSPC: System limit for number of file watchers reached
-```
-
-本次已将 `paperai-frontend.service` 和 `start.sh` 的前端启动补充为 `CHOKIDAR_USEPOLLING=true`，作为低权限环境下的可运行兜底。
-
-长期建议：也可以提高系统 watcher 限制，例如调整 `fs.inotify.max_user_watches`。
+注意：不要执行 `docker compose down -v`，除非明确需要清空 PostgreSQL、上传文件和向量索引。
 
 ## 论文解析结构化章节丢失
 

@@ -171,6 +171,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { getCurrentUser } from '@/api/auth'
 import { IconDown, IconFile, IconExport } from '@arco-design/web-vue/es/icon'
 import BrandMark from '@/components/BrandMark.vue'
 
@@ -239,13 +240,17 @@ const selectBackground = (index: number) => {
   startBackgroundRotation()
 }
 
-onMounted(() => {
-  const userStr = localStorage.getItem('user')
-  if (userStr) {
+onMounted(async () => {
+  const token = localStorage.getItem('access_token')
+  if (token) {
     try {
-      currentUser.value = JSON.parse(userStr)
+      const user = await getCurrentUser()
+      currentUser.value = user
+      localStorage.setItem('user', JSON.stringify(user))
     } catch {
+      localStorage.removeItem('access_token')
       localStorage.removeItem('user')
+      currentUser.value = null
     }
   }
   window.addEventListener('scroll', handleScroll)

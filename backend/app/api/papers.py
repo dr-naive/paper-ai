@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 from app.database import get_db, AsyncSessionLocal
 from app.models.paper import Paper, Section, Table as TableModel
+from app.api.auth import decode_token
 from app.agent.paper_parser.graph import run_paper_parser
 from app.rag.knowledge_base import get_knowledge_base, SmartChunker
 from app.api.dependencies import get_current_user_id
@@ -36,6 +37,13 @@ from app.services.paper_indexing import (
     build_text_chunks as _build_text_chunks,
     normalize_key_points as _normalize_key_points,
     normalize_sections as _normalize_sections,
+)
+from app.services.paper_outline import enrich_sections_with_pdf as _enrich_sections_with_pdf
+from app.services.paper_core_processing import paper_core_processing_service
+from app.services.paper_upload import (
+    PaperTextExtractionError,
+    PaperTextMissingError,
+    paper_upload_service,
 )
 
 router = APIRouter(prefix="/api/v1/papers")
@@ -109,7 +117,7 @@ async def get_papers(
     query = select(Paper).filter(Paper.user_id == user_id)
     
     if status:
-        query = query.filter(Paper.status == status)
+        query = query.filter(Paper.reading_status == status)
     
     if search:
         query = query.filter(
@@ -256,6 +264,77 @@ async def get_paper_sections(paper_id: str, authorization: str = Header(None), d
     }
 
 
+@router.post("/{paper_id}/sections/rebuild")
+async def rebuild_paper_sections(
+    paper_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rebuild an existing paper outline from parser data and PDF layout metadata."""
+    user_id = await get_current_user_id(authorization, db)
+    result = await db.execute(
+        select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id)
+    )
+    paper = result.scalar_one_or_none()
+    if not paper:
+        raise HTTPException(status_code=404, detail="论文不存在")
+    if not paper.pdf_path or not os.path.exists(paper.pdf_path):
+        raise HTTPException(status_code=404, detail="PDF 文件不存在")
+
+    section_result = await db.execute(
+        select(Section)
+        .where(Section.paper_id == paper_id)
+        .order_by(Section.order_index)
+    )
+    existing = list(section_result.scalars().all())
+    base_sections = [
+        {
+            "title": section.section_title,
+            "content": section.content or "",
+            "key_points": section.key_points or [],
+        }
+        for section in existing
+    ]
+    rebuilt = _enrich_sections_with_pdf(
+        base_sections,
+        paper.pdf_path,
+        _extract_pdf_page_contents(paper.pdf_path),
+    )
+    by_title = {
+        _normalize_page_text(section.section_title): section
+        for section in existing
+    }
+    extractor = MultimediaExtractor(pdf_path=paper.pdf_path)
+    added = 0
+    for item in rebuilt:
+        title = str(item.get("title") or "未命名章节")[:200]
+        normalized = _normalize_page_text(title)
+        section = by_title.get(normalized)
+        if section is None:
+            content = str(item.get("content") or "")
+            section = Section(
+                paper_id=paper_id,
+                section_title=title,
+                content=content,
+                key_points=_normalize_key_points(item.get("key_points", [])),
+                tables=extractor.extract_tables_from_text(content, title),
+                figures=extractor.extract_figures_from_text(content, title),
+                formulas=extractor.extract_formulas(content, title),
+            )
+            db.add(section)
+            by_title[normalized] = section
+            added += 1
+        section.order_index = int(item.get("order_index") or 0)
+        section.start_page = int(item.get("start_page") or 1)
+
+    await db.commit()
+    return {
+        "message": "目录重新抽取完成",
+        "sections": len(rebuilt),
+        "added": added,
+    }
+
+
 @router.get("/{paper_id}")
 async def get_paper(paper_id: str, authorization: str = Header(None), db: AsyncSession = Depends(get_db)):
     user_id = await get_current_user_id(authorization, db)
@@ -344,69 +423,37 @@ async def _process_paper_async(
         
         # 解析论文结构
         parse_started_at = time.perf_counter()
-        parse_result = await run_paper_parser(paper_id, file_path, raw_text)
+        structure = await paper_core_processing_service.extract_structure(
+            paper_id=paper_id,
+            file_path=file_path,
+            raw_text=raw_text,
+        )
         finish_stage("structure_parsing", parse_started_at)
-        
-        sections = _normalize_sections(parse_result.get('sections', []), raw_text)
+
+        sections = structure.sections
+        page_contents = structure.page_contents
         extractor = MultimediaExtractor(pdf_path=file_path)
         logger.info(f"标准化后解析到 {len(sections)} 个有效章节")
 
         update_task(task_id, progress=45, message="正在保存正文和章节...")
         core_persistence_started_at = time.perf_counter()
-        async with AsyncSessionLocal() as db:
-            paper = Paper(
-                id=paper_id,
-                user_id=user_id,
-                title=parse_result.get('title', ''),
-                authors=parse_result.get('authors', ''),
-                abstract=parse_result.get('abstract', ''),
-                full_text=raw_text[:100000],
-                pdf_path=file_path,
-                keywords=parse_result.get('keywords', [])
-            )
-            db.add(paper)
-
-            section_page_texts = _extract_pdf_page_texts(file_path)
-            section_page_hint = 1
-            for index, section_data in enumerate(sections):
-                section_title = section_data.get('title', f'第{index + 1}节')
-                section_content = section_data.get('content', '')
-                section_page_hint = _find_content_page(
-                    section_page_texts,
-                    f"{section_title}\n{section_content[:200]}",
-                    section_page_hint,
-                )
-                db.add(Section(
-                    paper_id=paper_id,
-                    section_title=section_title,
-                    order_index=index,
-                    start_page=section_page_hint,
-                    content=section_content,
-                    key_points=_normalize_key_points(section_data.get('key_points', [])),
-                    tables=extractor.extract_tables_from_text(section_content, section_title),
-                    figures=extractor.extract_figures_from_text(section_content, section_title),
-                    formulas=extractor.extract_formulas(section_content, section_title),
-                ))
-            await db.commit()
+        await paper_core_processing_service.persist_core(
+            paper_id=paper_id,
+            user_id=user_id,
+            file_path=file_path,
+            raw_text=raw_text,
+            structure=structure,
+        )
         finish_stage("core_database_persistence", core_persistence_started_at)
 
         update_task(task_id, progress=70, message="正在构建正文知识库...")
         core_vector_started_at = time.perf_counter()
-        kb = get_knowledge_base()
-        chunker = SmartChunker()
-        page_texts = _extract_pdf_page_texts(file_path)
-        page_contents = _extract_pdf_page_contents(file_path)
-        text_chunks = _build_complete_text_chunks(
-            sections,
-            chunker,
-            page_texts,
-            page_contents,
+        counts["text_vector_chunks"] = await paper_core_processing_service.build_text_index(
+            paper_id=paper_id,
+            raw_text=raw_text,
+            file_path=file_path,
+            structure=structure,
         )
-        if not text_chunks:
-            text_chunks = chunker.chunk_text(raw_text[:100000], "全文")
-        if not await kb.add_paper_chunks(paper_id, text_chunks):
-            raise RuntimeError("正文知识库构建失败")
-        counts["text_vector_chunks"] = len(text_chunks)
         finish_stage("core_vector_indexing", core_vector_started_at)
 
         ready_seconds = time.perf_counter() - started_at
@@ -961,34 +1008,35 @@ async def upload_paper(
     logger.info(f"👤 用户ID: {user_id}")
     
     paper_id = str(uuid.uuid4())
-    file_path = f"{settings.FILE_STORAGE_PATH}/{paper_id}.pdf"
-    file_save_started_at = time.perf_counter()
-    file_size = await _save_validated_pdf(file, file_path, settings.MAX_UPLOAD_SIZE)
-    initial_timings["file_save"] = time.perf_counter() - file_save_started_at
-    logger.info(f"📄 文件名: {file.filename}, 大小: {file_size/1024/1024:.2f}MB")
-    logger.info(f"💾 文件已保存: {file_path}")
-    
-    # 提取文本
-    raw_text = ""
-    text_extraction_started_at = time.perf_counter()
+    original_filename = file.filename
     try:
-        raw_text, text_extraction_method = await asyncio.to_thread(_extract_pdf_text, file_path)
-        logger.info(
-            "📝 提取文本完成，方式: %s，长度: %s",
-            text_extraction_method,
-            len(raw_text),
+        upload_result = await paper_upload_service.receive(
+            upload=file,
+            paper_id=paper_id,
+            storage_path=settings.FILE_STORAGE_PATH,
+            max_upload_size=settings.MAX_UPLOAD_SIZE,
         )
-    except Exception as e:
-        logger.error(f"❌ PDF 解析失败: {e}")
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail=f"PDF 解析失败：{str(e)}")
-    initial_timings["initial_text_extraction"] = time.perf_counter() - text_extraction_started_at
-    
-    if not raw_text.strip():
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=400, detail="无法从 PDF 中提取文字")
+    except PaperTextExtractionError as exc:
+        logger.error("❌ PDF 解析失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"PDF 解析失败：{exc}") from exc
+    except PaperTextMissingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    initial_timings.update(upload_result.timings)
+    file_path = upload_result.file_path
+    raw_text = upload_result.raw_text
+    text_extraction_method = upload_result.text_extraction_method
+    logger.info(
+        "📄 文件名: %s, 大小: %.2fMB",
+        original_filename,
+        upload_result.file_size / 1024 / 1024,
+    )
+    logger.info("💾 文件已保存: %s", file_path)
+    logger.info(
+        "📝 提取文本完成，方式: %s，长度: %s",
+        text_extraction_method,
+        len(raw_text),
+    )
     
     # 创建任务
     task = create_task(paper_id, user_id)

@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
+import { getCurrentUser } from '@/api/auth'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/home' },
@@ -11,19 +12,31 @@ const routes: RouteRecordRaw[] = [
 
 const router = createRouter({ history: createWebHistory(), routes })
 
-router.beforeEach((to, _from, next) => {
+let validatedToken = ''
+
+router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
-  // 已登录用户访问登录/注册页，重定向到首页
-  if (token && (to.path === '/login' || to.path === '/register')) {
-    next('/home')
-    return
+  const isPublicRoute = to.path === '/login' || to.path === '/home' || to.path === '/register'
+
+  if (!token) {
+    validatedToken = ''
+    return isPublicRoute ? true : '/login'
   }
-  // 未登录用户访问需要认证的页面，重定向到登录页
-  if (!token && to.path !== '/login' && to.path !== '/home' && to.path !== '/register') {
-    next('/login')
-    return
+
+  if (validatedToken !== token) {
+    try {
+      const user = await getCurrentUser()
+      localStorage.setItem('user', JSON.stringify(user))
+      validatedToken = token
+    } catch {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('user')
+      validatedToken = ''
+      return to.path === '/home' ? true : '/login'
+    }
   }
-  next()
+
+  return to.path === '/login' || to.path === '/register' ? '/home' : true
 })
 
 export default router

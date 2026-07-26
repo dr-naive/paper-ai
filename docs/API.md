@@ -81,5 +81,6 @@ Router：`backend/app/api/chat.py`
 如果前后端不同源运行，需要配置：
 
 - `VITE_API_BASE_URL=http://localhost:8000`，或
-- Vite dev server proxy，或
 - 反向代理。
+
+当前 Docker 前端通过 Nginx 将 `/api/` 代理到 backend 容器，通常无需设置该变量。
