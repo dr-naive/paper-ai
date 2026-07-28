@@ -8,18 +8,29 @@ import os
 import uuid
 import logging
 import asyncio
+import json
 import time
+from datetime import datetime
 from email.utils import formatdate, parsedate_to_datetime
 
 logger = logging.getLogger(__name__)
 
 from app.database import get_db, AsyncSessionLocal
-from app.models.paper import Paper, Section, Table as TableModel
+from app.models.paper import (
+    DocumentElement,
+    Paper,
+    Section,
+    Table as TableModel,
+    TableCell,
+    TableStructure,
+)
 from app.api.auth import decode_token
 from app.agent.paper_parser.graph import run_paper_parser
 from app.rag.knowledge_base import get_knowledge_base, SmartChunker
 from app.api.dependencies import get_current_user_id
 from app.config import settings
+from app.job_queue import enqueue_job
+from app.redis_client import get_async_redis
 from app.parsers.multimedia_extractor import MultimediaExtractor
 from app.utils.task_manager import create_task, update_task, get_task
 from app.utils.background_tasks import spawn_background_task
@@ -43,6 +54,12 @@ from app.services.paper_outline import enrich_sections_with_pdf as _enrich_secti
 from app.services.paper_core_processing import paper_core_processing_service
 from app.services.paper_upload import (
     paper_upload_service,
+)
+from app.services.table_structure import (
+    build_table_cells,
+    merge_cross_page_tables,
+    normalize_table_structure,
+    save_table_screenshot,
 )
 
 router = APIRouter(prefix="/api/v1/papers")
@@ -295,6 +312,55 @@ async def get_paper_sections(paper_id: str, authorization: str = Header(None), d
     }
 
 
+@router.get("/{paper_id}/elements")
+async def get_paper_elements(
+    paper_id: str,
+    page: Optional[int] = Query(None, ge=1),
+    element_type: Optional[str] = Query(None),
+    indexable_only: bool = Query(False),
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return layout-aware elements for source inspection and precise citation."""
+    user_id = await get_current_user_id(authorization, db)
+    paper_result = await db.execute(
+        select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id)
+    )
+    if not paper_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="论文不存在")
+
+    query = select(DocumentElement).where(DocumentElement.paper_id == paper_id)
+    if page is not None:
+        query = query.where(DocumentElement.page_number == page)
+    if element_type:
+        query = query.where(DocumentElement.element_type == element_type)
+    if indexable_only:
+        query = query.where(DocumentElement.is_indexable.is_(True))
+    result = await db.execute(
+        query.order_by(DocumentElement.page_number, DocumentElement.page_order)
+    )
+    elements = result.scalars().all()
+    return {
+        "items": [
+            {
+                "id": element.id,
+                "type": element.element_type,
+                "page": element.page_number,
+                "order_index": element.order_index,
+                "page_order": element.page_order,
+                "text": element.text,
+                "bbox": element.bbox or [],
+                "section_path": element.section_path or [],
+                "confidence": element.confidence,
+                "is_indexable": element.is_indexable,
+                "attributes": element.attributes or {},
+            }
+            for element in elements
+        ],
+        "total": len(elements),
+    }
+
+
 @router.post("/{paper_id}/sections/rebuild")
 async def rebuild_paper_sections(
     paper_id: str,
@@ -388,6 +454,46 @@ async def get_paper(paper_id: str, authorization: str = Header(None), db: AsyncS
         "uploaded_at": paper.uploaded_at.isoformat() if paper.uploaded_at else None,
         "updated_at": paper.updated_at.isoformat() if paper.updated_at else None,
         **_get_paper_media_state(paper.id),
+    }
+
+
+@router.patch("/{paper_id}/status")
+async def update_paper_status(
+    paper_id: str,
+    data: dict,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user-owned reading progress, status or favorite state."""
+    user_id = await get_current_user_id(authorization, db)
+    result = await db.execute(
+        select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id)
+    )
+    paper = result.scalar_one_or_none()
+    if paper is None:
+        raise HTTPException(status_code=404, detail="论文不存在")
+
+    if "status" in data:
+        status = str(data.get("status") or "").strip()
+        if status not in {"unread", "reading", "completed"}:
+            raise HTTPException(status_code=400, detail="无效的阅读状态")
+        paper.reading_status = status
+    if "progress" in data:
+        try:
+            progress = float(data["progress"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="阅读进度必须是数字")
+        paper.reading_progress = round(max(0.0, min(100.0, progress)), 2)
+    if "favorite" in data:
+        paper.is_favorite = bool(data["favorite"])
+    paper.updated_at = datetime.utcnow()
+    await db.commit()
+    return {
+        "id": paper.id,
+        "status": paper.reading_status,
+        "reading_progress": paper.reading_progress,
+        "is_favorite": paper.is_favorite,
+        "updated_at": paper.updated_at.isoformat(),
     }
 
 
@@ -546,6 +652,7 @@ async def _process_paper_async(
                         
                     # 合并 VLM 提取的表格
                     pdf_tables.extend(vlm_tables)
+                pdf_tables = merge_cross_page_tables(pdf_tables)
             except Exception as e:
                 logger.warning(f"PDF 表格提取失败: {e}")
             finish_stage("table_extraction", table_extraction_started_at)
@@ -864,10 +971,35 @@ async def _process_paper_async(
                         analysis_result=analysis or {},
                         markdown_path=analyzed_table.get("markdown_path"),
                         csv_path=analyzed_table.get("csv_path"),
+                        screenshot_path=save_table_screenshot(
+                            file_path, table, tables_dir, table_idx + 1
+                        ),
                         is_corrupted=is_corrupted,
                         extraction_method=table.get("extraction_method", "pdfplumber")
                     )
                     db.add(table_record)
+                    await db.flush()
+                    structure = normalize_table_structure(table, table_idx + 1)
+                    db.add(TableStructure(
+                        table_id=table_record.id,
+                        paper_id=paper_id,
+                        page_numbers=structure["page_numbers"],
+                        page_bboxes=structure["page_bboxes"],
+                        grid=structure["grid"],
+                        header_rows=structure["header_rows"],
+                        header_tree=structure["header_tree"],
+                        row_records=structure["row_records"],
+                        units=structure["units"],
+                        footnotes=structure["footnotes"],
+                        parse_confidence=structure["parse_confidence"],
+                        is_cross_page=structure["is_cross_page"],
+                        source_table_count=structure["source_table_count"],
+                        screenshot_path=table_record.screenshot_path,
+                    ))
+                    for cell in build_table_cells(table, structure):
+                        db.add(TableCell(table_id=table_record.id, **cell))
+                    analyzed_table["table_id"] = table_record.id
+                    analyzed_table["structure"] = structure
                     saved_tables.append(table_record)
                 except Exception as e:
                     logger.warning(f"保存表格到数据库失败: {e}")
@@ -919,6 +1051,8 @@ async def _process_paper_async(
                                 "analysis": analysis,
                                 "table_number": table.get("table_number"),
                                 "caption": table.get("caption", ""),
+                                "table_id": analyzed_table.get("table_id"),
+                                "structure": analyzed_table.get("structure"),
                             })
 
                         merged_tables.append({
@@ -966,6 +1100,20 @@ async def _process_paper_async(
                     "index": len(text_chunks) + len(media_chunks)
                 }
                 media_chunks.append(table_chunk)
+                structure = table_info.get("structure") or {}
+                for record in structure.get("row_records", []):
+                    media_chunks.append({
+                        "content": record["text"],
+                        "type": "table_row",
+                        "section": table_info["section"],
+                        "page": record.get("page", table_info.get("page", 1)),
+                        "table_number": table_info.get("table_number"),
+                        "table_id": table_info.get("table_id"),
+                        "row_index": record.get("row_index"),
+                        "caption": table_info.get("caption", ""),
+                        "fields": record.get("fields", []),
+                        "index": len(text_chunks) + len(media_chunks),
+                    })
             
             for image_info in all_images_info:
                 image_chunk = {
@@ -1068,6 +1216,30 @@ async def upload_paper(
         upload_result.file_size / 1024 / 1024,
     )
     logger.info("💾 文件已保存: %s", file_path)
+
+    # An atomic Redis key prevents repeated clicks or concurrent containers from
+    # scheduling the same PDF for the same user more than once.
+    upload_lock_key = f"paperai:upload-dedupe:{user_id}:{upload_result.file_sha256}"
+    try:
+        redis_client = get_async_redis()
+        lock_value = json.dumps({"task_id": f"task_{paper_id}", "paper_id": paper_id})
+        claimed = await redis_client.set(upload_lock_key, lock_value, nx=True, ex=3600)
+        if not claimed:
+            existing_raw = await redis_client.get(upload_lock_key)
+            existing = json.loads(existing_raw) if existing_raw else {}
+            existing_task = get_task(str(existing.get("task_id", "")))
+            if existing_task and existing_task.user_id == user_id and existing_task.status.value != "failed":
+                paper_upload_service._remove_file(file_path)
+                return {
+                    "task_id": existing_task.task_id,
+                    "paper_id": existing_task.paper_id,
+                    "message": "该论文已在上传或处理，请勿重复提交",
+                    "status_url": f"/api/v1/papers/tasks/{existing_task.task_id}",
+                    "duplicate": True,
+                }
+            await redis_client.set(upload_lock_key, lock_value, ex=3600)
+    except Exception:
+        logger.warning("Redis 上传防重复锁不可用，继续执行上传", exc_info=True)
     
     # 创建任务
     task = create_task(paper_id, user_id)
@@ -1082,20 +1254,30 @@ async def upload_paper(
     )
     logger.info(f"✅ 任务创建成功: {task.task_id}")
     
-    # 登记后台任务，确保异常可见并在应用关闭时正确取消。
-    logger.info("🚀 启动后台处理任务...")
-    spawn_background_task(
-        _schedule_process_paper(
-            paper_id,
-            file_path,
-            user_id,
-            None,
-            initial_timings,
-            pipeline_started_at,
-            initial_counts,
-        ),
-        name=f"paper-upload-{paper_id}",
-    )
+    logger.info("🚀 论文处理任务进入 Worker 队列...")
+    try:
+        await enqueue_job(
+            "paper_process",
+            {
+                "paper_id": paper_id,
+                "file_path": file_path,
+                "user_id": user_id,
+                "raw_text": None,
+                "initial_timings": initial_timings,
+                "pipeline_started_at": pipeline_started_at,
+                "initial_counts": initial_counts,
+            },
+            job_id=task.task_id,
+        )
+    except Exception:
+        logger.exception("论文处理任务入队失败 paper_id=%s", paper_id)
+        update_task(
+            task.task_id,
+            status="failed",
+            progress=0,
+            message="处理任务入队失败，请稍后重新上传",
+        )
+        raise HTTPException(status_code=503, detail="论文处理 Worker 暂时不可用")
     
     # 立即返回，不等待后台处理完成
     logger.info(f"🔔 上传接口立即返回，task_id={task.task_id}, paper_id={paper_id}")

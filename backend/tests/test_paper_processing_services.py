@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from io import BytesIO
 
 from app.services.paper_core_processing import PaperCoreProcessingService
@@ -26,7 +27,8 @@ def test_upload_service_returns_stable_intake_result(tmp_path, monkeypatch):
     ))
 
     assert result.paper_id == "paper-1"
-    assert set(result.timings) == {"file_save"}
+    assert set(result.timings) == {"file_save", "file_hash"}
+    assert result.file_sha256 == hashlib.sha256(b"%PDF-1.7\ncontent").hexdigest()
     assert (tmp_path / "paper-1.pdf").exists()
 
 
@@ -64,6 +66,23 @@ def test_core_structure_service_keeps_parser_and_outline_stages_separate(monkeyp
         "app.services.paper_core_processing.enrich_sections_with_pdf",
         lambda sections, path, pages: [{**sections[0], "start_page": 1}],
     )
+    monkeypatch.setattr(
+        "app.services.paper_core_processing.extract_layout_elements",
+        lambda path: [{
+            "id": "element-1",
+            "element_type": "paragraph",
+            "page_number": 1,
+            "order_index": 0,
+            "page_order": 0,
+            "text": "足够长的章节正文内容用于测试服务边界。",
+            "bbox": [10, 10, 200, 40],
+            "section_path": ["1 引言"],
+            "confidence": 0.9,
+            "extraction_method": "test",
+            "is_indexable": True,
+            "attributes": {},
+        }],
+    )
 
     result = asyncio.run(PaperCoreProcessingService().extract_structure(
         paper_id="paper-1",
@@ -74,3 +93,4 @@ def test_core_structure_service_keeps_parser_and_outline_stages_separate(monkeyp
     assert result.metadata["title"] == "测试论文"
     assert result.sections[0]["start_page"] == 1
     assert len(result.page_contents) == 1
+    assert result.elements[0]["element_type"] == "paragraph"

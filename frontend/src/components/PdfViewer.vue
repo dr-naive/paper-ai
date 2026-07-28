@@ -50,6 +50,23 @@
             :ref="el => setCanvasRef(i - 1, el as HTMLCanvasElement | null)"
             class="pdf-canvas"
           />
+          <div
+            v-if="citationHighlight?.page === i"
+            class="citation-highlight-layer"
+            aria-hidden="true"
+          >
+            <span
+              v-for="(rect, rectIndex) in citationHighlight.rects"
+              :key="rectIndex"
+              class="citation-highlight-rect"
+              :style="{
+                left: `${rect.left}px`,
+                top: `${rect.top}px`,
+                width: `${rect.width}px`,
+                height: `${rect.height}px`
+              }"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -109,7 +126,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'page-change': [page: number]
   'load-error': [message: string]
-  'load-success': []
+  'load-success': [pages: number]
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
@@ -122,6 +139,9 @@ const numPages = ref(0)
 const scale = ref(1.0)
 const currentPage = ref(1)
 const highlightedPage = ref<number | null>(null)
+type CitationRect = { left: number; top: number; width: number; height: number }
+type CitationLocation = { page: number; rects: CitationRect[]; precise: boolean }
+const citationHighlight = ref<CitationLocation | null>(null)
 
 let pdfDoc: any = null
 let loadingTask: any = null
@@ -134,6 +154,7 @@ const loadingProgress = ref(0) // 加载进度 0-100
 let renderedScale = 1
 let scrollFrame: number | null = null
 let highlightTimer: ReturnType<typeof setTimeout> | null = null
+let citationHighlightTimer: ReturnType<typeof setTimeout> | null = null
 
 const setCanvasRef = (index: number, el: HTMLCanvasElement | null) => {
   canvasRefs.value[index] = el
@@ -330,7 +351,7 @@ const loadPdf = async () => {
     // 【第二步：立即显示首页】用户马上能看到内容
     loading.value = false
     loadingProgress.value = 100
-    emit('load-success')
+    emit('load-success', pdf.numPages)
     renderVisiblePages()
     prefetchNearbyPages(0)
 
@@ -411,6 +432,7 @@ const reRenderAll = async () => {
 
   await renderPage(currentDisplayPage - 1, true)
   renderVisiblePages()
+  citationHighlight.value = null
 }
 
 const goToPage = () => {
@@ -488,6 +510,33 @@ const normalizeSearchText = (value: string) => value
   .toLowerCase()
   .replace(/[^\p{L}\p{N}]+/gu, '')
 
+type NormalizedTextMap = {
+  text: string
+  itemIndexes: number[]
+  itemOffsets: number[]
+  itemLengths: number[]
+}
+
+const buildNormalizedTextMap = (items: any[]): NormalizedTextMap => {
+  let text = ''
+  const itemIndexes: number[] = []
+  const itemOffsets: number[] = []
+  const itemLengths = items.map(item => Array.from(
+    normalizeSearchText(String(item.str || ''))
+  ).length)
+
+  items.forEach((item, itemIndex) => {
+    const normalized = Array.from(normalizeSearchText(String(item.str || '')))
+    normalized.forEach((character, offset) => {
+      text += character
+      itemIndexes.push(itemIndex)
+      itemOffsets.push(offset)
+    })
+  })
+
+  return { text, itemIndexes, itemOffsets, itemLengths }
+}
+
 const buildSearchFragments = (values: string[]): string[] => {
   const fragments = new Set<string>()
   for (const value of values) {
@@ -504,6 +553,219 @@ const buildSearchFragments = (values: string[]): string[] => {
     }
   }
   return Array.from(fragments).sort((a, b) => b.length - a.length)
+}
+
+const findTextMatch = (
+  items: any[],
+  searchValues: string[]
+): { start: number; end: number; map: NormalizedTextMap } | null => {
+  const map = buildNormalizedTextMap(items)
+  if (!map.text) return null
+
+  for (const fragment of buildSearchFragments(searchValues)) {
+    const start = map.text.indexOf(fragment)
+    if (start >= 0) return { start, end: start + fragment.length, map }
+  }
+  return null
+}
+
+const itemRect = (
+  item: any,
+  viewport: any,
+  styles: Record<string, any>,
+  startRatio = 0,
+  endRatio = 1
+): CitationRect | null => {
+  if (!item?.transform) return null
+  const transformed = pdfjsLib.Util.transform(viewport.transform, item.transform)
+  const fontHeight = Math.max(
+    Math.hypot(transformed[2], transformed[3]),
+    Number(item.height || 0) * viewport.scale,
+    8
+  )
+  const fontStyle = styles?.[item.fontName] || {}
+  const fontAscent = Number.isFinite(fontStyle.ascent)
+    ? fontStyle.ascent * fontHeight
+    : Number.isFinite(fontStyle.descent)
+      ? (1 + fontStyle.descent) * fontHeight
+      : fontHeight * 0.82
+  const fullWidth = Math.max(
+    Number(item.width || 0) * viewport.scale,
+    fontHeight * 0.45
+  )
+  return {
+    left: transformed[4] + fullWidth * startRatio,
+    top: transformed[5] - fontAscent,
+    width: Math.max(fullWidth * (endRatio - startRatio), 3),
+    height: Math.max(fontHeight * 0.94, 6)
+  }
+}
+
+const mergeLineRects = (rects: CitationRect[]): CitationRect[] => {
+  const lines: CitationRect[] = []
+  for (const rect of rects.sort((a, b) => a.top - b.top || a.left - b.left)) {
+    const line = lines.find(existing => (
+      Math.abs(existing.top - rect.top) <= Math.max(existing.height, rect.height) * 0.55
+      && rect.left <= existing.left + existing.width + Math.max(existing.height, rect.height)
+    ))
+    if (!line) {
+      lines.push({ ...rect })
+      continue
+    }
+    const right = Math.max(line.left + line.width, rect.left + rect.width)
+    const bottom = Math.max(line.top + line.height, rect.top + rect.height)
+    line.left = Math.min(line.left, rect.left)
+    line.top = Math.min(line.top, rect.top)
+    line.width = right - line.left
+    line.height = bottom - line.top
+  }
+  return lines
+}
+
+const matchRects = (
+  items: any[],
+  viewport: any,
+  styles: Record<string, any>,
+  match: { start: number; end: number; map: NormalizedTextMap }
+): CitationRect[] => {
+  const ranges = new Map<number, { start: number; end: number }>()
+  for (let index = match.start; index < match.end; index += 1) {
+    const itemIndex = match.map.itemIndexes[index]
+    const offset = match.map.itemOffsets[index]
+    if (itemIndex === undefined || offset === undefined) continue
+    const range = ranges.get(itemIndex)
+    if (range) {
+      range.start = Math.min(range.start, offset)
+      range.end = Math.max(range.end, offset + 1)
+    } else {
+      ranges.set(itemIndex, { start: offset, end: offset + 1 })
+    }
+  }
+
+  const rects = Array.from(ranges.entries())
+    .map(([itemIndex, range]) => {
+      const length = Math.max(match.map.itemLengths[itemIndex] || 1, 1)
+      return itemRect(
+        items[itemIndex],
+        viewport,
+        styles,
+        range.start / length,
+        range.end / length
+      )
+    })
+    .filter((rect): rect is CitationRect => Boolean(rect))
+  return mergeLineRects(rects)
+}
+
+const pageScrollTop = (pageNum: number) => {
+  let top = 0
+  for (let index = 0; index < pageNum - 1; index += 1) {
+    top += (pageHeights[index] || 800) + 10
+  }
+  return top
+}
+
+const showCitationHighlight = async (location: CitationLocation) => {
+  if (citationHighlightTimer) clearTimeout(citationHighlightTimer)
+  citationHighlight.value = location
+  await nextTick()
+
+  const container = containerRef.value
+  const firstRect = location.rects[0]
+  if (container && firstRect) {
+    const target = pageScrollTop(location.page) + firstRect.top
+      - container.clientHeight * 0.32
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    container.scrollTo({
+      top: Math.max(0, target),
+      behavior: reducedMotion ? 'auto' : 'smooth'
+    })
+  } else {
+    await scrollToPage(location.page)
+  }
+
+  citationHighlightTimer = setTimeout(() => {
+    citationHighlight.value = null
+    citationHighlightTimer = null
+  }, 8000)
+}
+
+const highlightCitation = async (
+  preferredPage: number | null,
+  text: string | string[]
+): Promise<CitationLocation | null> => {
+  const searchValues = (Array.isArray(text) ? text : [text])
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+  if (!pdfDoc || searchValues.length === 0) return null
+
+  const pageOrder: number[] = []
+  if (preferredPage && preferredPage >= 1 && preferredPage <= numPages.value) {
+    pageOrder.push(preferredPage)
+  } else {
+    for (let pageNum = 1; pageNum <= numPages.value; pageNum += 1) {
+      pageOrder.push(pageNum)
+    }
+  }
+
+  for (const pageNum of pageOrder) {
+    try {
+      const page = await pdfDoc.getPage(pageNum)
+      const textContent = await page.getTextContent()
+      const items = textContent.items || []
+      const match = findTextMatch(items, searchValues)
+      if (!match) continue
+      const viewport = page.getViewport({ scale: scale.value })
+      const rects = matchRects(items, viewport, textContent.styles || {}, match)
+      if (!rects.length) continue
+
+      const location: CitationLocation = {
+        page: pageNum,
+        rects,
+        precise: true
+      }
+      await renderPage(pageNum - 1)
+      await showCitationHighlight(location)
+      currentPage.value = pageNum
+      emit('page-change', pageNum)
+      return location
+    } catch (e) {
+      console.error(`定位第 ${pageNum} 页引用失败:`, e)
+    }
+  }
+  return null
+}
+
+const highlightBbox = async (
+  pageNum: number,
+  bbox: number[] | null,
+  cellBboxes: number[][] = []
+): Promise<CitationLocation | null> => {
+  if (!pdfDoc || pageNum < 1 || pageNum > numPages.value) return null
+  const sourceRects = cellBboxes.length ? cellBboxes : (bbox ? [bbox] : [])
+  if (!sourceRects.length) return null
+  try {
+    const page = await pdfDoc.getPage(pageNum)
+    const viewport = page.getViewport({ scale: scale.value })
+    const rects = sourceRects
+      .filter(rect => Array.isArray(rect) && rect.length === 4)
+      .map(rect => ({
+        left: Math.max(0, Number(rect[0]) * scale.value),
+        top: Math.max(0, Number(rect[1]) * scale.value),
+        width: Math.min(viewport.width, Math.max(2, (Number(rect[2]) - Number(rect[0])) * scale.value)),
+        height: Math.min(viewport.height, Math.max(2, (Number(rect[3]) - Number(rect[1])) * scale.value))
+      }))
+    if (!rects.length) return null
+    const location: CitationLocation = { page: pageNum, rects, precise: true }
+    await renderPage(pageNum - 1)
+    await showCitationHighlight(location)
+    currentPage.value = pageNum
+    emit('page-change', pageNum)
+    return location
+  } catch (e) {
+    console.error(`按坐标定位第 ${pageNum} 页引用失败:`, e)
+    return null
+  }
 }
 
 const searchText = async (text: string | string[]): Promise<number | null> => {
@@ -559,11 +821,14 @@ onUnmounted(() => {
   if (loadingTask && typeof loadingTask.destroy === 'function') loadingTask.destroy()
   if (pdfDoc && typeof pdfDoc.destroy === 'function') pdfDoc.destroy()
   if (highlightTimer) clearTimeout(highlightTimer)
+  if (citationHighlightTimer) clearTimeout(citationHighlightTimer)
 })
 
 defineExpose({
   scrollToPage,
   searchText,
+  highlightCitation,
+  highlightBbox,
   highlightPage,
   fitWidth
 })
@@ -698,8 +963,25 @@ defineExpose({
 .pdf-page-shell {
   flex: 0 0 auto;
   margin-bottom: 10px;
+  position: relative;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   background: white;
+}
+
+.citation-highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.citation-highlight-rect {
+  position: absolute;
+  min-width: 3px;
+  border-radius: 2px;
+  background: oklch(0.84 0.16 82 / 0.48);
+  box-shadow: inset 0 0 0 1px oklch(0.64 0.15 65 / 0.42);
+  animation: citation-text-pulse 700ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .pdf-page-shell.citation-target {
@@ -713,8 +995,14 @@ defineExpose({
   50% { box-shadow: 0 0 0 8px oklch(0.50 0.16 45 / 0.22), 0 4px 18px rgba(0, 0, 0, 0.38); }
 }
 
+@keyframes citation-text-pulse {
+  0% { opacity: 0; transform: scaleY(0.72); }
+  100% { opacity: 1; transform: scaleY(1); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pdf-page-shell.citation-target { animation: none; }
+  .citation-highlight-rect { animation: none; }
 }
 
 .pdf-loading,

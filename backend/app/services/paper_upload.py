@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import time
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ class PaperUploadResult:
     paper_id: str
     file_path: str
     file_size: int
+    file_sha256: str
     timings: dict[str, float]
 
 
@@ -52,11 +54,15 @@ class PaperUploadService:
         started_at = time.perf_counter()
         file_size = await save_validated_pdf(upload, file_path, max_upload_size)
         timings["file_save"] = time.perf_counter() - started_at
+        digest_started_at = time.perf_counter()
+        file_sha256 = await asyncio.to_thread(self._sha256_file, file_path)
+        timings["file_hash"] = time.perf_counter() - digest_started_at
 
         return PaperUploadResult(
             paper_id=paper_id,
             file_path=file_path,
             file_size=file_size,
+            file_sha256=file_sha256,
             timings=timings,
         )
 
@@ -83,6 +89,14 @@ class PaperUploadService:
     def _remove_file(file_path: str) -> None:
         if os.path.exists(file_path):
             os.remove(file_path)
+
+    @staticmethod
+    def _sha256_file(file_path: str) -> str:
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as source:
+            while block := source.read(1024 * 1024):
+                digest.update(block)
+        return digest.hexdigest()
 
 
 paper_upload_service = PaperUploadService()

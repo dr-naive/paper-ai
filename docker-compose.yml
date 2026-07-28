@@ -13,6 +13,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-paperai-local}@db:5432/paperai
       - REDIS_URL=redis://redis:6379/0
+      - REDIS_ANSWER_TASK_TTL_SECONDS=${REDIS_ANSWER_TASK_TTL_SECONDS:-86400}
+      - REDIS_UPLOAD_TASK_TTL_SECONDS=${REDIS_UPLOAD_TASK_TTL_SECONDS:-604800}
       - DEBUG=${DEBUG:-true}
       - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:5173", "http://127.0.0.1:5173"]}
@@ -37,7 +39,48 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    container_name: paperai-worker
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-paperai-local}@db:5432/paperai
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_ANSWER_TASK_TTL_SECONDS=${REDIS_ANSWER_TASK_TTL_SECONDS:-86400}
+      - REDIS_UPLOAD_TASK_TTL_SECONDS=${REDIS_UPLOAD_TASK_TTL_SECONDS:-604800}
+      - DEBUG=${DEBUG:-true}
+      - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - LLM_TIMEOUT_SECONDS=${LLM_TIMEOUT_SECONDS:-60}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+      - VISION_MODEL=${VISION_MODEL:-qwen-vl-max}
+      - VISION_BASE_URL=${VISION_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - VECTOR_STORE_PATH=/app/data/vectorstore
+      - FILE_STORAGE_PATH=/app/data/papers
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-52428800}
+    volumes:
+      - paperai_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   db:
@@ -56,8 +99,16 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   frontend:
@@ -72,3 +123,4 @@ services:
 volumes:
   postgres_data:
   paperai_data:
+  redis_data:

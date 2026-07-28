@@ -5,6 +5,7 @@ from fastapi.responses import Response
 from contextlib import asynccontextmanager
 from app.config import settings
 from app.database import init_db, close_db
+from app.redis_client import close_redis, get_async_redis, initialize_redis, redis_health
 import logging
 import re
 
@@ -33,13 +34,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"🚀 启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     await init_db()
     logger.info("✅ 数据库初始化完成")
-    from app.api.papers import recover_incomplete_paper_tasks
-    recovered = recover_incomplete_paper_tasks()
-    if recovered:
-        logger.warning("恢复 %d 个未完成论文任务", recovered)
+    await initialize_redis()
     yield
     from app.utils.background_tasks import shutdown_background_tasks
     await shutdown_background_tasks()
+    await close_redis()
     await close_db()
     logger.info("👋 应用关闭")
 
@@ -68,7 +67,18 @@ from app.api.chat import router as chat_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
 from app.models.user import User
-from app.models.paper import Paper, Section, QAPair, Note, Folder, Table, Image
+from app.models.paper import (
+    DocumentElement,
+    Folder,
+    Image,
+    Note,
+    Paper,
+    QAPair,
+    Section,
+    Table,
+    TableCell,
+    TableStructure,
+)
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
 
 app.include_router(auth_router)
@@ -88,4 +98,16 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    redis_ok = await redis_health()
+    worker_ok = False
+    if redis_ok:
+        try:
+            worker_ok = bool(await get_async_redis().exists("paperai:worker:heartbeat"))
+        except Exception:
+            worker_ok = False
+    return {
+        "status": "healthy",
+        "database": "healthy",
+        "redis": "healthy" if redis_ok else "degraded",
+        "worker": "healthy" if worker_ok else "degraded",
+    }

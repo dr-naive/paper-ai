@@ -59,6 +59,11 @@ class Paper(Base):
     
     user = relationship("User", back_populates="papers", primaryjoin="Paper.user_id == User.id")
     sections = relationship("Section", back_populates="paper", cascade="all, delete-orphan")
+    document_elements = relationship(
+        "DocumentElement",
+        back_populates="paper",
+        cascade="all, delete-orphan",
+    )
     qa_pairs = relationship("QAPair", back_populates="paper", cascade="all, delete-orphan")
     notes = relationship("Note", back_populates="paper")
     chat_sessions = relationship("ChatSession", back_populates="paper", cascade="all, delete-orphan")
@@ -87,6 +92,43 @@ class Section(Base):
     )
     
     paper = relationship("Paper", back_populates="sections")
+
+
+class DocumentElement(Base):
+    """A physical, page-bound document element used by retrieval and citations."""
+    __tablename__ = "document_elements"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    paper_id = Column(
+        String(36),
+        ForeignKey("papers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    section_id = Column(
+        String(36),
+        ForeignKey("sections.id", ondelete="SET NULL"),
+    )
+    element_type = Column(String(30), nullable=False)
+    page_number = Column(Integer, nullable=False)
+    order_index = Column(Integer, nullable=False)
+    page_order = Column(Integer, nullable=False)
+    text = Column(Text, default="")
+    bbox = Column(JSON, default=list)
+    section_path = Column(JSON, default=list)
+    confidence = Column(Float, default=1.0)
+    extraction_method = Column(String(50), default="pymupdf_layout")
+    is_indexable = Column(Boolean, default=True)
+    attributes = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_document_elements_paper", paper_id),
+        Index("idx_document_elements_page", paper_id, page_number),
+        Index("idx_document_elements_type", paper_id, element_type),
+    )
+
+    paper = relationship("Paper", back_populates="document_elements")
+    section = relationship("Section")
 
 
 class QAPair(Base):
@@ -189,6 +231,84 @@ class Table(Base):
     
     paper = relationship("Paper")
     section = relationship("Section")
+    structure = relationship(
+        "TableStructure",
+        back_populates="table",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    cells = relationship(
+        "TableCell",
+        back_populates="table",
+        cascade="all, delete-orphan",
+    )
+
+
+class TableStructure(Base):
+    """Multiple deterministic representations for a physical/logical table."""
+    __tablename__ = "table_structures"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    table_id = Column(
+        String(36),
+        ForeignKey("tables.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    paper_id = Column(
+        String(36),
+        ForeignKey("papers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    page_numbers = Column(JSON, default=list)
+    page_bboxes = Column(JSON, default=list)
+    grid = Column(JSON, default=list)
+    header_rows = Column(JSON, default=list)
+    header_tree = Column(JSON, default=list)
+    row_records = Column(JSON, default=list)
+    units = Column(JSON, default=list)
+    footnotes = Column(JSON, default=list)
+    section_path = Column(JSON, default=list)
+    parse_confidence = Column(Float, default=0.0)
+    is_cross_page = Column(Boolean, default=False)
+    source_table_count = Column(Integer, default=1)
+    screenshot_path = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_table_structures_paper", paper_id),
+    )
+
+    table = relationship("Table", back_populates="structure")
+
+
+class TableCell(Base):
+    """A normalized table cell with row/column span and source coordinates."""
+    __tablename__ = "table_cells"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    table_id = Column(
+        String(36),
+        ForeignKey("tables.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    page_number = Column(Integer, nullable=False)
+    row_index = Column(Integer, nullable=False)
+    column_index = Column(Integer, nullable=False)
+    row_span = Column(Integer, default=1)
+    column_span = Column(Integer, default=1)
+    text = Column(Text, default="")
+    bbox = Column(JSON, default=list)
+    header_path = Column(JSON, default=list)
+    is_header = Column(Boolean, default=False)
+    confidence = Column(Float, default=1.0)
+
+    __table_args__ = (
+        Index("idx_table_cells_table", table_id),
+        Index("idx_table_cells_position", table_id, row_index, column_index),
+    )
+
+    table = relationship("Table", back_populates="cells")
 
 
 class Image(Base):

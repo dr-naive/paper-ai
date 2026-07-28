@@ -91,14 +91,25 @@ class MultimediaExtractor:
             with pdfplumber.open(path) as pdf:
                 logger.info(f"📊 PDF 总页数: {len(pdf.pages)}")
                 for page_num, page in enumerate(pdf.pages, start=1):
-                    page_tables = page.extract_tables()
+                    found_tables = page.find_tables()
+                    page_tables = found_tables.tables
                     logger.info(f"📊 第 {page_num} 页提取到 {len(page_tables)} 个表格")
 
                     if page_tables:
-                        for idx, table_data in enumerate(page_tables):
+                        for idx, found_table in enumerate(page_tables):
+                            table_data = found_table.extract()
                             if table_data and len(table_data) > 0:
                                 markdown = self._table_to_markdown(table_data)
                                 csv = self._table_to_csv(table_data)
+                                bbox = [float(value) for value in found_table.bbox]
+                                cell_bboxes = [
+                                    [
+                                        [float(value) for value in cell] if cell else None
+                                        for cell in row.cells
+                                    ]
+                                    for row in found_table.rows
+                                ]
+                                caption = self._extract_table_caption(page, bbox)
 
                                 tables.append({
                                     "page": page_num,
@@ -106,7 +117,9 @@ class MultimediaExtractor:
                                     "content": table_data,
                                     "markdown": markdown,
                                     "csv": csv,
-                                    "bbox": None,
+                                    "bbox": bbox,
+                                    "cell_bboxes": cell_bboxes,
+                                    "caption": caption,
                                     "extraction_method": "pdfplumber"
                                 })
 
@@ -116,6 +129,19 @@ class MultimediaExtractor:
             logger.error(f"PDF 表格提取失败: {e}")
 
         return tables
+
+    @staticmethod
+    def _extract_table_caption(page, bbox: List[float]) -> str:
+        """Read the closest caption immediately above a detected table."""
+        try:
+            top = max(0.0, float(bbox[1]) - 72.0)
+            text = page.crop((0.0, top, float(page.width), float(bbox[1]))).extract_text() or ""
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            pattern = re.compile(r"^(?:表\s*\d+|table\s*\d+)", re.I)
+            matches = [line for line in lines if pattern.match(line)]
+            return matches[-1] if matches else ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _is_raster_document_without_vector_tables(pdf_path: str) -> bool:

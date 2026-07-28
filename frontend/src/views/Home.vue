@@ -51,15 +51,15 @@
       <div class="hero-content">
         <div class="hero-badge">
           <span class="badge-dot"></span>
-          基于 RAG + LLM 的论文精读平台
+          可追溯原文的 AI 论文阅读助手
         </div>
         <h1 class="hero-title">
           让 AI 帮你<br/>
           <span class="title-highlight">读懂每一篇论文</span>
         </h1>
         <p class="hero-desc">
-          上传 PDF，AI 自动解析结构、生成摘要、深度解读。<br/>
-          支持交互问答，精准定位原文，让科研阅读效率提升 10 倍。
+          上传 PDF，自动提取论文目录与关键内容。<br/>
+          围绕论文连续提问，回答附带页码、原文引用与高亮定位。
         </p>
         <div class="hero-actions">
           <a-button type="primary" size="large" class="btn-primary" @click="$router.push('/papers')">
@@ -68,29 +68,29 @@
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
               </svg>
             </template>
-            开始使用
+            {{ isLoggedIn ? '进入论文工作台' : '开始使用' }}
           </a-button>
-          <a-button size="large" class="btn-secondary" @click="scrollToFeatures">
-            了解更多
+          <a-button size="large" class="btn-secondary" @click="$router.push('/guide')">
+            查看使用指南
             <template #icon>
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M12 5v14M6 13l6 6 6-6"/>
+                <path d="M4 5.5A2.5 2.5 0 016.5 3H11v16H6.5A2.5 2.5 0 004 21.5zM20 5.5A2.5 2.5 0 0017.5 3H13v16h4.5a2.5 2.5 0 012.5 2.5z"/>
               </svg>
             </template>
           </a-button>
         </div>
         <div class="hero-stats">
           <div class="stat-item float-animation" style="animation-delay: 0s;">
-            <span class="stat-value">智能解析</span>
-            <span class="stat-label">自动提取论文结构</span>
+            <span class="stat-value">目录导航</span>
+            <span class="stat-label">多级章节快速跳转</span>
           </div>
           <div class="stat-item float-animation" style="animation-delay: 0.2s;">
-            <span class="stat-value">交互问答</span>
-            <span class="stat-label">精准定位原文引用</span>
+            <span class="stat-value">连续问答</span>
+            <span class="stat-label">流式回答与深度思考</span>
           </div>
           <div class="stat-item float-animation" style="animation-delay: 0.4s;">
-            <span class="stat-value">深度解读</span>
-            <span class="stat-label">概念解释与方法对比</span>
+            <span class="stat-value">原文溯源</span>
+            <span class="stat-label">页码定位与内容高亮</span>
           </div>
         </div>
         <div class="slideshow-controls" aria-label="背景图片轮播">
@@ -108,11 +108,11 @@
       </div>
     </section>
 
-    <section class="features-section" ref="featuresSectionRef">
+    <section class="features-section">
       <div class="section-shell">
         <div class="section-header">
           <h2>核心功能</h2>
-          <p>从上传到理解，全流程 AI 辅助</p>
+          <p>从结构浏览到证据核对，完整支持论文精读过程</p>
         </div>
         <div class="features-grid">
           <div class="feature-card" v-for="(f, i) in features" :key="i">
@@ -133,7 +133,7 @@
       <div class="section-shell workflow-shell">
         <div class="section-header workflow-header">
           <h2>三步开始</h2>
-          <p>从上传论文到追问原文，一次完成。</p>
+          <p>上传、阅读、提问，在同一个工作台完成。</p>
         </div>
         <div class="workflow-steps">
           <div class="workflow-step" v-for="(step, i) in workflowSteps" :key="i">
@@ -154,16 +154,17 @@
 
     <section class="cta-section">
       <div class="cta-content">
-        <h2>准备好提升阅读效率了吗？</h2>
-        <p>上传你的第一篇论文，体验 AI 驱动的精读流程</p>
+        <h2>开始阅读你的下一篇论文</h2>
+        <p>上传 PDF，沿着目录阅读，并用可核对的引用理解关键内容。</p>
         <a-button type="primary" size="large" @click="$router.push('/papers')">
-          立即开始
+          {{ isLoggedIn ? '进入论文工作台' : '立即开始' }}
         </a-button>
       </div>
     </section>
 
     <footer class="footer">
       <p>PaperAI &copy; 2026 · 智能论文精读助手</p>
+      <button type="button" @click="$router.push('/guide')">使用指南</button>
     </footer>
   </div>
 </template>
@@ -178,7 +179,6 @@ import BrandMark from '@/components/BrandMark.vue'
 const currentUser = ref<any>(null)
 const showDropdown = ref(false)
 const isScrolled = ref(false)
-const featuresSectionRef = ref<HTMLElement | null>(null)
 const currentBgIndex = ref(0)
 
 const backgrounds = ['lib1.jpg', 'read2.jpg?v=20260621', 'research-reading.jpg']
@@ -191,39 +191,39 @@ const userInitial = computed(() => {
 
 const features = [
   {
-    title: '智能解析',
-    desc: '自动提取论文结构，识别章节、图表、公式，快速定位关键内容',
+    title: '结构化阅读',
+    desc: '自动提取多级论文目录，展开或收起章节，并快速跳转到对应页面',
     icon: '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
     color: 'oklch(0.50 0.16 45)',
-    tags: ['自动分章', '结构提取', '快速定位']
+    tags: ['多级目录', '章节跳转', '阅读位置']
   },
   {
-    title: '交互问答',
-    desc: '针对论文任意内容提问，AI 即时回答并精准引用原文位置',
+    title: '论文问答',
+    desc: '围绕论文连续追问，支持流式生成、停止回答和可选的深度思考',
     icon: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
     color: 'oklch(0.55 0.14 30)',
-    tags: ['上下文感知', '原文引用', '多轮对话']
+    tags: ['流式回答', '多轮对话', '深度思考']
   },
   {
-    title: '结构化摘要',
-    desc: '一键生成论文概述、方法、实验、贡献的结构化摘要',
+    title: '可信引用',
+    desc: '引用的章节、页码和原文来自检索证据，减少模型改写与位置偏差',
     icon: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>',
     color: 'oklch(0.48 0.12 55)',
-    tags: ['自动摘要', '四维度分析', '可重新生成']
+    tags: ['确定性引用', '准确页码', '证据核对']
   },
   {
-    title: '深度解读',
-    desc: '概念解释、方法对比、关键信息提取，帮你深入理解论文',
+    title: '精确定位',
+    desc: '点击回答中的引用，直接跳转 PDF 页面并高亮对应原文区域',
     icon: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
     color: 'oklch(0.52 0.13 120)',
-    tags: ['概念解释', '方法对比', '关键信息']
+    tags: ['原文高亮', '页面跳转', '引用溯源']
   }
 ]
 
 const workflowSteps = [
-  { title: '上传论文', desc: '支持 PDF 格式，自动解析提取内容' },
-  { title: 'AI 分析', desc: '自动生成结构化摘要和深度解读' },
-  { title: '交互探索', desc: '随时提问，AI 精准回答并引用原文' }
+  { title: '上传论文', desc: '上传 PDF，等待正文、目录和图表解析完成' },
+  { title: '浏览结构', desc: '沿多级目录阅读，系统自动保存最近位置' },
+  { title: '提问核对', desc: '连续追问，并点击引用定位到 PDF 原文' }
 ]
 
 let bgInterval: ReturnType<typeof setInterval> | undefined
@@ -265,10 +265,6 @@ onUnmounted(() => {
 
 const handleScroll = () => {
   isScrolled.value = window.scrollY > 20
-}
-
-const scrollToFeatures = () => {
-  featuresSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 const handleLogout = () => {
@@ -508,8 +504,11 @@ const handleLogout = () => {
   opacity: 0;
 }
 
+.hero-actions :deep(.arco-btn) {
+  width: 220px;
+}
+
 .btn-primary {
-  padding: 0 32px;
   height: 52px;
   font-size: 16px;
   font-weight: 600;
@@ -528,7 +527,6 @@ const handleLogout = () => {
 }
 
 .btn-secondary {
-  padding: 0 24px;
   height: 52px;
   font-size: 16px;
   font-weight: 500;
@@ -821,6 +819,10 @@ const handleLogout = () => {
 }
 
 .footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
   padding: 32px 24px;
   text-align: center;
   border-top: 1px solid oklch(1 0 / 0.08);
@@ -831,6 +833,26 @@ const handleLogout = () => {
   font-size: 13px;
   color: oklch(0.76 0.014 255);
   margin: 0;
+}
+
+.footer button {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: oklch(0.82 0.05 55);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.footer button:hover {
+  border-bottom-color: currentColor;
+  color: oklch(0.90 0.08 60);
+}
+
+.footer button:focus-visible {
+  outline: 2px solid oklch(0.82 0.12 55);
+  outline-offset: 4px;
 }
 
 @media (max-width: 960px) {
@@ -848,7 +870,8 @@ const handleLogout = () => {
   .hero-section { min-height: auto; padding-top: 116px; }
   .hero-title { font-size: 40px; }
   .hero-desc { font-size: 15px; }
-  .hero-actions { flex-direction: column; align-items: stretch; max-width: 320px; }
+  .hero-actions { flex-direction: column; align-items: stretch; width: min(100%, 320px); margin-inline: auto; }
+  .hero-actions :deep(.arco-btn) { width: 100%; }
   .hero-stats { flex-direction: column; align-items: stretch; gap: 14px; }
   .stat-item,
   .stat-item:last-child {

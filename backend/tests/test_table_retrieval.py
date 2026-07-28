@@ -8,14 +8,16 @@ from app.rag.table_retrieval import (
 from app.agent.qa_agent.enhanced_graph import (
     _enrich_citations,
     calculate_evidence_confidence,
-    create_enhanced_qa_agent_graph,
     detect_metadata_intent,
     needs_deep_thinking,
 )
+from app.agent.qa_agent.workflow import UnifiedQAWorkflow
 
 
-def test_enhanced_qa_graph_compiles_without_state_key_collision():
-    assert create_enhanced_qa_agent_graph() is not None
+def test_unified_qa_workflow_graph_is_defined():
+    graph = UnifiedQAWorkflow.graph_definition()
+    assert graph["start"] == "load_context"
+    assert "generate_answer" in graph["nodes"]
 
 
 def test_extract_table_numbers_supports_common_references():

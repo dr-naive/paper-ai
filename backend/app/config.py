@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     DATABASE_URL: str = "postgresql+asyncpg://postgres:paperai-local@localhost:5432/paperai"
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_ANSWER_TASK_TTL_SECONDS: int = 24 * 60 * 60
+    REDIS_UPLOAD_TASK_TTL_SECONDS: int = 7 * 24 * 60 * 60
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
@@ -69,6 +71,10 @@ class Settings(BaseSettings):
             raise ValueError("LLM_TIMEOUT_SECONDS 必须大于 0")
         if not 0 <= self.LLM_MAX_RETRIES <= 5:
             raise ValueError("LLM_MAX_RETRIES 必须在 0 到 5 之间")
+        if self.REDIS_ANSWER_TASK_TTL_SECONDS < 60:
+            raise ValueError("REDIS_ANSWER_TASK_TTL_SECONDS 不能小于 60")
+        if self.REDIS_UPLOAD_TASK_TTL_SECONDS < 60:
+            raise ValueError("REDIS_UPLOAD_TASK_TTL_SECONDS 不能小于 60")
         return self
 
 @lru_cache()

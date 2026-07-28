@@ -133,6 +133,9 @@ docker-compose.override.yml
 .agents/
 .impeccable/
 
+# 本地产品设计上下文（供设计工具使用，不提交）
+/PRODUCT.md
+
 # 本地 Codex skill 安装包
 /impeccable.zip
 

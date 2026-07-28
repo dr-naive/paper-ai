@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from difflib import SequenceMatcher
+from typing import Any
 from loguru import logger
 
 logger = logging.getLogger(__name__)
@@ -185,7 +186,21 @@ def _enrich_citations(citations: list, chunks: list) -> list:
 
         if source:
             item["source_id"] = f"S{chunks.index(source) + 1}"
-            for field in ("page", "table_number", "chunk_type", "chunk_index"):
+            for field in (
+                "page",
+                "table_number",
+                "chunk_type",
+                "chunk_index",
+                "element_id",
+                "element_type",
+                "bbox",
+                "section_path",
+                "layout_confidence",
+                "table_id",
+                "row_index",
+                "fields",
+                "cell_bboxes",
+            ):
                 if source.get(field) is not None:
                     item[field] = source[field]
             if source.get("page") is not None:
@@ -215,7 +230,59 @@ def build_deterministic_citations(answer: str, chunks: list) -> list:
             "section": chunk.get("section", "未知章节"),
             "text": _best_source_excerpt("", content),
         })
-    return _enrich_citations(citations, chunks)
+    return _deduplicate_citations(_enrich_citations(citations, chunks))
+
+
+def _citation_text_signature(value: Any) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value or "").lower())
+
+
+def _citation_precision(item: dict) -> tuple[int, int, int]:
+    return (
+        int(bool(item.get("element_id") and item.get("bbox"))),
+        int(bool(item.get("table_id") and item.get("row_index") is not None)),
+        int(bool(item.get("search_text"))),
+    )
+
+
+def _deduplicate_citations(citations: list[dict]) -> list[dict]:
+    """Remove repeated display citations without changing source provenance."""
+    unique: list[dict] = []
+    for citation in citations:
+        duplicate_index = None
+        for index, existing in enumerate(unique):
+            if str(existing.get("page") or "") != str(citation.get("page") or ""):
+                continue
+            same_element = (
+                citation.get("element_id")
+                and citation.get("element_id") == existing.get("element_id")
+            )
+            same_bbox = (
+                citation.get("bbox")
+                and citation.get("bbox") == existing.get("bbox")
+            )
+            left = _citation_text_signature(
+                citation.get("search_text") or citation.get("text")
+            )
+            right = _citation_text_signature(
+                existing.get("search_text") or existing.get("text")
+            )
+            shorter, longer = sorted((left, right), key=len)
+            same_text = bool(
+                len(shorter) >= 24
+                and (
+                    (shorter in longer and len(shorter) / max(len(longer), 1) >= 0.72)
+                    or SequenceMatcher(None, left, right).ratio() >= 0.88
+                )
+            )
+            if same_element or same_bbox or same_text:
+                duplicate_index = index
+                break
+        if duplicate_index is None:
+            unique.append(citation)
+        elif _citation_precision(citation) > _citation_precision(unique[duplicate_index]):
+            unique[duplicate_index] = citation
+    return unique
 
 
 def calculate_evidence_confidence(
@@ -611,50 +678,22 @@ async def run_enhanced_qa_agent(
     history_context: str = None,
     generate_follow_up: bool = True
 ) -> dict:
-    """运行增强版问答 Agent"""
-    logger.info(f"[增强问答 Agent] 处理问题：{question[:50]}...")
-    started_at = time.perf_counter()
-    
-    initial_state = QAAgentState(
+    """Compatibility wrapper around the same workflow used by streaming chat."""
+    from app.agent.qa_agent.workflow import run_preloaded_qa_workflow
+
+    logger.info("[统一问答工作流] 处理预检索问题：%s...", question[:50])
+    result = await run_preloaded_qa_workflow(
         paper_id=paper_id,
         question=question,
-        paper_metadata=paper_metadata or {},
+        chunks=relevant_chunks,
+        paper_metadata=paper_metadata,
         history_context=history_context or "",
-        intent=None,
-        metadata_field=None,
-        simple_question=False,
-        relevant_chunks=relevant_chunks,
-        answer=None,
-        sources=[],
-        citations=[],
-        follow_up_questions=[],
-        generate_follow_up=generate_follow_up,
-        intent_confidence=0.0,
-        evidence_confidence=0.0,
-        error=None
+        enable_thinking=needs_deep_thinking(question),
     )
-    
-    agent = get_enhanced_qa_agent()
-    result = await agent.ainvoke(initial_state)
-    
-    logger.info(f"✅ [增强问答 Agent] 处理完成，耗时 {time.perf_counter() - started_at:.2f}s")
-    
-    evidence_confidence = calculate_evidence_confidence(
-        result.get("answer", ""),
-        result.get("citations", []),
-        relevant_chunks,
-        result.get("intent"),
-    )
-    return {
-        "answer": result.get("answer", ""),
-        "intent": result.get("intent", ""),
-        "sources": result.get("sources", []),
-        "citations": result.get("citations", []),
-        "follow_up_questions": result.get("follow_up_questions", []),
-        "intent_confidence": result.get("intent_confidence", 0.0),
-        "evidence_confidence": evidence_confidence,
-        # Deprecated compatibility alias. It now means evidence support,
-        # never intent confidence or answer accuracy.
-        "confidence": evidence_confidence,
-        "confidence_type": "evidence_support",
-    }
+    if generate_follow_up:
+        result["follow_up_questions"] = await generate_follow_up_questions(
+            question,
+            result.get("answer", ""),
+            result.get("intent", "general"),
+        )
+    return result

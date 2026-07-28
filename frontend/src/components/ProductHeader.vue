@@ -1,5 +1,9 @@
 <template>
-  <header class="product-header">
+  <header class="product-header" :class="{ 'product-header--edge': edge }">
+    <div v-if="$slots.leading" class="product-header__leading">
+      <slot name="leading" />
+    </div>
+
     <button class="product-header__brand" type="button" @click="router.push('/home')" aria-label="返回 PaperAI 首页">
       <BrandMark :size="28" />
     </button>
@@ -21,7 +25,9 @@
 import { useRouter } from 'vue-router'
 import BrandMark from './BrandMark.vue'
 
-defineProps<{ context?: string }>()
+withDefaults(defineProps<{ context?: string; edge?: boolean }>(), {
+  edge: false,
+})
 const router = useRouter()
 </script>
 
@@ -30,10 +36,15 @@ const router = useRouter()
   display: flex;
   align-items: center;
   min-height: 60px;
-  padding: 10px max(20px, calc((100vw - 1280px) / 2));
+  padding: 10px max(24px, calc((100vw - 1440px) / 2));
   border-bottom: 1px solid var(--pa-border);
   background: var(--pa-surface);
   color: var(--pa-ink);
+}
+
+.product-header--edge {
+  padding-left: 8px;
+  padding-right: 20px;
 }
 
 .product-header__brand {
@@ -44,6 +55,13 @@ const router = useRouter()
   color: inherit;
   font-size: 19px;
   cursor: pointer;
+}
+
+.product-header__leading {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 16px;
 }
 
 .product-header__brand:focus-visible {
@@ -84,6 +102,8 @@ const router = useRouter()
 
 @media (max-width: 760px) {
   .product-header { padding-inline: 14px; }
+  .product-header--edge { padding-left: 4px; }
+  .product-header__leading { margin-right: 8px; }
   .product-header__brand :deep(.brand-mark__name) { display: none; }
   .product-header__divider { margin-inline: 8px; }
 }

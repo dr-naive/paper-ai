@@ -41,6 +41,9 @@ export const updateReadingStatus = (paperId: string, data: { status?: string; pr
 export const listSessions = (paperId?: string, skip = 0, limit = 20) =>
   request.get('/api/v1/chat/sessions', { params: { paper_id: paperId, skip, limit } })
 
+export const getRecentMessages = (limit = 5) =>
+  request.get('/api/v1/chat/recent-messages', { params: { limit } })
+
 export const createSession = (paperId: string, title?: string) =>
   request.post('/api/v1/chat/sessions', { paper_id: paperId, title })
 
@@ -49,6 +52,11 @@ export const deleteSession = (sessionId: string) =>
 
 export const getSessionMessages = (sessionId: string) =>
   request.get(`/api/v1/chat/sessions/${sessionId}/messages`)
+
+export const deleteSessionMessage = (sessionId: string, messageId: string) =>
+  request.delete(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}`
+  )
 
 export const askInSession = (sessionId: string, question: string) =>
   request.post(`/api/v1/chat/sessions/${sessionId}/ask`, { question })

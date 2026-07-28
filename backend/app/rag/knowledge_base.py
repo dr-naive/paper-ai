@@ -4,6 +4,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from app.config import settings
+import json
 import logging
 import os
 import re
@@ -244,11 +245,10 @@ class DashScopeEmbeddings(Embeddings):
         self.api_key = api_key
         # 确保 base_url 末尾没有斜杠
         self.base_url = base_url.rstrip('/') 
-        # 根据模型名称确定向量维度
-        if "v3" in model.lower():
-            self.dimensions = 1024
-        else:
-            self.dimensions = 1536
+        # PaperAI intentionally keeps one stable Chroma dimension. Both the
+        # previous text-embedding-v3 model and qwen3.7-text-embedding support
+        # 1024 dimensions, but their vector spaces must never be mixed.
+        self.dimensions = 1024
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return self._call_api(texts)
@@ -273,42 +273,41 @@ class DashScopeEmbeddings(Embeddings):
             "Content-Type": "application/json"
         }
         
-        # 初始化结果数组
+        # 初始化结果数组；兼容接口支持数组输入，批量请求显著降低建库耗时。
         all_embeddings = [[] for _ in texts]
-        
-        # 逐个发送请求
-        for i, text in enumerate(clean_texts):
-            if not text:
-                continue # 跳过空文本
-            
-            # text-embedding-v3 需要使用正确的参数格式
-            if "v3" in self.model.lower():
-                payload = {
-                    "model": self.model,
-                    "input": text,
-                    "encoding_format": "float"
-                }
-            else:
-                payload = {
-                    "model": self.model,
-                    "input": text
-                }
-            
+        batch_size = 10
+        for start in range(0, len(clean_texts), batch_size):
+            indexed = [
+                (index, clean_texts[index])
+                for index in range(start, min(start + batch_size, len(clean_texts)))
+                if clean_texts[index]
+            ]
+            if not indexed:
+                continue
+            payload = {
+                "model": self.model,
+                "input": [text for _index, text in indexed],
+                "dimensions": self.dimensions,
+                "encoding_format": "float",
+            }
             try:
                 response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
                 response.raise_for_status()
                 result = response.json()
-                
-                if "data" in result and len(result["data"]) > 0 and "embedding" in result["data"][0]:
-                    all_embeddings[i] = result["data"][0]["embedding"]
-                else:
-                    logger.warning(f"⚠️ 响应格式异常: {result}")
-                    all_embeddings[i] = [0.0] * self.dimensions
-                    
+                data = sorted(result.get("data") or [], key=lambda item: item.get("index", 0))
+                if len(data) != len(indexed) or any("embedding" not in item for item in data):
+                    raise RuntimeError("Embedding 响应缺少向量数据")
+                for (original_index, _text), item in zip(indexed, data):
+                    all_embeddings[original_index] = item["embedding"]
             except Exception as e:
-                logger.warning(f"⚠️ 单个文本向量化失败 (长度:{len(text)}), 已跳过: {str(e)[:100]}")
-                all_embeddings[i] = [0.0] * self.dimensions # 使用正确的维度
-                
+                logger.error(
+                    "Embedding 失败 model=%s batch=%d error=%s",
+                    self.model,
+                    len(indexed),
+                    str(e)[:160],
+                )
+                raise RuntimeError(f"Embedding 模型调用失败: {self.model}") from e
+
         return all_embeddings
 
 # ==========================================
@@ -363,8 +362,27 @@ class PaperKnowledgeBase:
                     metadata["caption"] = str(chunk["caption"])
                 if chunk.get("table_number") is not None:
                     metadata["table_number"] = str(chunk["table_number"])
+                if chunk.get("table_id"):
+                    metadata["table_id"] = str(chunk["table_id"])
+                if chunk.get("row_index") is not None:
+                    metadata["row_index"] = int(chunk["row_index"])
+                if chunk.get("fields"):
+                    metadata["fields_json"] = json.dumps(chunk["fields"], ensure_ascii=False)
                 if chunk.get("coverage_source"):
                     metadata["coverage_source"] = str(chunk["coverage_source"])
+                if chunk.get("element_id"):
+                    metadata["element_id"] = str(chunk["element_id"])
+                if chunk.get("element_type"):
+                    metadata["element_type"] = str(chunk["element_type"])
+                if chunk.get("bbox"):
+                    metadata["bbox_json"] = json.dumps(chunk["bbox"])
+                if chunk.get("section_path"):
+                    metadata["section_path_json"] = json.dumps(
+                        chunk["section_path"],
+                        ensure_ascii=False,
+                    )
+                if chunk.get("layout_confidence") is not None:
+                    metadata["layout_confidence"] = float(chunk["layout_confidence"])
                 
                 # 如果是表格内容，提取表格编号
                 if "【表格】" in content or "table" in content.lower():
@@ -425,6 +443,7 @@ class PaperKnowledgeBase:
                         "$or": [
                             {"chunk_type": "small"},
                             {"chunk_type": "table"},
+                            {"chunk_type": "table_row"},
                             {"chunk_type": "image"},
                         ]
                     },
@@ -442,7 +461,7 @@ class PaperKnowledgeBase:
                 filtered_results = [
                     (doc, score) for doc, score in results
                     if doc.metadata.get("paper_id") == paper_id
-                    and doc.metadata.get("chunk_type") in {"small", "table", "image"}
+                    and doc.metadata.get("chunk_type") in {"small", "table", "table_row", "image"}
                 ]
             
             # 检查查询是否包含表格编号（如"表1"、"Table 1"），如果有则优先返回匹配的表格
@@ -467,7 +486,7 @@ class PaperKnowledgeBase:
             small_chunks = [(doc, score) for doc, score in filtered_results 
                            if doc.metadata.get("chunk_type") == "small"]
             table_chunks = [(doc, score) for doc, score in filtered_results
-                            if doc.metadata.get("chunk_type") == "table"]
+                            if doc.metadata.get("chunk_type") in {"table", "table_row"}]
             image_chunks = [(doc, score) for doc, score in filtered_results
                             if doc.metadata.get("chunk_type") == "image"]
 
@@ -508,9 +527,32 @@ class PaperKnowledgeBase:
                     "chunk_type": doc.metadata.get("chunk_type", "text"),
                     "score": float(score)
                 }
-                for field in ("table_number", "caption", "page"):
+                for field in (
+                    "table_number",
+                    "caption",
+                    "page",
+                    "element_id",
+                    "element_type",
+                    "layout_confidence",
+                    "table_id",
+                    "row_index",
+                ):
                     if doc.metadata.get(field) is not None:
                         result[field] = doc.metadata[field]
+                for metadata_field, result_field in (
+                    ("bbox_json", "bbox"),
+                    ("section_path_json", "section_path"),
+                    ("fields_json", "fields"),
+                ):
+                    if doc.metadata.get(metadata_field):
+                        try:
+                            result[result_field] = json.loads(doc.metadata[metadata_field])
+                        except (TypeError, json.JSONDecodeError):
+                            logger.warning(
+                                "忽略损坏的版面元数据 field=%s chunk=%s",
+                                metadata_field,
+                                doc.metadata.get("chunk_index"),
+                            )
                 
                 if include_parent_context and doc.metadata.get("chunk_type") == "small":
                     parent_idx = doc.metadata.get("parent_index")

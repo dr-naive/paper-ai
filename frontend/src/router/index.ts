@@ -4,6 +4,7 @@ import { getCurrentUser } from '@/api/auth'
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/home' },
   { path: '/home', name: 'Home', component: () => import('@/views/Home.vue') },
+  { path: '/guide', name: 'Guide', component: () => import('@/views/Guide.vue') },
   { path: '/login', name: 'Login', component: () => import('@/views/Login.vue') },
   { path: '/register', name: 'Register', component: () => import('@/views/Register.vue') },
   { path: '/papers', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
@@ -16,7 +17,7 @@ let validatedToken = ''
 
 router.beforeEach(async (to) => {
   const token = localStorage.getItem('access_token')
-  const isPublicRoute = to.path === '/login' || to.path === '/home' || to.path === '/register'
+  const isPublicRoute = to.path === '/login' || to.path === '/home' || to.path === '/guide' || to.path === '/register'
 
   if (!token) {
     validatedToken = ''
@@ -32,7 +33,7 @@ router.beforeEach(async (to) => {
       localStorage.removeItem('access_token')
       localStorage.removeItem('user')
       validatedToken = ''
-      return to.path === '/home' ? true : '/login'
+      return isPublicRoute ? true : '/login'
     }
   }
 

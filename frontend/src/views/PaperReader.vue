@@ -1,9 +1,9 @@
 <template>
   <div class="paper-reader">
     <!-- 顶部工具栏 -->
-    <ProductHeader>
+    <ProductHeader edge>
       <template #navigation>
-        <a-button @click="goBack" size="small" type="text">
+        <a-button class="reader-back-button" @click="goBack" size="small" type="text">
           <template #icon><icon-arrow-left /></template>
           我的论文
         </a-button>
@@ -51,9 +51,9 @@
           v-if="pdfUrl"
           ref="pdfViewerRef"
           :pdf-url="pdfUrl"
-          @page-change="currentPdfPage = $event"
+          @page-change="handlePdfPageChange"
           @load-error="pdfError = true"
-          @load-success="pdfError = false"
+          @load-success="handlePdfLoaded"
         />
         <div v-if="pdfError" class="pdf-error">
           <a-result status="warning" title="PDF 加载失败">
@@ -113,16 +113,50 @@
                 </a-button>
               </div>
               <!-- 问答历史 -->
-              <div ref="qaHistoryRef" class="qa-history">
-                <div v-if="!qaHistory.length && !qaLoading" class="qa-empty">
-                  <div class="qa-empty-mark">AI</div>
-                  <strong>从论文内容开始提问</strong>
-                  <p>回答会附带引用，点击引用可回到 PDF 核对原文。</p>
-                </div>
-                <div v-for="qa in qaHistory" :key="qa.id" class="qa-item">
+              <div class="qa-history-shell">
+                <div
+                  ref="qaHistoryRef"
+                  class="qa-history"
+                  @scroll.passive="handleQaHistoryScroll"
+                  @wheel.passive="handleQaHistoryWheel"
+                >
+                  <div v-if="!qaHistory.length && !qaLoading" class="qa-empty">
+                    <div class="qa-empty-mark">AI</div>
+                    <strong>从论文内容开始提问</strong>
+                    <p>回答会附带引用，点击引用可回到 PDF 核对原文。</p>
+                  </div>
+                  <div
+                    v-for="qa in qaHistory"
+                    :id="`qa-${qa.id}`"
+                    :key="qa.id"
+                    class="qa-item"
+                  >
                   <div class="qa-question">
                     <span class="qa-label">问</span>
-                    <span>{{ qa.question }}</span>
+                    <span class="qa-question-text">{{ qa.question }}</span>
+                    <a-dropdown trigger="click" position="br">
+                      <button
+                        type="button"
+                        class="qa-more-button"
+                        :disabled="deletingMessageIds.has(String(qa.id))"
+                        :aria-label="`管理问题：${qa.question}`"
+                        title="编辑或删除这条问答"
+                      >
+                        <span aria-hidden="true">•••</span>
+                      </button>
+                      <template #content>
+                        <a-doption @click="editQaMessage(qa)">
+                          编辑
+                        </a-doption>
+                        <a-doption
+                          status="danger"
+                          :disabled="qa.streaming || String(qa.id).startsWith('stream-')"
+                          @click="confirmDeleteQaMessage(qa)"
+                        >
+                          删除
+                        </a-doption>
+                      </template>
+                    </a-dropdown>
                   </div>
                   <div class="qa-answer">
                     <span class="qa-label">答</span>
@@ -157,10 +191,26 @@
                       <div v-else-if="qa.streaming" class="qa-stream-progress">
                         {{ qa.status || '正在生成' }}
                       </div>
-                      <div v-if="qa.streamError" class="qa-stream-error">
-                        {{ qa.streamError }}
+                      <div
+                        v-if="qa.streamError"
+                        class="qa-stream-error"
+                        role="alert"
+                        aria-live="assertive"
+                      >
+                        <span class="qa-stream-error-icon" aria-hidden="true">!</span>
+                        <div class="qa-stream-error-content">
+                          <strong>{{ qa.errorStage ? `${qa.errorStage}失败` : '回答生成失败' }}</strong>
+                          <p>{{ qa.streamError }}</p>
+                          <button
+                            type="button"
+                            :disabled="qaLoading"
+                            @click="askQuestion(qa.question)"
+                          >
+                            重新生成
+                          </button>
+                        </div>
                       </div>
-                      <div v-if="!qa.streaming" class="qa-message-actions">
+                      <div v-if="!qa.streaming && !qa.streamError" class="qa-message-actions">
                         <button type="button" @click="askQuestion(qa.question)">
                           重新生成
                         </button>
@@ -215,6 +265,16 @@
                     </div>
                   </div>
                 </div>
+                </div>
+                <button
+                  v-if="!isFollowingLatest && qaHistory.length"
+                  type="button"
+                  class="qa-scroll-latest"
+                  aria-label="回到最新回答并继续自动跟随"
+                  @click="scrollQaToLatest(true)"
+                >
+                  回到最新
+                </button>
               </div>
               <div class="qa-composer">
                 <!-- 快捷问题 -->
@@ -238,6 +298,7 @@
                 <!-- 输入区 -->
                 <div class="qa-input">
                   <a-textarea
+                    ref="questionInputRef"
                     v-model="question"
                     placeholder="向这篇论文提问..."
                     :auto-size="{ minRows: 2, maxRows: 4 }"
@@ -540,7 +601,8 @@ import ProductHeader from '@/components/ProductHeader.vue'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   getPaper, getPaperSections, rebuildPaperSections,
-  listSessions, createSession, deleteSession, getSessionMessages,
+  updateReadingStatus,
+  listSessions, createSession, deleteSession, deleteSessionMessage, getSessionMessages,
   getAnswerTask, resumeAnswerTask, stopAnswerTask, streamAskInSession,
   generateSummary, getSummaryCache,
   interpretPaper, getInterpretCache
@@ -570,6 +632,8 @@ const sectionsLoading = ref(true)
 const sectionsRebuilding = ref(false)
 const outlineCollapsed = ref(false)
 const currentPdfPage = ref(1)
+const totalPdfPages = ref(0)
+let readingProgressTimer: number | null = null
 
 // 结构化摘要相关
 const structuredSummary = ref<any>(null)
@@ -582,10 +646,13 @@ const interpretLoading = ref(false)
 
 // QA 相关 - 基于会话
 const question = ref('')
+const questionInputRef = ref<any>(null)
 const qaHistory = ref<any[]>([])
 const qaLoading = ref(false)
 const thinkingEnabled = ref(false)
 const qaHistoryRef = ref<HTMLElement | null>(null)
+const isFollowingLatest = ref(true)
+let lastQaScrollTop = 0
 let qaAbortController: AbortController | null = null
 const currentAnswerTaskId = ref('')
 const currentSessionId = ref<string>('')
@@ -594,6 +661,7 @@ const showAllQuickQuestions = ref(false)
 const expandedCitationGroups = ref<Set<string>>(new Set())
 const activeCitationKey = ref('')
 const activeCitationPage = ref<number | null>(null)
+const deletingMessageIds = ref<Set<string>>(new Set())
 const quickQuestions = [
   '这篇论文的主要贡献是什么？',
   '论文使用的主要方法是什么？',
@@ -604,6 +672,48 @@ const quickQuestions = [
 const visibleQuickQuestions = computed(() => (
   showAllQuickQuestions.value ? quickQuestions : quickQuestions.slice(0, 3)
 ))
+
+const isQaHistoryNearBottom = (element: HTMLElement, threshold = 72) => (
+  element.scrollHeight - element.scrollTop - element.clientHeight <= threshold
+)
+
+const handleQaHistoryScroll = () => {
+  const element = qaHistoryRef.value
+  if (!element) return
+  const isMovingUp = element.scrollTop < lastQaScrollTop - 1
+  lastQaScrollTop = element.scrollTop
+  if (isMovingUp) {
+    isFollowingLatest.value = false
+    return
+  }
+  if (isFollowingLatest.value) {
+    isFollowingLatest.value = isQaHistoryNearBottom(element)
+  } else if (isQaHistoryNearBottom(element, 12)) {
+    isFollowingLatest.value = true
+  }
+}
+
+const handleQaHistoryWheel = (event: WheelEvent) => {
+  if (event.deltaY < 0) isFollowingLatest.value = false
+}
+
+const scrollQaToLatest = (smooth = false) => {
+  isFollowingLatest.value = true
+  void nextTick(() => {
+    const element = qaHistoryRef.value
+    if (!element) return
+    element.scrollTo({
+      top: element.scrollHeight,
+      behavior: smooth && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'smooth'
+        : 'auto'
+    })
+  })
+}
+
+const followQaLatestAfterRender = () => {
+  if (isFollowingLatest.value) scrollQaToLatest()
+}
 
 const clampSidebarWidth = (width: number) => {
   const viewportLimit = Math.max(360, window.innerWidth - 420)
@@ -650,6 +760,57 @@ const navigateToSection = async (section: OutlineNode) => {
   pdfViewerRef.value.highlightPage(section.startPage)
 }
 
+const readingPositionKey = `paperai:reading-position:${paperId}`
+
+const persistReadingProgress = async () => {
+  if (!totalPdfPages.value) return
+  const progress = Math.min(
+    100,
+    Math.max(0, currentPdfPage.value / totalPdfPages.value * 100)
+  )
+  const status = progress >= 98 ? 'completed' : progress > 0 ? 'reading' : 'unread'
+  localStorage.setItem(readingPositionKey, JSON.stringify({
+    page: currentPdfPage.value,
+    total: totalPdfPages.value,
+    updatedAt: new Date().toISOString()
+  }))
+  try {
+    await updateReadingStatus(paperId, { progress, status })
+  } catch (error) {
+    console.error('保存阅读进度失败:', error)
+  }
+}
+
+const scheduleReadingProgressSave = () => {
+  if (readingProgressTimer !== null) window.clearTimeout(readingProgressTimer)
+  readingProgressTimer = window.setTimeout(() => {
+    readingProgressTimer = null
+    void persistReadingProgress()
+  }, 800)
+}
+
+const handlePdfPageChange = (page: number) => {
+  currentPdfPage.value = page
+  scheduleReadingProgressSave()
+}
+
+const handlePdfLoaded = async (pages: number) => {
+  pdfError.value = false
+  totalPdfPages.value = pages
+  try {
+    const saved = JSON.parse(localStorage.getItem(readingPositionKey) || '{}')
+    const savedPage = Math.min(pages, Math.max(1, Number(saved.page || 1)))
+    if (savedPage > 1) {
+      await nextTick()
+      await pdfViewerRef.value?.scrollToPage(savedPage)
+      currentPdfPage.value = savedPage
+    }
+  } catch {
+    // Ignore a damaged local reading-position record and start from page one.
+  }
+  scheduleReadingProgressSave()
+}
+
 // 加载会话列表
 const loadSessions = async () => {
   try {
@@ -658,8 +819,10 @@ const loadSessions = async () => {
     
     // 如果有会话且当前没有选中会话，自动选择第一个会话
     if (sessions.value.length > 0 && !currentSessionId.value) {
-      currentSessionId.value = sessions.value[0].id
-      await switchSession(sessions.value[0].id)
+      const requestedSession = String(route.query.session || '')
+      const target = sessions.value.find(item => item.id === requestedSession) || sessions.value[0]
+      currentSessionId.value = target.id
+      await switchSession(target.id)
     }
   } catch (error) {
     console.error('加载会话列表失败:', error)
@@ -694,6 +857,14 @@ const switchSession = async (sessionId: string) => {
       thinkingExpanded: false,
       thinkingStreaming: false
     }))
+    const requestedMessage = String(route.query.message || '')
+    if (requestedMessage) {
+      await nextTick()
+      document.getElementById(`qa-${requestedMessage}`)?.scrollIntoView({
+        block: 'center',
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+      })
+    }
     await recoverActiveAnswer(sessionId)
   } catch (error) {
     Message.error('加载会话失败')
@@ -750,6 +921,47 @@ const handleDeleteSession = async (sessionId: string) => {
         Message.success('已删除')
       } catch (error) {
         Message.error('删除失败')
+      }
+    }
+  })
+}
+
+const editQaMessage = (qa: any) => {
+  question.value = String(qa?.question || '')
+  void nextTick(() => {
+    questionInputRef.value?.focus?.()
+  })
+}
+
+const confirmDeleteQaMessage = (qa: any) => {
+  if (!currentSessionId.value || qa?.streaming || String(qa?.id || '').startsWith('stream-')) {
+    return
+  }
+  Modal.confirm({
+    title: '删除这条问答？',
+    content: '问题、回答和引用将一起删除，此操作无法撤销。',
+    okText: '删除问答',
+    cancelText: '取消',
+    okButtonProps: { status: 'danger' },
+    onOk: async () => {
+      const messageId = String(qa.id)
+      deletingMessageIds.value = new Set(deletingMessageIds.value).add(messageId)
+      try {
+        await deleteSessionMessage(currentSessionId.value, messageId)
+        qaHistory.value = qaHistory.value.filter(item => String(item.id) !== messageId)
+        const expanded = new Set(expandedCitationGroups.value)
+        expanded.delete(messageId)
+        expandedCitationGroups.value = expanded
+        await loadSessions()
+        Message.success('已删除这条问答')
+      } catch (error: any) {
+        const detail = error?.response?.data?.detail
+        Message.error(detail || '删除问答失败，请重试')
+        throw error
+      } finally {
+        const next = new Set(deletingMessageIds.value)
+        next.delete(messageId)
+        deletingMessageIds.value = next
       }
     }
   })
@@ -873,32 +1085,46 @@ const locateInPdf = async (cite: any, key: string) => {
   }
 
   const citationPage = findCitationPage(cite)
-  if (citationPage) {
-    Message.info(`正在定位到第 ${citationPage} 页...`)
-    await pdfViewerRef.value.scrollToPage(citationPage)
-    pdfViewerRef.value.highlightPage(citationPage)
-    activeCitationPage.value = citationPage
-    Message.success(`已定位到第 ${citationPage} 页`)
-    return
+  const directBbox = Array.isArray(cite.bbox) ? cite.bbox : null
+  const cellBboxes = Array.isArray(cite.cell_bboxes) ? cite.cell_bboxes : []
+  if (citationPage && (directBbox?.length === 4 || cellBboxes.length)) {
+    const location = await pdfViewerRef.value.highlightBbox(
+      citationPage,
+      directBbox,
+      cellBboxes
+    )
+    if (location) {
+      activeCitationPage.value = location.page
+      Message.success(`已框选第 ${location.page} 页引用位置`)
+      return
+    }
   }
-
-  const searchCandidates = [cite.search_text, cite.text, cite.section]
+  const searchCandidates = [cite.search_text, cite.text]
     .map(value => String(value || '').trim())
     .filter(Boolean)
 
   if (searchCandidates.length) {
     Message.info(`正在定位：${searchCandidates[0].substring(0, 30)}...`)
-    const foundPage = await pdfViewerRef.value.searchText(searchCandidates)
-    if (foundPage) {
-      pdfViewerRef.value.highlightPage(foundPage)
-      activeCitationPage.value = foundPage
-      Message.success(`已定位到第 ${foundPage} 页`)
-    } else {
-      Message.warning('未在 PDF 中找到匹配的原文内容')
+    const location = await pdfViewerRef.value.highlightCitation(
+      citationPage,
+      searchCandidates
+    )
+    if (location) {
+      activeCitationPage.value = location.page
+      Message.success(`已框选第 ${location.page} 页引用原文`)
+      return
     }
-  } else {
-    Message.info(`引用来源：${cite.section}`)
   }
+
+  if (citationPage) {
+    await pdfViewerRef.value.scrollToPage(citationPage)
+    pdfViewerRef.value.highlightPage(citationPage)
+    activeCitationPage.value = citationPage
+    Message.warning(`已定位到第 ${citationPage} 页，未匹配到具体原文`)
+    return
+  }
+
+  Message.warning('未在 PDF 中找到匹配的引用原文')
 }
 
 const loadSections = async () => {
@@ -950,6 +1176,21 @@ const rememberActiveTask = (sessionId: string, taskId: string, taskQuestion: str
 
 const forgetActiveTask = (sessionId: string) => {
   localStorage.removeItem(activeTaskStorageKey(sessionId))
+}
+
+const answerStageLabel = (stage = '') => {
+  const labels: Record<string, string> = {
+    load_context: '读取论文',
+    classify_intent: '理解问题',
+    retrieve_evidence: '检索论文',
+    evaluate_evidence: '检查证据',
+    generate_answer: '模型生成',
+    organize_citations: '整理引用',
+    persist_message: '保存回答',
+    worker: '后台处理',
+    queue: '任务排队'
+  }
+  return labels[stage] || ''
 }
 
 const recoverActiveAnswer = async (sessionId: string) => {
@@ -1017,6 +1258,7 @@ const askQuestion = async (
     streaming: true,
     status: '正在检索论文',
     streamError: '',
+    errorStage: '',
     thinking: '',
     thinkingExpanded: enableThinking,
     thinkingStreaming: false
@@ -1043,17 +1285,8 @@ const askQuestion = async (
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   const updateDisplayedAnswer = (answer: string) => {
-    const element = qaHistoryRef.value
-    const shouldFollow = !element
-      || element.scrollHeight - element.scrollTop - element.clientHeight < 140
     pendingMessage.answer = answer
-    if (shouldFollow) {
-      void nextTick(() => {
-        if (qaHistoryRef.value) {
-          qaHistoryRef.value.scrollTop = qaHistoryRef.value.scrollHeight
-        }
-      })
-    }
+    followQaLatestAfterRender()
   }
 
   const scheduleTyping = () => {
@@ -1098,6 +1331,7 @@ const askQuestion = async (
         ? characters.length
         : characters.length > 160 ? 8 : characters.length > 60 ? 4 : 2
       pendingMessage.thinking += characters.slice(0, batchSize).join('')
+      followQaLatestAfterRender()
       if (pendingMessage.thinking.length < receivedReasoning.length) {
         scheduleReasoning()
       }
@@ -1105,8 +1339,7 @@ const askQuestion = async (
   }
 
   try {
-    await nextTick()
-    if (qaHistoryRef.value) qaHistoryRef.value.scrollTop = qaHistoryRef.value.scrollHeight
+    scrollQaToLatest()
     const handlers: AskStreamHandlers = {
       onTask: (data: any) => {
         currentAnswerTaskId.value = data.task_id
@@ -1216,12 +1449,9 @@ const askQuestion = async (
     pendingMessage.streamError = error?.name === 'AbortError'
       ? '回答已停止'
       : (error?.message || '回答生成失败，请重试')
+    pendingMessage.errorStage = answerStageLabel(error?.stage)
     if (error?.retriable === false) forgetActiveTask(sessionId)
     if (!question.value) question.value = normalizedQuestion
-    if (!receivedAnswer) {
-      qaHistory.value = qaHistory.value.filter(item => item.id !== temporaryId)
-    }
-    if (error?.name !== 'AbortError') Message.error(pendingMessage.streamError)
   } finally {
     qaAbortController = null
     currentAnswerTaskId.value = ''
@@ -1293,6 +1523,8 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleWindowResize)
   qaAbortController?.abort()
+  if (readingProgressTimer !== null) window.clearTimeout(readingProgressTimer)
+  void persistReadingProgress()
 })
 
 // 监听解读类型变化，加载对应缓存
@@ -1308,6 +1540,12 @@ watch(interpretType, () => {
   display: flex;
   flex-direction: column;
   background: var(--pa-bg);
+}
+
+.reader-back-button {
+  min-height: 40px;
+  padding-inline: 8px;
+  white-space: nowrap;
 }
 
 .paper-title-bar {
@@ -1517,10 +1755,50 @@ watch(interpretType, () => {
   margin-top: 12px;
 }
 
-.qa-history {
+.qa-history-shell {
   flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.qa-history {
+  height: 100%;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 14px 16px 20px;
+  overscroll-behavior: contain;
+}
+
+.qa-scroll-latest {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  padding: 6px 11px;
+  border: 1px solid var(--pa-border);
+  border-radius: 16px;
+  background: var(--pa-surface);
+  box-shadow: 0 4px 14px rgba(29, 33, 41, 0.12);
+  color: var(--pa-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.qa-scroll-latest:hover {
+  border-color: var(--pa-primary);
+  box-shadow: 0 5px 16px rgba(29, 33, 41, 0.16);
+  transform: translateY(-1px);
+}
+
+.qa-scroll-latest:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
+}
+
+.qa-scroll-latest:active {
+  transform: translateY(0);
 }
 
 .qa-item {
@@ -1561,6 +1839,55 @@ watch(interpretType, () => {
   margin-bottom: 6px;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.qa-question {
+  align-items: flex-start;
+}
+
+.qa-question-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.qa-more-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  margin: -3px -4px 0 4px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pa-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.qa-more-button:hover {
+  background: var(--pa-surface-soft);
+  color: var(--pa-ink);
+}
+
+.qa-more-button:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 1px;
+}
+
+.qa-more-button:active {
+  background: var(--pa-primary-soft);
+}
+
+.qa-more-button:disabled {
+  cursor: wait;
+  opacity: 0.45;
 }
 
 .qa-answer-content {
@@ -1713,9 +2040,73 @@ watch(interpretType, () => {
 }
 
 .qa-stream-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   margin-top: 8px;
-  color: rgb(var(--danger-6));
+  padding: 11px 12px;
+  border: 1px solid #efb5aa;
+  border-radius: 8px;
+  background: #fff5f2;
+  color: #71261c;
   font-size: 12px;
+}
+
+.qa-stream-error-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: #b73b2b;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.qa-stream-error-content {
+  min-width: 0;
+}
+
+.qa-stream-error-content strong {
+  display: block;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.qa-stream-error-content p {
+  margin: 2px 0 8px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.qa-stream-error-content button {
+  padding: 4px 9px;
+  border: 1px solid #cf695b;
+  border-radius: 5px;
+  background: #fff;
+  color: #8d2f23;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.qa-stream-error-content button:hover:not(:disabled) {
+  border-color: #a7382a;
+  background: #fffaf8;
+}
+
+.qa-stream-error-content button:focus-visible {
+  outline: 2px solid #a7382a;
+  outline-offset: 2px;
+}
+
+.qa-stream-error-content button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .qa-message-actions {
@@ -2002,7 +2393,10 @@ watch(interpretType, () => {
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-resizer::after,
-  .citation-item { transition: none; }
+  .citation-item,
+  .qa-scroll-latest { transition: none; }
+
+  .qa-scroll-latest:hover { transform: none; }
 }
 
 /* 摘要面板 */

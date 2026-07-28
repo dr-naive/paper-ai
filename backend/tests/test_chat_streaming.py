@@ -67,9 +67,12 @@ def test_stream_route_is_registered():
     assert "/api/v1/chat/sessions/{session_id}/ask/stream" in paths
     assert "/api/v1/chat/answer-tasks/{task_id}/stream" in paths
     assert "/api/v1/chat/answer-tasks/{task_id}/stop" in paths
+    assert "/api/v1/chat/answer-tasks/{task_id}/trace" in paths
+    assert "/api/v1/chat/sessions/{session_id}/messages/{message_id}" in paths
+    assert "/api/v1/chat/recent-messages" in paths
 
 
-def test_background_answer_task_can_be_resumed_from_offset():
+def test_background_answer_task_can_be_resumed_from_offset(monkeypatch):
     task = _AnswerTask(
         task_id="task-1",
         session_id="session-1",
@@ -85,6 +88,16 @@ def test_background_answer_task_can_be_resumed_from_offset():
         yield _sse_event("answer_delta", {"text": "后半段"})
         yield _sse_event("citations", {"items": [{"source_id": "S1"}]})
         yield _sse_event("done", {"message_id": "message-1"})
+
+    async def save_without_redis(_task):
+        return None
+
+    class FakeRedis:
+        async def delete(self, _key):
+            return 1
+
+    monkeypatch.setattr("app.api.chat._save_answer_task", save_without_redis)
+    monkeypatch.setattr("app.api.chat.get_async_redis", lambda: FakeRedis())
 
     async def run():
         await _consume_answer_events(task, source())
