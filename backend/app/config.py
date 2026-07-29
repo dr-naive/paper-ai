@@ -1,6 +1,6 @@
 """应用程序配置模块"""
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from functools import lru_cache
 from typing import Any, Optional, List
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 # 【修正路径计算】根据你的实际文件位置重新计算
 CURRENT_DIR = Path(__file__).resolve().parent       # .../backend/app
 BACKEND_DIR = CURRENT_DIR.parent                    # .../backend
-PROJECT_ROOT = BACKEND_DIR.parent                   # .../myAgent (根目录)
+PROJECT_ROOT = BACKEND_DIR.parent                   # 项目根目录
 
 # 优先找 backend 目录下的 .env，如果没有，就找项目根目录的
 ENV_FILE_PATH = BACKEND_DIR / ".env" if (BACKEND_DIR / ".env").exists() else PROJECT_ROOT / ".env"
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     REDIS_ANSWER_TASK_TTL_SECONDS: int = 24 * 60 * 60
     REDIS_UPLOAD_TASK_TTL_SECONDS: int = 7 * 24 * 60 * 60
     SECRET_KEY: str = "your-super-secret-key-change-in-production"
+    DEFAULT_ADMIN_PASSWORD: str = Field(min_length=8, max_length=128)
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
     LLM_PROVIDER: str = "deepseek"

@@ -34,7 +34,7 @@
             :max-length="128"
           />
         </a-form-item>
-        <div v-if="formError" class="form-error" role="alert" aria-live="assertive">
+        <div v-if="formError" class="pa-form-error" role="alert" aria-live="assertive">
           {{ formError }}
         </div>
         <a-form-item>
@@ -126,14 +126,4 @@ const handleRegister = async () => {
   color: var(--pa-success);
 }
 
-.form-error {
-  margin: -4px 0 18px;
-  padding: 10px 12px;
-  border: 1px solid oklch(0.72 0.10 28);
-  border-radius: 7px;
-  background: oklch(0.96 0.025 28);
-  color: var(--pa-danger);
-  font-size: 13px;
-  line-height: 1.55;
-}
 </style>

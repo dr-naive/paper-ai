@@ -4,11 +4,8 @@
     <div class="page-background">
       <div class="bg-slideshow">
         <div
-          v-for="(bg, i) in backgrounds"
-          :key="i"
-          class="bg-slide"
-          :class="{ active: currentBgIndex === i }"
-          :style="{ backgroundImage: `url('/images/${bg}')` }"
+          class="bg-slide active"
+          :style="{ backgroundImage: `url('/images/${currentBackground}')` }"
         ></div>
       </div>
       <div class="bg-overlay"></div>
@@ -19,27 +16,53 @@
         <BrandMark :size="28" />
       </div>
       <div class="nav-right">
-        <div v-if="isLoggedIn" class="user-info" @click="showDropdown = !showDropdown">
-          <a-avatar :size="32" :style="{ backgroundColor: 'oklch(0.50 0.16 45)' }">
-            {{ userInitial }}
-          </a-avatar>
-          <span class="username">{{ currentUser?.username }}</span>
-          <a-dropdown v-model:popup-visible="showDropdown" trigger="click" position="br">
-            <a-button class="dropdown-trigger" size="mini">
-              <template #icon><icon-down /></template>
-            </a-button>
+        <a-dropdown
+          v-if="isLoggedIn"
+          v-model:popup-visible="showDropdown"
+          trigger="hover"
+          position="br"
+        >
+            <button
+              class="user-info"
+              type="button"
+              aria-label="打开账户菜单"
+              :aria-expanded="showDropdown"
+              @click="showDropdown = !showDropdown"
+            >
+              <a-avatar :size="32" :style="{ backgroundColor: 'oklch(0.50 0.16 45)' }">
+                {{ userInitial }}
+              </a-avatar>
+              <span class="username">{{ currentUser?.username }}</span>
+            </button>
             <template #content>
               <a-doption @click="$router.push('/papers')">
                 <template #icon><icon-file /></template>
                 我的论文
+              </a-doption>
+              <a-doption v-if="currentUser?.role === 'admin'" @click="$router.push('/admin')">
+                <template #icon><icon-dashboard /></template>
+                管理后台
+              </a-doption>
+              <template v-if="otherAccounts.length">
+                <a-doption
+                  v-for="account in otherAccounts"
+                  :key="account.user.id"
+                  @click="handleSwitchAccount(account)"
+                >
+                  <template #icon><icon-swap /></template>
+                  切换至 {{ account.user.username }}
+                </a-doption>
+              </template>
+              <a-doption @click="openAddAccount">
+                <template #icon><icon-plus /></template>
+                添加账号
               </a-doption>
               <a-doption @click="handleLogout" status="danger">
                 <template #icon><icon-export /></template>
                 退出登录
               </a-doption>
             </template>
-          </a-dropdown>
-        </div>
+        </a-dropdown>
         <div v-else class="auth-buttons">
           <a-button type="text" @click="$router.push('/login')">登录</a-button>
           <a-button type="primary" size="small" @click="$router.push('/register')">注册</a-button>
@@ -80,15 +103,15 @@
           </a-button>
         </div>
         <div class="hero-stats">
-          <div class="stat-item float-animation" style="animation-delay: 0s;">
+          <div class="stat-item">
             <span class="stat-value">目录导航</span>
             <span class="stat-label">多级章节快速跳转</span>
           </div>
-          <div class="stat-item float-animation" style="animation-delay: 0.2s;">
+          <div class="stat-item">
             <span class="stat-value">连续问答</span>
             <span class="stat-label">流式回答与深度思考</span>
           </div>
-          <div class="stat-item float-animation" style="animation-delay: 0.4s;">
+          <div class="stat-item">
             <span class="stat-value">原文溯源</span>
             <span class="stat-label">页码定位与内容高亮</span>
           </div>
@@ -166,24 +189,82 @@
       <p>PaperAI &copy; 2026 · 智能论文精读助手</p>
       <button type="button" @click="$router.push('/guide')">使用指南</button>
     </footer>
+
+    <a-modal
+      v-model:visible="showAddAccount"
+      title="添加登录账号"
+      :ok-loading="addingAccount"
+      ok-text="登录并添加"
+      cancel-text="取消"
+      :on-before-ok="handleAddAccount"
+    >
+      <a-form :model="accountForm" layout="vertical">
+        <a-form-item label="用户名或邮箱" required>
+          <a-input
+            v-model="accountForm.username"
+            placeholder="输入另一个账号"
+            autocomplete="username"
+          />
+        </a-form-item>
+        <a-form-item label="密码" required>
+          <a-input-password
+            v-model="accountForm.password"
+            placeholder="输入该账号的密码"
+            autocomplete="current-password"
+            @press-enter="handleAddAccount"
+          />
+        </a-form-item>
+        <div v-if="accountError" class="pa-form-error" role="alert" aria-live="assertive">
+          {{ accountError }}
+        </div>
+      </a-form>
+      <p class="account-help">验证成功后，这个浏览器会记住该账号的登录会话。</p>
+    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { getCurrentUser } from '@/api/auth'
-import { IconDown, IconFile, IconExport } from '@arco-design/web-vue/es/icon'
+import {
+  getCurrentUser,
+  login,
+  type UserResponse,
+} from '@/api/auth'
+import {
+  IconDashboard,
+  IconExport,
+  IconFile,
+  IconPlus,
+  IconSwap,
+} from '@arco-design/web-vue/es/icon'
 import BrandMark from '@/components/BrandMark.vue'
+import {
+  activateAccount,
+  getSavedAccounts,
+  rememberAccount,
+  rememberCurrentAccount,
+  removeSavedAccount,
+  type SavedAccount,
+} from '@/utils/accountSessions'
 
-const currentUser = ref<any>(null)
+const currentUser = ref<UserResponse | null>(null)
+const savedAccounts = ref<SavedAccount[]>(getSavedAccounts())
 const showDropdown = ref(false)
+const showAddAccount = ref(false)
+const addingAccount = ref(false)
+const accountError = ref('')
+const accountForm = ref({ username: '', password: '' })
 const isScrolled = ref(false)
 const currentBgIndex = ref(0)
 
 const backgrounds = ['lib1.jpg', 'read2.jpg?v=20260621', 'research-reading.jpg']
 
 const isLoggedIn = computed(() => !!currentUser.value)
+const currentBackground = computed(() => backgrounds[currentBgIndex.value])
+const otherAccounts = computed(() =>
+  savedAccounts.value.filter(account => account.user.id !== currentUser.value?.id)
+)
 const userInitial = computed(() => {
   if (!currentUser.value) return '?'
   return currentUser.value.username?.charAt(0).toUpperCase() || '?'
@@ -247,6 +328,8 @@ onMounted(async () => {
       const user = await getCurrentUser()
       currentUser.value = user
       localStorage.setItem('user', JSON.stringify(user))
+      rememberCurrentAccount(user)
+      savedAccounts.value = getSavedAccounts()
     } catch {
       localStorage.removeItem('access_token')
       localStorage.removeItem('user')
@@ -268,11 +351,56 @@ const handleScroll = () => {
 }
 
 const handleLogout = () => {
+  const remainingAccounts = currentUser.value
+    ? removeSavedAccount(currentUser.value.id)
+    : getSavedAccounts()
+  if (remainingAccounts.length) {
+    activateAccount(remainingAccounts[0])
+    window.location.reload()
+    return
+  }
   localStorage.removeItem('access_token')
   localStorage.removeItem('user')
   currentUser.value = null
+  savedAccounts.value = []
   showDropdown.value = false
   Message.success('已退出登录')
+}
+
+const handleSwitchAccount = (account: SavedAccount) => {
+  if (account.user.id === currentUser.value?.id) return
+  activateAccount(account)
+  window.location.reload()
+}
+
+const openAddAccount = () => {
+  showDropdown.value = false
+  accountForm.value = { username: '', password: '' }
+  accountError.value = ''
+  showAddAccount.value = true
+}
+
+const handleAddAccount = async () => {
+  accountError.value = ''
+  if (!accountForm.value.username || !accountForm.value.password) {
+    accountError.value = '请填写用户名和密码'
+    return false
+  }
+  addingAccount.value = true
+  try {
+    const response = await login(accountForm.value)
+    rememberAccount(response)
+    activateAccount({ access_token: response.access_token, user: response.user })
+    showAddAccount.value = false
+    Message.success(`已添加并切换到 ${response.user.username}`)
+    window.location.reload()
+    return true
+  } catch (error: any) {
+    accountError.value = error?.response?.data?.detail || '账号或密码不正确'
+    return false
+  } finally {
+    addingAccount.value = false
+  }
 }
 </script>
 
@@ -283,6 +411,13 @@ const handleLogout = () => {
   color: oklch(0.25 0.02 50);
   overflow-x: hidden;
   z-index: 1;
+}
+
+.account-help {
+  margin-top: -4px;
+  color: var(--pa-muted);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .page-background {
@@ -311,8 +446,6 @@ const handleLogout = () => {
   inset: 0;
   background-size: cover;
   background-position: center;
-  opacity: 0;
-  transition: opacity 2s ease-in-out;
   transform: scale(1.05);
 }
 
@@ -337,17 +470,6 @@ const handleLogout = () => {
   );
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes pulseSoft {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -365,7 +487,7 @@ const handleLogout = () => {
   padding: 16px 32px;
   background: oklch(0.15 0.025 255 / 0.72);
   border-bottom: 1px solid oklch(1 0 / 0.12);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out;
 }
 
 .top-nav.scrolled {
@@ -395,7 +517,9 @@ const handleLogout = () => {
   gap: 10px;
   cursor: pointer;
   padding: 4px 8px;
+  border: 0;
   border-radius: 8px;
+  background: transparent;
   transition: background 0.2s;
 }
 
@@ -403,20 +527,15 @@ const handleLogout = () => {
   background: oklch(1 0 / 0.09);
 }
 
+.user-info:focus-visible {
+  outline: 2px solid oklch(0.92 0.02 70);
+  outline-offset: 2px;
+}
+
 .username {
   color: oklch(0.94 0.01 255);
   font-size: 14px;
   font-weight: 500;
-}
-
-.dropdown-trigger {
-  color: oklch(0.94 0.01 255);
-  border: none;
-  background: transparent;
-}
-
-.dropdown-trigger:hover {
-  background: oklch(1 0 / 0.09);
 }
 
 .auth-buttons {
@@ -452,8 +571,6 @@ const handleLogout = () => {
   font-size: 13px;
   color: oklch(0.92 0.025 70);
   margin-bottom: 32px;
-  animation: fadeInUp 0.6s ease 0.1s forwards;
-  opacity: 0;
 }
 
 .badge-dot {
@@ -471,8 +588,6 @@ const handleLogout = () => {
   margin: 0 0 24px;
   color: oklch(0.99 0.004 255);
   letter-spacing: -0.02em;
-  animation: fadeInUp 0.6s ease 0.2s forwards;
-  opacity: 0;
   text-wrap: balance;
   text-shadow: 0 3px 24px oklch(0 0 / 0.28);
 }
@@ -489,8 +604,6 @@ const handleLogout = () => {
   max-width: 600px;
   margin-left: auto;
   margin-right: auto;
-  animation: fadeInUp 0.6s ease 0.3s forwards;
-  opacity: 0;
   text-wrap: pretty;
   text-shadow: 0 2px 14px oklch(0 0 / 0.36);
 }
@@ -500,8 +613,6 @@ const handleLogout = () => {
   gap: 16px;
   justify-content: center;
   margin-bottom: 64px;
-  animation: fadeInUp 0.6s ease 0.4s forwards;
-  opacity: 0;
 }
 
 .hero-actions :deep(.arco-btn) {
@@ -517,10 +628,10 @@ const handleLogout = () => {
   border: none;
   color: oklch(0.98 0.01 95);
   box-shadow: 0 4px 24px oklch(0.50 0.16 45 / 0.25);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 180ms cubic-bezier(0.25, 1, 0.5, 1), background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
-.btn-primary:hover {
+.btn-primary:not(.arco-btn-disabled):hover {
   transform: translateY(-3px);
   box-shadow: 0 8px 32px oklch(0.50 0.16 45 / 0.35);
   background: oklch(0.45 0.18 45);
@@ -531,16 +642,24 @@ const handleLogout = () => {
   font-size: 16px;
   font-weight: 500;
   border-radius: 14px;
-  background: oklch(1 0 / 0.08);
-  border: 1px solid oklch(1 0 / 0.35);
-  color: oklch(0.98 0.005 255);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: oklch(0.96 0.012 70);
+  border: 1px solid oklch(0.88 0.016 65);
+  color: oklch(0.24 0.025 45);
+  box-shadow: 0 4px 20px oklch(0 0 / 0.16);
+  transition: transform 180ms cubic-bezier(0.25, 1, 0.5, 1), background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
-.btn-secondary:hover {
-  background: oklch(1 0 / 0.16);
-  border-color: oklch(1 0 / 0.65);
-  color: white;
+.btn-secondary:not(.arco-btn-disabled):hover {
+  transform: translateY(-3px);
+  background: oklch(0.90 0.018 65);
+  border-color: oklch(0.78 0.025 60);
+  color: oklch(0.20 0.025 45);
+  box-shadow: 0 8px 28px oklch(0 0 / 0.24);
+}
+
+.btn-primary:active,
+.btn-secondary:active {
+  transform: translateY(0);
 }
 
 .hero-stats {
@@ -548,8 +667,6 @@ const handleLogout = () => {
   justify-content: center;
   align-items: center;
   gap: 40px;
-  animation: fadeInUp 0.6s ease 0.5s forwards;
-  opacity: 0;
 }
 
 .stat-item {
@@ -560,16 +677,11 @@ const handleLogout = () => {
   padding: 0 28px 0 0;
   background: transparent;
   border-right: 1px solid oklch(1 0 / 0.24);
-  transition: all 0.3s ease;
 }
 
 .stat-item:last-child {
   padding-right: 0;
   border-right: 0;
-}
-
-.stat-item:hover {
-  transform: translateY(-2px);
 }
 
 .stat-value {
@@ -591,17 +703,25 @@ const handleLogout = () => {
 }
 
 .slideshow-dot {
-  width: 24px;
-  height: 3px;
+  position: relative;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
-  border-radius: 2px;
-  background: oklch(1 0 / 0.35);
+  background: transparent;
   cursor: pointer;
-  transition: background 0.25s ease, transform 0.25s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-.slideshow-dot.active {
+.slideshow-dot::after {
+  content: '';
+  position: absolute;
+  inset: 14px 4px;
+  border-radius: 2px;
+  background: oklch(1 0 / 0.35);
+  transition: background-color 180ms ease-out, transform 180ms ease-out;
+}
+
+.slideshow-dot.active::after {
   background: oklch(0.78 0.16 55);
   transform: scaleY(1.7);
 }
@@ -609,6 +729,11 @@ const handleLogout = () => {
 .slideshow-dot:focus-visible {
   outline: 2px solid white;
   outline-offset: 4px;
+}
+
+@media (pointer: coarse) {
+  .slideshow-dot { width: 44px; height: 44px; }
+  .slideshow-dot::after { inset-block: 20px; }
 }
 
 .stat-divider {

@@ -20,6 +20,9 @@ class User(Base):
     avatar_url = Column(String(500))
     preferences = Column(JSON, default=dict)
     is_active = Column(Boolean, default=True)
+    # Simple RBAC. New registrations always use "user"; only an administrator
+    # may grant the "admin" role.
+    role = Column(String(20), nullable=False, default="user", server_default="user")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -45,6 +48,7 @@ class User(Base):
             "avatar_url": self.avatar_url,
             "preferences": self.preferences,
             "is_active": self.is_active,
+            "role": self.role,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }

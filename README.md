@@ -80,6 +80,7 @@ cp .env.example .env
 
 ```dotenv
 SECRET_KEY=replace-with-at-least-32-characters
+DEFAULT_ADMIN_PASSWORD=replace-with-a-strong-password
 LLM_PROVIDER=qwen
 OPENAI_API_KEY=your-key
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -98,6 +99,33 @@ docker compose up -d --build
 - Web：`http://localhost:5173`
 - API：`http://localhost:8000`
 - OpenAPI：`http://localhost:8000/docs`
+
+### 开发模式（推荐日常开发）
+
+首次启动需要构建开发镜像：
+
+```bash
+./dev.sh
+```
+
+之后修改代码不需要重新构建：
+
+- `frontend/src/`：Vite 浏览器热更新
+- `backend/app/`：Uvicorn 自动重载 API
+- `backend/app/`：文件监听器自动重启 Worker
+- 数据库和 Redis 数据继续保存在原有 Docker volumes 中
+
+开发模式常用命令：
+
+```bash
+./dev.sh --no-build  # 使用已经构建的开发镜像
+./dev-logs.sh        # 跟踪前端、后端和 Worker 日志
+./dev-stop.sh        # 停止开发环境并保留数据
+```
+
+只有修改 `requirements.txt`、`package-lock.json`、Dockerfile 或 Compose
+配置时才需要再次运行不带 `--no-build` 的 `./dev.sh`。数据库表结构变化仍会在
+应用自动重载时执行项目当前的启动迁移。
 
 常用命令：
 

@@ -128,6 +128,10 @@ backend/*.skill
 # 仅忽略本机覆盖配置；Dockerfile、.dockerignore、Nginx 配置应纳入版本控制
 docker-compose.override.yml
 
+# AI 专用规范文档（仅供本地开发助手读取，不提交）
+frontend/AGENTS.md
+frontend/DESIGN_SYSTEM.md
+
 # 本地工具状态
 .codex/
 .agents/
@@ -140,11 +144,11 @@ docker-compose.override.yml
 /impeccable.zip
 
 # 只读参考项目（不纳入 PaperAI 版本控制）
-/deploy_idps_stable-11.6.0_stable/
+/reference/
 
-# 评测运行产物（保留代码、数据集和人工总结）
+# 评测运行产物（仅保留空目录占位文件）
 backend/evals/reports/*
-!backend/evals/reports/EVALUATION_SUMMARY.md
+!backend/evals/reports/.gitkeep
 
 # ================ 其他 ================
 # Jupyter Notebook

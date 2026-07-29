@@ -1,4 +1,5 @@
 """数据库连接和会话管理模块"""
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from app.config import get_settings
@@ -33,6 +34,20 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # create_all does not add columns to an existing table. Keep this small
+        # compatibility migration here until the project adopts Alembic.
+        columns = await conn.run_sync(
+            lambda sync_conn: {
+                column["name"] for column in inspect(sync_conn).get_columns("users")
+            }
+        )
+        if "role" not in columns:
+            await conn.execute(
+                text(
+                    "ALTER TABLE users ADD COLUMN role "
+                    "VARCHAR(20) NOT NULL DEFAULT 'user'"
+                )
+            )
     print("✅ 数据库表创建完成")
 
 

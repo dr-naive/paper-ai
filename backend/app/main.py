@@ -34,6 +34,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"🚀 启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     await init_db()
     logger.info("✅ 数据库初始化完成")
+    from app.api.auth import ensure_default_admin
+    await ensure_default_admin()
+    logger.info("✅ 默认管理员账户已就绪")
     await initialize_redis()
     yield
     from app.utils.background_tasks import shutdown_background_tasks
@@ -64,6 +67,7 @@ from app.api.auth import router as auth_router
 from app.api.papers import router as papers_router
 from app.api.paper_analysis import router as paper_analysis_router
 from app.api.chat import router as chat_router
+from app.api.admin import router as admin_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
 from app.models.user import User
@@ -85,6 +89,7 @@ app.include_router(auth_router)
 app.include_router(papers_router)
 app.include_router(paper_analysis_router)
 app.include_router(chat_router)
+app.include_router(admin_router)
 
 
 @app.get("/")

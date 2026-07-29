@@ -2,11 +2,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import datetime, timedelta
+from typing import Literal
+import uuid
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 from app.config import settings
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.models.user import User
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -16,6 +18,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_EMAIL = "admin@paperai.local"
 
 
 class Token(BaseModel):
@@ -39,6 +43,8 @@ class UserResponse(BaseModel):
     id: str
     username: str
     email: str
+    role: Literal["admin", "user"]
+    is_active: bool
     created_at: datetime
     
     model_config = {"from_attributes": True}
@@ -47,6 +53,11 @@ class UserResponse(BaseModel):
 class LoginResponse(BaseModel):
     access_token: str
     user: UserResponse
+
+
+class UserPermissionUpdate(BaseModel):
+    role: Literal["admin", "user"] | None = None
+    is_active: bool | None = None
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -93,9 +104,63 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     
     result = await db.execute(select(User).filter(User.id == token_data.user_id))
     user = result.scalars().first()
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
     return user
+
+
+async def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+    return current_user
+
+
+async def ensure_default_admin() -> None:
+    """Ensure the built-in administrator exists with credentials from environment configuration."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(User).filter(User.username == DEFAULT_ADMIN_USERNAME)
+        )
+        admin = result.scalars().first()
+        password_hash = get_password_hash(settings.DEFAULT_ADMIN_PASSWORD)
+        if admin is None:
+            email_owner = await db.execute(
+                select(User).filter(User.email == DEFAULT_ADMIN_EMAIL)
+            )
+            admin_email = (
+                f"admin+{uuid.uuid4()}@paperai.local"
+                if email_owner.scalars().first()
+                else DEFAULT_ADMIN_EMAIL
+            )
+            admin = User(
+                username=DEFAULT_ADMIN_USERNAME,
+                email=admin_email,
+                password_hash=password_hash,
+                role="admin",
+                is_active=True,
+            )
+            db.add(admin)
+        else:
+            # This account is deliberately immutable from the permission API.
+            # Restore its required state on every application start.
+            admin.password_hash = password_hash
+            admin.role = "admin"
+            admin.is_active = True
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            # Another application worker may have created it concurrently.
+            result = await db.execute(
+                select(User).filter(User.username == DEFAULT_ADMIN_USERNAME)
+            )
+            admin = result.scalars().first()
+            if admin is None:
+                raise
+            admin.password_hash = password_hash
+            admin.role = "admin"
+            admin.is_active = True
+            await db.commit()
 
 
 class LoginRequest(BaseModel):
@@ -108,7 +173,11 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
     result = await db.execute(select(User).filter((User.email == login_data.username) | (User.username == login_data.username)))
     user = result.scalars().first()
     
-    if not user or not verify_password(login_data.password, user.password_hash):
+    if (
+        not user
+        or not user.is_active
+        or not verify_password(login_data.password, user.password_hash)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -137,7 +206,8 @@ async def register_user(user_data: UserCreate, db: AsyncSession = Depends(get_db
     new_user = User(
         username=user_data.username,
         email=user_data.email,
-        password_hash=hashed_password
+        password_hash=hashed_password,
+        role="user",
     )
     
     db.add(new_user)
@@ -153,3 +223,34 @@ async def register_user(user_data: UserCreate, db: AsyncSession = Depends(get_db
 @router.get("/users/me", response_model=UserResponse)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return UserResponse.from_orm(current_user)
+
+
+@router.get("/admin/users", response_model=list[UserResponse])
+async def list_users(
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).order_by(User.created_at.desc()))
+    return [UserResponse.from_orm(user) for user in result.scalars().all()]
+
+
+@router.patch("/admin/users/{user_id}", response_model=UserResponse)
+async def update_user_permissions(
+    user_id: str,
+    update: UserPermissionUpdate,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).filter(User.id == user_id))
+    user = result.scalars().first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if user.username == DEFAULT_ADMIN_USERNAME:
+        raise HTTPException(status_code=400, detail="系统默认管理员不能被修改")
+    if update.role is not None:
+        user.role = update.role
+    if update.is_active is not None:
+        user.is_active = update.is_active
+    await db.commit()
+    await db.refresh(user)
+    return UserResponse.from_orm(user)

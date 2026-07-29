@@ -26,6 +26,9 @@ import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn'
   --pa-danger: oklch(0.52 0.17 28);
   --pa-toolbar: oklch(0.28 0.018 45);
   --pa-toolbar-control: oklch(0.36 0.02 45);
+  --pa-focus-ring: 0 0 0 3px oklch(0.50 0.16 45 / 0.22);
+  --pa-shadow-sm: 0 1px 3px oklch(0.25 0.02 45 / 0.12);
+  --pa-shadow-md: 0 5px 14px oklch(0.30 0.04 45 / 0.16);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -40,6 +43,29 @@ body {
   background: var(--pa-bg);
 }
 
+.pa-form-error {
+  margin: -4px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid oklch(0.72 0.10 28);
+  border-radius: 8px;
+  color: var(--pa-danger);
+  background: oklch(0.97 0.025 28);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pa-sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 /* ===== 全局 Arco 暖色调主题 ===== */
 
 /* 按钮 */
@@ -47,23 +73,47 @@ body {
   background: var(--pa-primary) !important;
   border-color: var(--pa-primary) !important;
   color: oklch(0.98 0.01 95) !important;
+  transition: transform 180ms cubic-bezier(0.25, 1, 0.5, 1), background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease !important;
 }
 
-.arco-btn-primary:hover {
+.arco-btn-primary:not(.arco-btn-disabled):hover {
   background: var(--pa-primary-hover) !important;
   border-color: var(--pa-primary-hover) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px oklch(0.30 0.08 45 / 0.18);
 }
 
 .arco-btn-secondary {
   background: oklch(0.95 0.01 90) !important;
   border-color: oklch(0.50 0.16 45 / 0.3) !important;
   color: oklch(0.30 0.02 50) !important;
+  transition: transform 180ms cubic-bezier(0.25, 1, 0.5, 1), background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease !important;
 }
 
-.arco-btn-secondary:hover {
-  background: oklch(0.50 0.16 45 / 0.08) !important;
+.arco-btn-secondary:not(.arco-btn-disabled):hover {
+  background: oklch(0.90 0.018 65) !important;
   border-color: oklch(0.50 0.16 45) !important;
   color: oklch(0.25 0.02 50) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px oklch(0.30 0.03 45 / 0.14);
+}
+
+.arco-btn-primary:active,
+.arco-btn-secondary:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.arco-btn-primary:focus-visible,
+.arco-btn-secondary:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
+}
+
+.arco-btn-primary.arco-btn-disabled,
+.arco-btn-secondary.arco-btn-disabled {
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .arco-btn-text {
@@ -99,7 +149,7 @@ body {
 }
 
 .arco-input::placeholder {
-  color: oklch(0.60 0.01 50) !important;
+  color: oklch(0.52 0.012 50) !important;
 }
 
 /* 表单标签 */
@@ -214,6 +264,13 @@ body {
   background: oklch(0.50 0.16 45) !important;
   border-color: oklch(0.50 0.16 45) !important;
   color: oklch(0.98 0.01 95) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arco-btn-primary,
+  .arco-btn-secondary {
+    transition: none !important;
+  }
 }
 
 /* 上传组件 */

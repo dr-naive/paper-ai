@@ -12,7 +12,6 @@
     "axios": "^1.6.7",
     "dayjs": "^1.11.10",
     "dompurify": "^3.4.11",
-    "echarts": "^5.5.0",
     "markdown-it": "^14.2.0",
     "pdfjs-dist": "4.10.38",
     "pinia": "^2.1.7",

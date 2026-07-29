@@ -8,8 +8,24 @@
       <BrandMark :size="28" />
     </button>
 
-    <template v-if="context || $slots.navigation">
+    <template v-if="backTo || context || $slots.navigation">
       <span class="product-header__divider" aria-hidden="true"></span>
+      <button
+        v-if="backTo"
+        class="product-header__back"
+        type="button"
+        :aria-label="`返回${backLabel}`"
+        :title="`返回${backLabel}`"
+        @click="router.push(backTo)"
+      >
+        <span class="product-header__back-icon" aria-hidden="true">←</span>
+        <span>{{ backLabel }}</span>
+      </button>
+      <span
+        v-if="backTo && context"
+        class="product-header__sub-divider"
+        aria-hidden="true"
+      ></span>
       <span v-if="context" class="product-header__context">{{ context }}</span>
       <div v-if="$slots.navigation" class="product-header__navigation">
         <slot name="navigation" />
@@ -25,8 +41,15 @@
 import { useRouter } from 'vue-router'
 import BrandMark from './BrandMark.vue'
 
-withDefaults(defineProps<{ context?: string; edge?: boolean }>(), {
+withDefaults(defineProps<{
+  context?: string
+  edge?: boolean
+  backTo?: string
+  backLabel?: string
+}>(), {
   edge: false,
+  backTo: '',
+  backLabel: '上一页',
 })
 const router = useRouter()
 </script>
@@ -57,6 +80,41 @@ const router = useRouter()
   cursor: pointer;
 }
 
+.product-header__back {
+  display: inline-flex;
+  min-height: 36px;
+  padding: 0 8px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pa-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 180ms ease-out, background-color 180ms ease-out;
+}
+
+.product-header__back-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.product-header__back:hover {
+  color: var(--pa-ink);
+  background: var(--pa-surface-soft);
+}
+
+.product-header__back:active {
+  background: var(--pa-border);
+}
+
+.product-header__back:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: 2px;
+}
+
 .product-header__leading {
   display: flex;
   align-items: center;
@@ -76,10 +134,19 @@ const router = useRouter()
   background: var(--pa-border);
 }
 
+.product-header__sub-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 12px;
+  flex: none;
+  background: var(--pa-border);
+}
+
 .product-header__context {
   flex-shrink: 0;
-  color: var(--pa-muted);
-  font-size: 13px;
+  color: var(--pa-ink);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .product-header__navigation {
@@ -91,6 +158,12 @@ const router = useRouter()
 .product-header__main {
   flex: 1;
   min-width: 0;
+}
+
+.product-header__back + .product-header__main,
+.product-header__context + .product-header__main,
+.product-header__navigation + .product-header__main {
+  margin-left: 24px;
 }
 
 .product-header__actions {
@@ -106,5 +179,11 @@ const router = useRouter()
   .product-header__leading { margin-right: 8px; }
   .product-header__brand :deep(.brand-mark__name) { display: none; }
   .product-header__divider { margin-inline: 8px; }
+}
+
+@media (pointer: coarse) {
+  .product-header__back {
+    min-height: 44px;
+  }
 }
 </style>

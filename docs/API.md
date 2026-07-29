@@ -12,7 +12,9 @@ Router：`backend/app/api/auth.py`
 | --- | --- | --- | --- |
 | POST | `/api/auth/login` | 登录并返回 access token | `frontend/src/api/auth.ts` |
 | POST | `/api/auth/register` | 注册用户 | `frontend/src/api/auth.ts` |
-| GET | `/api/auth/users/me` | 获取当前用户 | 后端存在；前端当前疑似未对齐 |
+| GET | `/api/auth/users/me` | 获取当前用户及角色 | `frontend/src/api/auth.ts` |
+| GET | `/api/auth/admin/users` | 管理员获取用户列表 | `frontend/src/api/auth.ts` |
+| PATCH | `/api/auth/admin/users/{user_id}` | 管理员更新角色或启用状态 | `frontend/src/api/auth.ts` |
 
 认证方式：
 
@@ -20,7 +22,21 @@ Router：`backend/app/api/auth.py`
 Authorization: Bearer <access_token>
 ```
 
-注意：当前前端 `auth.ts` 中存在 `/api/auth/me` 和 `/api/auth/logout` 调用，但后端当前代码没有对应路由。详见 `docs/TODO_OR_RISKS.md`。
+角色目前分为 `admin` 和 `user`。管理员接口只允许 `admin` 角色访问。
+系统每次启动都会确保固定的 `admin` 管理员存在并处于启用状态；密码由 `DEFAULT_ADMIN_PASSWORD` 环境变量提供。
+
+注意：前端 `auth.ts` 中仍保留 `/api/auth/logout` 调用，但后端当前代码没有对应路由；当前退出登录由前端删除 token 完成。
+
+## 管理员观测
+
+Router：`backend/app/api/admin.py`
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET | `/api/admin/dashboard` | 系统健康、使用量、AI Trace、七日趋势和最新评测汇总 |
+
+该接口仅允许 `admin` 角色访问。AI Token 来自回答 Trace 的估算值，
+用于观察趋势，不代表模型供应商账单；部署本版本后产生的回答会持久化统计。
 
 ## 论文
 

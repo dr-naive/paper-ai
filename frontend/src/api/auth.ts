@@ -2,17 +2,15 @@ import request from './index'
 
 export interface LoginResponse {
   access_token: string
-  user: {
-    id: string
-    username: string
-    email: string
-  }
+  user: UserResponse
 }
 
 export interface UserResponse {
   id: string
   username: string
   email: string
+  role: 'admin' | 'user'
+  is_active: boolean
   created_at: string
 }
 
@@ -31,6 +29,17 @@ export const register = (data: LoginData & { email: string }) => {
 
 export const getCurrentUser = () => {
   return request.get<UserResponse>('/api/auth/users/me')
+}
+
+export const listUsers = () => {
+  return request.get<UserResponse[]>('/api/auth/admin/users')
+}
+
+export const updateUserPermissions = (
+  userId: string,
+  data: Partial<Pick<UserResponse, 'role' | 'is_active'>>
+) => {
+  return request.patch<UserResponse>(`/api/auth/admin/users/${userId}`, data)
 }
 
 export const logout = () => {

@@ -9,9 +9,28 @@ const routes: RouteRecordRaw[] = [
   { path: '/register', name: 'Register', component: () => import('@/views/Register.vue') },
   { path: '/papers', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
   { path: '/paper/:id', name: 'PaperReader', component: () => import('@/views/PaperReader.vue') },
+  {
+    path: '/admin',
+    name: 'AdminDashboard',
+    component: () => import('@/views/AdminDashboard.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
+    path: '/admin/users',
+    name: 'AdminUsers',
+    component: () => import('@/views/AdminUsers.vue'),
+    meta: { requiresAdmin: true },
+  },
 ]
 
-const router = createRouter({ history: createWebHistory(), routes })
+const router = createRouter({
+  history: createWebHistory(),
+  routes,
+  scrollBehavior(to) {
+    if (to.hash) return { el: to.hash, top: 20, behavior: 'smooth' }
+    return { top: 0 }
+  },
+})
 
 let validatedToken = ''
 
@@ -24,10 +43,11 @@ router.beforeEach(async (to) => {
     return isPublicRoute ? true : '/login'
   }
 
+  let currentUser: any = null
   if (validatedToken !== token) {
     try {
-      const user = await getCurrentUser()
-      localStorage.setItem('user', JSON.stringify(user))
+      currentUser = await getCurrentUser()
+      localStorage.setItem('user', JSON.stringify(currentUser))
       validatedToken = token
     } catch {
       localStorage.removeItem('access_token')
@@ -35,8 +55,15 @@ router.beforeEach(async (to) => {
       validatedToken = ''
       return isPublicRoute ? true : '/login'
     }
+  } else {
+    try {
+      currentUser = JSON.parse(localStorage.getItem('user') || 'null')
+    } catch {
+      currentUser = null
+    }
   }
 
+  if (to.meta.requiresAdmin && currentUser?.role !== 'admin') return '/home'
   return to.path === '/login' || to.path === '/register' ? '/home' : true
 })
 

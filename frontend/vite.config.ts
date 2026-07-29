@@ -4,7 +4,7 @@ import { resolve } from 'path'
 
 const apiProxy = {
   '/api': {
-    target: 'http://localhost:8000',
+    target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000',
     changeOrigin: true,
     configure: (proxy, _options) => {
       proxy.on('proxyRes', (proxyRes, req, _res) => {

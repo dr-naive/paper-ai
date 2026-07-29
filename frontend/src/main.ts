@@ -10,10 +10,6 @@ import {
   FormItem,
   Input,
   InputPassword,
-  Link,
-  List,
-  ListItem,
-  ListItemMeta,
   Modal,
   Option,
   Radio,
@@ -33,8 +29,6 @@ import '@arco-design/web-vue/es/button/style/css.js'
 import '@arco-design/web-vue/es/dropdown/style/css.js'
 import '@arco-design/web-vue/es/form/style/css.js'
 import '@arco-design/web-vue/es/input/style/css.js'
-import '@arco-design/web-vue/es/link/style/css.js'
-import '@arco-design/web-vue/es/list/style/css.js'
 import '@arco-design/web-vue/es/modal/style/css.js'
 import '@arco-design/web-vue/es/radio/style/css.js'
 import '@arco-design/web-vue/es/result/style/css.js'
@@ -59,10 +53,6 @@ const arcoComponents: Array<[string, Component]> = [
   ['AFormItem', FormItem],
   ['AInput', Input],
   ['AInputPassword', InputPassword],
-  ['ALink', Link],
-  ['AList', List],
-  ['AListItem', ListItem],
-  ['AListItemMeta', ListItemMeta],
   ['AModal', Modal],
   ['AOption', Option],
   ['ARadio', Radio],

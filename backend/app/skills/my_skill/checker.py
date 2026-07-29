@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+DEFAULT_WORKSPACE = str(Path(__file__).resolve().parents[4])
+
 
 @dataclass
 class Violation:
@@ -37,8 +39,8 @@ class ComplianceChecker:
     14. Token优化 - 精简输出
     """
     
-    def __init__(self, workspace: str = "/home/ddd/project/myAgent"):
-        self.workspace = workspace
+    def __init__(self, workspace: Optional[str] = None):
+        self.workspace = workspace or DEFAULT_WORKSPACE
         self.violations: List[Violation] = []
         self.user_language = "zh"  # 默认中文
         self.last_context = {}

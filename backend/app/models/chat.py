@@ -1,5 +1,5 @@
 """对话历史和缓存相关模型"""
-from sqlalchemy import Column, String, Text, Integer, Float, DateTime, ForeignKey, JSON, Index
+from sqlalchemy import Column, String, Text, Integer, Float, DateTime, ForeignKey, JSON, Index, Boolean
 from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
@@ -91,3 +91,30 @@ class InterpretCache(Base):
     
     user = relationship("User", back_populates="interpret_caches")
     paper = relationship("Paper", back_populates="interpret_caches")
+
+
+class AnswerTrace(Base):
+    """Persistent aggregate-friendly metrics for completed answer jobs."""
+    __tablename__ = "answer_traces"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trace_id = Column(String(100), unique=True, nullable=False, index=True)
+    task_id = Column(String(100), nullable=False)
+    user_id = Column(String(36), nullable=False, index=True)
+    session_id = Column(String(36), nullable=False)
+    status = Column(String(20), nullable=False)
+    thinking_tokens = Column(Integer, default=0)
+    answer_tokens = Column(Integer, default=0)
+    total_ms = Column(Float)
+    first_token_ms = Column(Float)
+    retrieval_ms = Column(Float)
+    citation_count = Column(Integer, default=0)
+    model_calls = Column(Integer, default=0)
+    retry_count = Column(Integer, default=0)
+    used_second_pass = Column(Boolean, default=False)
+    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_answer_traces_recorded_at", recorded_at),
+        Index("idx_answer_traces_status", status),
+    )

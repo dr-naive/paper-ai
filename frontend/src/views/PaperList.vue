@@ -152,9 +152,13 @@
                     >•••</button>
                     <template #content>
                       <a-doption @click="toggleFavorite(paper)">
+                        <template #icon><icon-star /></template>
                         {{ paper.is_favorite ? '取消收藏' : '收藏论文' }}
                       </a-doption>
-                      <a-doption status="danger" @click="handleDelete(paper.id)">删除论文</a-doption>
+                      <a-doption status="danger" @click="handleDelete(paper.id)">
+                        <template #icon><icon-delete /></template>
+                        删除论文
+                      </a-doption>
                     </template>
                   </a-dropdown>
                 </div>
@@ -205,6 +209,7 @@ import {
 import dayjs from 'dayjs'
 import ProductHeader from '@/components/ProductHeader.vue'
 import { removeCachedPdf } from '@/utils/pdfCache'
+import { IconDelete, IconStar } from '@arco-design/web-vue/es/icon'
 
 const loading = ref(false)
 const router = useRouter()

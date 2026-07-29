@@ -2,10 +2,12 @@
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# 添加项目库路径
-sys.path.insert(0, '/home/ddd/project/myAgent/backend/lib')
+# 添加项目库路径，避免项目目录重命名后失效
+BACKEND_LIB_DIR = Path(__file__).resolve().parents[2] / "lib"
+sys.path.insert(0, str(BACKEND_LIB_DIR))
 
 try:
     from app.llm.client import get_llm_client

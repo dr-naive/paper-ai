@@ -22,7 +22,7 @@ from app.job_queue import (
     recover_processing_jobs,
     reserve_job,
 )
-from app.models.chat import ChatMessage
+from app.models.chat import AnswerTrace, ChatMessage
 from app.redis_client import close_redis, get_async_redis, initialize_redis, set_json
 
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +66,53 @@ async def _generate_followups(message_id: str, question: str, answer: str, inten
                 await db.commit()
     except Exception:
         logger.exception("Worker 生成追问失败 message_id=%s", message_id)
+
+
+async def _persist_answer_trace(
+    trace_payload: dict[str, Any],
+    *,
+    task_id: str,
+    user_id: str,
+) -> None:
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(AnswerTrace).where(
+                    AnswerTrace.trace_id == str(trace_payload["trace_id"])
+                )
+            )
+            trace = result.scalar_one_or_none()
+            values = {
+                "task_id": task_id,
+                "user_id": user_id,
+                "session_id": str(trace_payload.get("session_id") or ""),
+                "status": str(trace_payload.get("status") or "completed"),
+                "thinking_tokens": int(trace_payload.get("thinking_tokens") or 0),
+                "answer_tokens": int(trace_payload.get("answer_tokens") or 0),
+                "total_ms": trace_payload.get("total_ms"),
+                "first_token_ms": trace_payload.get("first_token_ms"),
+                "retrieval_ms": trace_payload.get("retrieval_ms"),
+                "citation_count": int(trace_payload.get("citation_count") or 0),
+                "model_calls": int(trace_payload.get("model_calls") or 0),
+                "retry_count": int(trace_payload.get("worker_retry_count") or 0),
+                "used_second_pass": bool(
+                    trace_payload.get("retrieval_second_pass")
+                ),
+            }
+            if trace is None:
+                trace = AnswerTrace(
+                    trace_id=str(trace_payload["trace_id"]),
+                    **values,
+                )
+                db.add(trace)
+            else:
+                for key, value in values.items():
+                    setattr(trace, key, value)
+            await db.commit()
+    except Exception:
+        logger.exception(
+            "回答指标持久化失败 trace_id=%s", trace_payload.get("trace_id")
+        )
 
 
 async def handle_chat_answer(job: WorkerJob) -> None:
@@ -179,6 +226,11 @@ async def handle_chat_answer(job: WorkerJob) -> None:
             f"{ANSWER_TRACE_PREFIX}{state.trace_id}",
             trace_payload,
             settings.REDIS_ANSWER_TASK_TTL_SECONDS,
+        )
+        await _persist_answer_trace(
+            trace_payload,
+            task_id=task_id,
+            user_id=state.user_id,
         )
         task_data["trace_id"] = state.trace_id
         task_data.setdefault("result", {})["trace_id"] = state.trace_id

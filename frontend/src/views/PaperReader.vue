@@ -1,13 +1,7 @@
 <template>
   <div class="paper-reader">
     <!-- 顶部工具栏 -->
-    <ProductHeader edge>
-      <template #navigation>
-        <a-button class="reader-back-button" @click="goBack" size="small" type="text">
-          <template #icon><icon-arrow-left /></template>
-          我的论文
-        </a-button>
-      </template>
+    <ProductHeader edge back-to="/papers" back-label="我的论文">
       <div class="paper-title-bar">
         <h2 class="paper-title">{{ paper?.title || '加载中...' }}</h2>
         <span class="paper-authors">{{ paper?.authors }}</span>
@@ -33,9 +27,25 @@
       </template>
     </ProductHeader>
 
+    <div class="mobile-workspace-nav" role="tablist" aria-label="阅读工作区">
+      <button
+        v-for="pane in mobilePanes"
+        :key="pane.value"
+        type="button"
+        role="tab"
+        :aria-selected="mobilePane === pane.value"
+        :class="{ active: mobilePane === pane.value }"
+        @click="selectMobilePane(pane.value)"
+      >
+        {{ pane.label }}
+      </button>
+    </div>
+
     <!-- 主内容区 -->
     <div class="main-content">
       <PaperOutline
+        class="reader-outline"
+        :class="{ 'mobile-pane-active': mobilePane === 'outline' }"
         v-model:collapsed="outlineCollapsed"
         :sections="sections"
         :current-page="currentPdfPage"
@@ -46,7 +56,7 @@
       />
 
       <!-- 左侧 PDF 查看器 -->
-      <div class="pdf-viewer">
+      <div class="pdf-viewer" :class="{ 'mobile-pane-active': mobilePane === 'pdf' }">
         <PdfViewer
           v-if="pdfUrl"
           ref="pdfViewerRef"
@@ -75,13 +85,26 @@
       <div
         v-if="showSidebar"
         class="sidebar-resizer"
-        @mousedown="startResize"
+        role="separator"
+        tabindex="0"
+        aria-label="调整 PDF 与 AI 助手的宽度"
+        aria-orientation="vertical"
+        :aria-valuemin="360"
+        :aria-valuemax="1120"
+        :aria-valuenow="sidebarWidth"
+        @pointerdown="startResize"
+        @keydown="handleResizeKeydown"
       >
         <div class="resizer-handle"></div>
       </div>
 
       <!-- 右侧 AI 侧边栏 -->
-      <div v-if="showSidebar" class="ai-sidebar" :style="{ width: sidebarWidth + 'px', minWidth: sidebarWidth + 'px' }">
+      <div
+        v-if="showSidebar"
+        class="ai-sidebar"
+        :class="{ 'mobile-pane-active': mobilePane === 'ai' }"
+        :style="{ width: sidebarWidth + 'px', minWidth: sidebarWidth + 'px' }"
+      >
         <!-- Tab 切换 -->
         <a-tabs default-active-key="qa" size="small" class="sidebar-tabs">
           <a-tab-pane key="qa" title="问答">
@@ -146,6 +169,7 @@
                       </button>
                       <template #content>
                         <a-doption @click="editQaMessage(qa)">
+                          <template #icon><icon-edit /></template>
                           编辑
                         </a-doption>
                         <a-doption
@@ -153,6 +177,7 @@
                           :disabled="qa.streaming || String(qa.id).startsWith('stream-')"
                           @click="confirmDeleteQaMessage(qa)"
                         >
+                          <template #icon><icon-delete /></template>
                           删除
                         </a-doption>
                       </template>
@@ -221,11 +246,13 @@
                           <span>引用溯源</span>
                           <span class="citation-hint">点击引用可定位到原文</span>
                         </div>
-                        <div
+                        <button
                           v-for="(cite, ci) in visibleCitations(qa)"
                           :key="ci"
+                          type="button"
                           class="citation-item"
                           :class="{ active: activeCitationKey === citationKey(qa.id, ci) }"
+                          :aria-label="`定位引用：${cite.section || '原文引用'}`"
                           @click="locateInPdf(cite, citationKey(qa.id, ci))"
                         >
                           <div class="citation-header">
@@ -239,7 +266,7 @@
                             </span>
                           </div>
                           <p class="citation-text">{{ cite.text }}</p>
-                        </div>
+                        </button>
                         <button
                           v-if="qa.citations.length > 2"
                           type="button"
@@ -591,9 +618,9 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
-import { IconArrowLeft, IconRefresh, IconDelete } from '@arco-design/web-vue/es/icon'
+import { IconRefresh, IconDelete, IconEdit } from '@arco-design/web-vue/es/icon'
 import type PdfViewerComponent from '@/components/PdfViewer.vue'
 import type { OutlineNode } from '@/components/PaperOutlineNode.vue'
 import PaperOutline from '@/components/PaperOutline.vue'
@@ -610,7 +637,6 @@ import {
 import type { AskStreamHandlers } from '@/api/paper'
 
 const route = useRoute()
-const router = useRouter()
 const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
 const paperId = route.params.id as string
 const paper = ref<any>(null)
@@ -626,6 +652,17 @@ const layoutOptions: Array<{ value: LayoutMode; label: string; description: stri
   { value: 'compare', label: '对照', description: '并排查看论文与 AI 回答' },
   { value: 'ai', label: 'AI', description: '扩大 AI 助手区域' }
 ]
+type MobilePane = 'outline' | 'pdf' | 'ai'
+const mobilePane = ref<MobilePane>('pdf')
+const mobilePanes: Array<{ value: MobilePane; label: string }> = [
+  { value: 'outline', label: '目录' },
+  { value: 'pdf', label: '论文' },
+  { value: 'ai', label: 'AI 助手' }
+]
+const selectMobilePane = (pane: MobilePane) => {
+  mobilePane.value = pane
+  if (pane === 'outline') outlineCollapsed.value = false
+}
 const sections = ref<any[]>([])
 const paperTables = ref<any[]>([])
 const sectionsLoading = ref(true)
@@ -729,7 +766,7 @@ const applyLayoutPreset = (mode: LayoutMode) => {
   }
 
   showSidebar.value = true
-  const ratio = mode === 'compare' ? 0.38 : 0.56
+  const ratio = mode === 'compare' ? 0.34 : 0.56
   sidebarWidth.value = clampSidebarWidth(window.innerWidth * ratio)
   void nextTick(() => pdfViewerRef.value?.fitWidth())
 }
@@ -756,6 +793,7 @@ const handleWindowResize = () => {
 
 const navigateToSection = async (section: OutlineNode) => {
   if (!pdfViewerRef.value) return
+  mobilePane.value = 'pdf'
   await pdfViewerRef.value.scrollToPage(section.startPage)
   pdfViewerRef.value.highlightPage(section.startPage)
 }
@@ -797,11 +835,12 @@ const handlePdfPageChange = (page: number) => {
 const handlePdfLoaded = async (pages: number) => {
   pdfError.value = false
   totalPdfPages.value = pages
+  await nextTick()
+  await pdfViewerRef.value?.fitWidth()
   try {
     const saved = JSON.parse(localStorage.getItem(readingPositionKey) || '{}')
     const savedPage = Math.min(pages, Math.max(1, Number(saved.page || 1)))
     if (savedPage > 1) {
-      await nextTick()
       await pdfViewerRef.value?.scrollToPage(savedPage)
       currentPdfPage.value = savedPage
     }
@@ -968,28 +1007,35 @@ const confirmDeleteQaMessage = (qa: any) => {
 }
 
 // 侧边栏拖拽调节
-const startResize = (e: MouseEvent) => {
+const startResize = (e: PointerEvent) => {
   e.preventDefault()
   const startX = e.clientX
   const startWidth = sidebarWidth.value
   
-  const onMouseMove = (e: MouseEvent) => {
-    const delta = startX - e.clientX
+  const onPointerMove = (moveEvent: PointerEvent) => {
+    const delta = startX - moveEvent.clientX
     sidebarWidth.value = clampSidebarWidth(startWidth + delta)
   }
   
-  const onMouseUp = () => {
+  const onPointerUp = () => {
     layoutMode.value = sidebarWidth.value / window.innerWidth >= 0.48 ? 'ai' : 'compare'
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
+    document.removeEventListener('pointermove', onPointerMove)
+    document.removeEventListener('pointerup', onPointerUp)
   }
   
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+  document.addEventListener('pointermove', onPointerMove)
+  document.addEventListener('pointerup', onPointerUp)
 }
 
-const goBack = () => {
-  router.push('/papers')
+const handleResizeKeydown = (event: KeyboardEvent) => {
+  const step = event.shiftKey ? 64 : 20
+  if (event.key === 'ArrowLeft') sidebarWidth.value = clampSidebarWidth(sidebarWidth.value + step)
+  else if (event.key === 'ArrowRight') sidebarWidth.value = clampSidebarWidth(sidebarWidth.value - step)
+  else if (event.key === 'Home') sidebarWidth.value = 360
+  else if (event.key === 'End') sidebarWidth.value = clampSidebarWidth(1120)
+  else return
+  event.preventDefault()
+  layoutMode.value = sidebarWidth.value / window.innerWidth >= 0.48 ? 'ai' : 'compare'
 }
 
 const loadPaper = async () => {
@@ -1542,12 +1588,6 @@ watch(interpretType, () => {
   background: var(--pa-bg);
 }
 
-.reader-back-button {
-  min-height: 40px;
-  padding-inline: 8px;
-  white-space: nowrap;
-}
-
 .paper-title-bar {
   flex: 1;
   min-width: 0;
@@ -1605,7 +1645,7 @@ watch(interpretType, () => {
   background: var(--pa-surface);
   color: var(--pa-primary);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(29, 33, 41, 0.12);
+  box-shadow: var(--pa-shadow-sm);
 }
 
 .layout-option:focus-visible {
@@ -1667,6 +1707,10 @@ watch(interpretType, () => {
 }
 
 .sidebar-resizer:hover::after { background: var(--pa-primary); }
+.sidebar-resizer:focus-visible {
+  outline: 2px solid var(--pa-primary);
+  outline-offset: -2px;
+}
 
 .resizer-handle {
   position: absolute;
@@ -2309,6 +2353,10 @@ watch(interpretType, () => {
 }
 
 .citation-item {
+  display: block;
+  width: 100%;
+  text-align: start;
+  color: inherit;
   background: var(--pa-surface);
   border-radius: 6px;
   padding: 10px 12px;
@@ -2316,6 +2364,11 @@ watch(interpretType, () => {
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
   border: 1px solid var(--pa-border);
+}
+
+.citation-item:focus-visible {
+  outline: 2px solid var(--pa-info);
+  outline-offset: 2px;
 }
 
 .citation-item:hover {
@@ -2389,6 +2442,67 @@ watch(interpretType, () => {
   .layout-label { display: none; }
   .layout-option { min-width: 42px; padding-inline: 8px; }
   .paper-authors { display: none; }
+}
+
+.mobile-workspace-nav { display: none; }
+
+@media (max-width: 767px) {
+  .paper-reader { height: 100dvh; }
+  .top-actions { display: none; }
+  .mobile-workspace-nav {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--pa-border);
+    background: var(--pa-surface);
+  }
+  .mobile-workspace-nav button {
+    min-height: 40px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--pa-muted);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .mobile-workspace-nav button.active {
+    color: var(--pa-primary);
+    background: var(--pa-primary-soft);
+    font-weight: 600;
+  }
+  .mobile-workspace-nav button:focus-visible {
+    outline: 2px solid var(--pa-primary);
+    outline-offset: -2px;
+  }
+  .reader-outline,
+  .pdf-viewer,
+  .ai-sidebar {
+    display: none !important;
+  }
+  .reader-outline.mobile-pane-active,
+  .pdf-viewer.mobile-pane-active,
+  .ai-sidebar.mobile-pane-active {
+    display: flex !important;
+    flex: 1 1 auto;
+    width: 100% !important;
+    min-width: 0 !important;
+    border: 0;
+  }
+  .pdf-viewer.mobile-pane-active { display: block !important; }
+  .sidebar-resizer { display: none; }
+  .paper-title { font-size: 14px; }
+}
+
+@media (pointer: coarse) {
+  .layout-option,
+  .qa-more-button,
+  .citation-toggle,
+  .mobile-workspace-nav button {
+    min-height: 44px;
+  }
+  .qa-more-button { min-width: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

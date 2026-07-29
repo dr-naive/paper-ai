@@ -1,10 +1,10 @@
 <template>
   <div class="pdf-viewer-wrapper">
     <!-- 工具栏 -->
-    <div class="pdf-toolbar">
+    <div class="pdf-toolbar" role="toolbar" aria-label="PDF 阅读工具">
       <div class="page-selector">
-        <button class="toolbar-btn page-nav-btn" @click="prevPage" :disabled="currentPage <= 1">
-          <span>◀</span>
+        <button type="button" class="toolbar-btn page-nav-btn" aria-label="上一页" title="上一页" @click="prevPage" :disabled="currentPage <= 1">
+          <span aria-hidden="true">◀</span>
         </button>
         <input
           type="number"
@@ -13,25 +13,26 @@
           min="1"
           :max="numPages"
           class="page-input"
+          aria-label="当前页码"
         />
         <span class="page-separator">/</span>
         <span class="page-total">{{ numPages }}</span>
-        <button class="toolbar-btn page-nav-btn" @click="nextPage" :disabled="currentPage >= numPages">
-          <span>▶</span>
+        <button type="button" class="toolbar-btn page-nav-btn" aria-label="下一页" title="下一页" @click="nextPage" :disabled="currentPage >= numPages">
+          <span aria-hidden="true">▶</span>
         </button>
       </div>
       <div class="toolbar-spacer"></div>
-      <button class="toolbar-btn" @click="zoomOut" :disabled="scale <= 0.5">
-        <span>-</span>
+      <button type="button" class="toolbar-btn" aria-label="缩小 PDF" title="缩小" @click="zoomOut" :disabled="scale <= 0.5">
+        <span aria-hidden="true">−</span>
       </button>
       <span class="zoom-level">{{ Math.round(scale * 100) }}%</span>
-      <button class="toolbar-btn" @click="zoomIn" :disabled="scale >= 3">
-        <span>+</span>
+      <button type="button" class="toolbar-btn" aria-label="放大 PDF" title="放大" @click="zoomIn" :disabled="scale >= 3">
+        <span aria-hidden="true">+</span>
       </button>
-      <button class="toolbar-btn" @click="resetZoom">
+      <button type="button" class="toolbar-btn" aria-label="恢复原始缩放比例" @click="resetZoom">
         <span>100%</span>
       </button>
-      <button class="toolbar-btn" @click="fitWidth">
+      <button type="button" class="toolbar-btn" aria-label="让 PDF 适应可用宽度" @click="fitWidth">
         <span>适应宽度</span>
       </button>
     </div>
@@ -107,17 +108,6 @@ import {
 } from '@/utils/pdfCache'
 
 pdfjsLib.GlobalWorkerOptions.workerPort = new pdfWorker()
-
-// 抑制 PDF.js 的字体警告
-const originalWarn = console.warn
-console.warn = function(...args: any[]) {
-  // 过滤掉字体相关的警告
-  const message = args[0] || ''
-  if (typeof message === 'string' && message.includes('Not enough space in glyfs')) {
-    return  // 忽略这个警告
-  }
-  originalWarn.apply(console, args)
-}
 
 const props = defineProps<{
   pdfUrl: string
@@ -390,14 +380,14 @@ const resetZoom = () => {
   reRenderAll()
 }
 
-const fitWidth = () => {
+const fitWidth = async () => {
   if (!containerRef.value || pageWidths.length === 0) return
   
   const containerWidth = containerRef.value.clientWidth - 20
   const firstPageWidth = pageWidths[0] || 600
   
   scale.value = scale.value * containerWidth / firstPageWidth
-  reRenderAll()
+  await reRenderAll()
 }
 
 const reRenderAll = async () => {
@@ -923,6 +913,11 @@ defineExpose({
   min-width: 32px;
 }
 
+.toolbar-btn:focus-visible {
+  outline: 2px solid oklch(0.88 0.08 70);
+  outline-offset: 2px;
+}
+
 .toolbar-btn:hover:not(:disabled) {
   background: oklch(0.43 0.022 45);
 }
@@ -944,6 +939,26 @@ defineExpose({
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
+  scrollbar-width: auto;
+  scrollbar-color: oklch(0.62 0.012 45) var(--pa-toolbar);
+}
+
+.pdf-container::-webkit-scrollbar {
+  width: 12px;
+}
+
+.pdf-container::-webkit-scrollbar-track {
+  background: var(--pa-toolbar);
+}
+
+.pdf-container::-webkit-scrollbar-thumb {
+  min-height: 72px;
+  border-radius: 6px;
+  background: oklch(0.62 0.012 45);
+}
+
+.pdf-container::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.70 0.014 45);
 }
 
 .pdf-content {
@@ -966,6 +981,9 @@ defineExpose({
   position: relative;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   background: white;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 600px 800px;
 }
 
 .citation-highlight-layer {
@@ -1003,6 +1021,14 @@ defineExpose({
 @media (prefers-reduced-motion: reduce) {
   .pdf-page-shell.citation-target { animation: none; }
   .citation-highlight-rect { animation: none; }
+}
+
+@media (pointer: coarse) {
+  .toolbar-btn,
+  .page-input {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 .pdf-loading,
