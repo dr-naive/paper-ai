@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 
 from app.database import Base
 
@@ -34,6 +34,7 @@ class EvidenceItem(Base):
     __table_args__ = (
         Index("idx_evidence_items_project_created", "project_id", "created_at"),
         Index("idx_evidence_items_paper", "paper_id"),
+        Index("idx_evidence_items_project_status", "project_id", "status"),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -51,5 +52,19 @@ class EvidenceItem(Base):
     source_authors = Column(JSON, nullable=False, default=list)
     source_year = Column(Integer, nullable=True)
     doi = Column(String(200), nullable=True)
+    source_type = Column(String(40), nullable=False, default="imported_existing", server_default="imported_existing")
+    status = Column(String(20), nullable=False, default="active", server_default="active")
+    source_fingerprint = Column(String(64), nullable=True)
+    verification_status = Column(String(20), nullable=False, default="unverified", server_default="unverified")
+    verification_reason = Column(Text, nullable=True)
+    verification_model = Column(String(200), nullable=True)
+    verification_version = Column(String(50), nullable=True)
     created_by = Column(String(30), nullable=False, default="user")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )

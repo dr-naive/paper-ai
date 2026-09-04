@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 import os
 import uuid
@@ -28,7 +27,6 @@ from app.config import settings
 from app.job_queue import enqueue_job
 from app.services.remote_paper_import import download_arxiv_pdf, normalize_arxiv_id
 from app.utils.task_manager import create_task, update_task
-from app.rag.hybrid_retrieval import HybridPaperRetriever, tokenize
 from app.models.project import (
     ARTIFACT_STATUS_DRAFT,
     ARTIFACT_STATUS_READY,
@@ -39,6 +37,9 @@ from app.models.project import (
     ResearchProject,
     WritingArtifact,
 )
+from app.models.research import MemoryItem
+from app.research.context.manager import ProjectContextManager
+from app.research.context.schemas import DISCOVERY_MEMORY_TYPES
 from app.utils.manuscript_export import build_bibliography
 
 logger = logging.getLogger(__name__)
@@ -116,17 +117,18 @@ class ProjectImportArxivPaperInput(BaseModel):
 
 
 class ProjectAppendMemoryInput(BaseModel):
-    """向项目的长期记忆追加一条 note。
-    长期记忆是 agent 跨会话"记住"调研进展的核心载体。
-    每次阅读完论文、做出判断、或发现重要事实,都应该用这个 tool 记录。
-    """
+    """向项目的 typed Literature Memory 追加一条长期有效的信息。"""
     note: str = Field(
         ..., min_length=1, max_length=2000,
         description="要写入记忆的要点。建议用短句,可包含关键数据点。例如:'FakeShield 论文在 MMTD-Set 上 F1 达到 0.93,是 SOTA。'",
     )
     tag: str = Field(
         "",
-        description="note 的标签,便于分类。推荐:发现/finding、方法/method、结论/conclusion、待办/todo、风险/risk。默认空。",
+        description="可选的细分标签,例如 keyword:retrieval 或 direction:multimodal。不要把原始推理写入记忆。",
+    )
+    memory_type: str = Field(
+        "",
+        description="必填的稳定类型: literature_intent / literature_preference / literature_exclusion / project_decision。",
     )
     source_type: str = Field(
         "agent",
@@ -153,7 +155,7 @@ class ProjectSearchContentInput(BaseModel):
         description="检索意图:general/comparison/table/image。跨论文比较建议传 comparison。",
     )
     top_k: int = Field(10, ge=2, le=20, description="最终返回的跨论文证据数，默认 10。")
-    max_papers: int = Field(8, ge=1, le=20, description="本次最多检索多少篇项目论文，默认 8。")
+    max_papers: int = Field(5, ge=1, le=5, description="本次最多检索多少篇候选项目论文，默认 5。")
 
 
 class ProjectSaveArtifactInput(BaseModel):
@@ -429,75 +431,6 @@ class ProjectFinalizeManuscriptInput(BaseModel):
 # =====================================================================
 # Tool 工厂
 # =====================================================================
-def _metadata_relevance(query: str, paper: Paper, project_paper: ProjectPaper) -> float:
-    """Cheap first-stage paper selection score using project and paper metadata."""
-    query_tokens = set(tokenize(query))
-    metadata = " ".join([
-        str(paper.title or ""),
-        str(paper.abstract or "")[:800],
-        " ".join(str(value) for value in (paper.keywords or [])),
-        " ".join(str(value) for value in (project_paper.tags or [])),
-        str(project_paper.notes or ""),
-    ])
-    metadata_tokens = set(tokenize(metadata))
-    overlap = len(query_tokens & metadata_tokens) / max(len(query_tokens), 1)
-    role_bonus = {"core": 0.08, "related": 0.04, "background": 0.0}.get(project_paper.role, 0.0)
-    priority_bonus = max(0, min(int(project_paper.reading_priority or 3), 5)) * 0.005
-    return overlap + role_bonus + priority_bonus
-
-
-def _rank_project_chunks(
-    query: str,
-    groups: list[tuple[ProjectPaper, Paper, list[dict[str, Any]]]],
-    top_k: int,
-) -> list[dict[str, Any]]:
-    """Globally rank evidence while retaining useful cross-paper diversity."""
-    query_tokens = set(tokenize(query))
-    scored: list[tuple[float, str, dict[str, Any]]] = []
-    for project_paper, paper, chunks in groups:
-        for rank, chunk in enumerate(chunks, start=1):
-            item = dict(chunk)
-            text_tokens = set(tokenize(f"{item.get('section', '')} {item.get('content', '')}"))
-            overlap = len(query_tokens & text_tokens) / max(len(query_tokens), 1)
-            local_score = float(item.get("rerank_score") or 0.0)
-            role_bonus = {"core": 0.04, "related": 0.02, "background": 0.0}.get(project_paper.role, 0.0)
-            score = overlap * 0.75 + min(local_score, 1.0) * 0.15 + 1 / (60 + rank) + role_bonus
-            item.update({
-                "paper_id": str(paper.id),
-                "paper_title": paper.title,
-                "paper_authors": paper.authors,
-                "paper_role": project_paper.role,
-                "project_id": project_paper.project_id,
-                "project_rerank_score": round(score, 6),
-            })
-            scored.append((score, str(paper.id), item))
-    scored.sort(key=lambda value: value[0], reverse=True)
-
-    # Prevent one long paper from occupying the whole context on comparison/review tasks.
-    paper_count = max(len(groups), 1)
-    per_paper_cap = max(2, math.ceil(top_k / paper_count) + 1)
-    counts: dict[str, int] = {}
-    selected: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for _score, paper_id, item in scored:
-        signature = (
-            paper_id,
-            str(item.get("page") or ""),
-            re.sub(r"\s+", "", str(item.get("content") or ""))[:180],
-        )
-        if signature in seen or counts.get(paper_id, 0) >= per_paper_cap:
-            continue
-        seen.add(signature)
-        counts[paper_id] = counts.get(paper_id, 0) + 1
-        selected.append(item)
-        if len(selected) >= top_k:
-            break
-    for index, item in enumerate(selected, start=1):
-        item["source_id"] = f"S{index}"
-        item["content"] = str(item.get("content") or "")[:1000]
-    return selected
-
-
 def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[StructuredTool]:
     """创建 project-scope 的 21 个 agent tool。
 
@@ -539,6 +472,7 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
             existing.tags = kwargs.get("tags") or []
             existing.notes = kwargs.get("notes") or ""
             existing.reading_priority = kwargs.get("reading_priority") or 3
+            project_paper = existing
             msg = (f"已更新项目中论文 role={role} tags={existing.tags} "
                    f"priority={existing.reading_priority}。")
         else:
@@ -551,12 +485,26 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
                 reading_priority=kwargs.get("reading_priority") or 3,
             )
             db.add(pp)
+            project_paper = pp
             msg = f"已成功加入论文到项目。标题:{paper.title[:80]}{'...' if len(paper.title or '')>80 else ''}"
         # 顺便更新项目时间
         proj = await db.get(ResearchProject, _pid)
         if proj is not None:
             proj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
+        if not (project_paper.analysis_card or {}).get("paper_profile"):
+            from app.research.context.paper_profile import PaperProfileNotReadyError, PaperProfileService
+
+            try:
+                await PaperProfileService(db).request_generation(
+                    project_id=_pid,
+                    paper_id=pid,
+                    user_id=_uid,
+                )
+            except PaperProfileNotReadyError:
+                logger.info("Project Paper 尚未完成解析，暂不生成 Profile paper_id=%s", pid)
+            except Exception:
+                logger.exception("Project Paper Profile 调度失败 paper_id=%s", pid)
         return msg
 
     async def search_content_impl(**kwargs: Any) -> str:
@@ -564,38 +512,32 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
         query = str(kwargs["query"]).strip()
         intent = str(kwargs.get("intent") or "general")
         top_k = int(kwargs.get("top_k") or 10)
-        max_papers = int(kwargs.get("max_papers") or 8)
-        rows = (await db.execute(
-            select(ProjectPaper, Paper)
-            .join(Paper, Paper.id == ProjectPaper.paper_id)
-            .where(ProjectPaper.project_id == _pid, Paper.user_id == _uid)
-        )).all()
-        if not rows:
-            return json.dumps({"chunks": [], "paper_count": 0, "message": "项目文档库为空"}, ensure_ascii=False)
-
-        ranked_papers = sorted(
-            rows,
-            key=lambda row: _metadata_relevance(query, row[1], row[0]),
-            reverse=True,
-        )[:max_papers]
-        retriever = HybridPaperRetriever(db)
-        per_paper_k = max(2, min(5, math.ceil(top_k / max(len(ranked_papers), 1)) + 1))
-        groups: list[tuple[ProjectPaper, Paper, list[dict[str, Any]]]] = []
-        for project_paper, paper in ranked_papers:
-            result = await retriever.retrieve(
-                paper_id=str(paper.id),
-                question=query,
-                history_context="",
-                intent=intent,
-            )
-            if result.chunks:
-                groups.append((project_paper, paper, result.chunks[:per_paper_k]))
-        chunks = _rank_project_chunks(query, groups, top_k)
+        max_papers = int(kwargs.get("max_papers") or 5)
+        context = await ProjectContextManager(db).build_writing_context(
+            project_id=_pid,
+            user_id=_uid,
+            instruction=query,
+            intent=intent,
+            max_candidates=max_papers,
+            top_k=top_k,
+        )
+        chunks = []
+        for index, evidence in enumerate(context.evidence, start=1):
+            item = evidence.model_dump(mode="json")
+            item.update({
+                "content": item["snippet"],
+                "section": item["section_title"],
+                "page": item["page_number"],
+                "source_id": f"S{index}",
+                "project_rerank_score": item["retrieval_score"],
+            })
+            chunks.append(item)
         return json.dumps({
             "chunks": chunks,
-            "paper_count": len(groups),
-            "candidate_paper_count": len(ranked_papers),
+            "paper_count": len({item["paper_id"] for item in chunks}),
+            "candidate_paper_count": len(context.candidate_papers),
             "query": query,
+            "status": context.status,
         }, ensure_ascii=False)
 
     async def remove_paper_impl(**kwargs: Any) -> str:
@@ -684,6 +626,15 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
         if not text:
             return "错误:note 内容不能为空。"
         tag = (kwargs.get("tag") or "").strip()[:50]
+        memory_type = (kwargs.get("memory_type") or "").strip()
+        if not memory_type and tag in DISCOVERY_MEMORY_TYPES:
+            memory_type = tag
+        if memory_type not in DISCOVERY_MEMORY_TYPES:
+            return (
+                "错误:必须提供稳定 memory_type: "
+                "literature_intent/literature_preference/literature_exclusion/project_decision。"
+                "普通聊天、原始搜索结果和 agent 推理不能写入 Literature Memory。"
+            )
         source_type = (kwargs.get("source_type") or "agent").strip()[:20]
         paper_id = kwargs.get("paper_id") or None
         if source_type == "paper" and not paper_id:
@@ -692,30 +643,31 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
             owned_paper = await db.get(Paper, paper_id)
             if owned_paper is None or owned_paper.user_id != _uid:
                 return "错误:来源论文不存在或无访问权限。"
-        # 复制成新 dict 并追加,确保 SQLAlchemy 检测到 JSON 字段变更
-        # (普通 Column(JSON) 不带 MutableDict,直接改嵌套不会触发 UPDATE)
-        old_memory = project.memory or {}
-        memory = {
-            "summary": str(old_memory.get("summary", "") or ""),
-            "notes": list(old_memory.get("notes") or []),
-        }
-        memory["notes"].append({
-            "time": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-            "text": text,
-            "tag": tag,
-            "source_type": source_type,
-            "paper_id": paper_id,
-            "paper_title": (kwargs.get("paper_title") or "")[:400] or None,
-            "page": kwargs.get("page"),
-            "source_id": (kwargs.get("source_id") or "")[:30] or None,
-        })
-        if len(memory["notes"]) > 200:
-            memory["notes"] = memory["notes"][-200:]
-        project.memory = memory  # 赋新 dict 引用,触发 dirty
+        tags = []
+        if tag:
+            tags.append(tag)
+        if paper_id:
+            tags.append(f"paper_id:{paper_id}")
+        if kwargs.get("paper_title"):
+            tags.append(f"paper_title:{str(kwargs['paper_title'])[:200]}")
+        if kwargs.get("page"):
+            tags.append(f"page:{int(kwargs['page'])}")
+        item = MemoryItem(
+            project_id=_pid,
+            user_id=_uid,
+            type=memory_type,
+            title=tag or memory_type,
+            content=text,
+            source_type=source_type,
+            source_id=(kwargs.get("source_id") or paper_id or None),
+            confidence=1.0,
+            tags=tags,
+            created_by="agent",
+        )
+        db.add(item)
         project.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
-        return (f"已写入项目记忆(共 {len(memory['notes'])} 条 notes)。\n"
-                f"写入内容: [{tag}] {text}")
+        return f"已写入 typed Literature Memory(type={memory_type})。\n写入内容: {text}"
 
     async def save_paper_card_impl(**kwargs: Any) -> str:
         await _assert_owned()
@@ -736,6 +688,9 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
             "updated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "generated_by": "agent",
         }
+        existing_profile = (pp.analysis_card or {}).get("paper_profile")
+        if isinstance(existing_profile, dict):
+            card["paper_profile"] = existing_profile
         for field_name in list_fields:
             card[field_name] = [str(value)[:1000] for value in (kwargs.get(field_name) or [])[:30]]
         pp.analysis_card = card
@@ -753,6 +708,19 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
 
     async def read_memory_impl(**kwargs: Any) -> str:
         project = await _assert_owned()
+        typed_rows = (await db.execute(
+            select(MemoryItem).where(
+                MemoryItem.project_id == _pid,
+                MemoryItem.user_id == _uid,
+                MemoryItem.superseded_by.is_(None),
+                MemoryItem.type.in_(DISCOVERY_MEMORY_TYPES),
+            ).order_by(MemoryItem.updated_at.desc()).limit(50)
+        )).scalars().all()
+        if typed_rows:
+            lines = ["项目 Literature Memory(仅稳定类型):"]
+            for item in reversed(typed_rows):
+                lines.append(f"  - [{item.type}] {(item.content or '')[:500]}")
+            return "\n".join(lines)
         memory = project.memory or {"summary": "", "notes": []}
         summary = memory.get("summary", "") or ""
         notes = memory.get("notes") or []
@@ -1585,10 +1553,10 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
             coroutine=append_memory_impl,
             name="project_append_memory",
             description=(
-                "向【当前研究项目】的长期记忆追加一条要点 note。**这个 tool 非常重要**——"
-                "你的记忆是有限的,每次读到重要发现、方法、数据点、对比结论,以及自己的判断,都应该用这个 tool 写下来。"
-                "后续回答或生成综述时会把这些记忆注入到上下文中,避免你忘记前面做过的调研。"
-                "建议格式:一句话事实+标签。例如:note='FakeShield 在 MMTD-Set 上 F1=0.93,是当前 SOTA' tag='finding'"
+                "向【当前研究项目】写入一条经过确认的 typed Literature Memory。"
+                "仅用于最终确认的搜索意图、重要检索偏好、明确排除方向或项目决策；"
+                "必须传 memory_type=literature_intent/literature_preference/literature_exclusion/project_decision。"
+                "不要写每轮搜索结果、provider 原始响应、临时 ranking、raw reasoning 或普通聊天。"
             ),
             args_schema=ProjectAppendMemoryInput,
         ),

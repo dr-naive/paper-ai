@@ -1,77 +1,346 @@
 <template>
-  <section class="writing-v2" aria-label="Writing V2 编辑器">
-    <aside class="document-rail">
-      <header><strong>文档</strong><a-button size="mini" @click="createNewDocument">新建文档</a-button></header>
-      <button v-for="item in documents" :key="item.id" type="button" :class="{ active: item.id === activeDocument?.id }" @click="openDocument(item.id)"><strong>{{ item.title }}</strong><small>{{ item.status }} · {{ formatTime(item.updated_at) }}</small></button>
-      <p v-if="!documents.length && !loading">还没有正式写作文档。</p>
-      <div v-if="activeDocument" class="outline"><header><strong>大纲</strong><a-button size="mini" @click="addSection">添加章节</a-button></header><button v-for="heading in outline" :key="heading.pos" type="button" :style="{ paddingLeft: `${8 + (heading.level - 1) * 10}px` }" @click="focusHeading(heading.pos)">{{ heading.text }}</button><p v-if="!outline.length">使用“添加章节”建立论文结构。</p></div>
-    </aside>
+  <section class="writing-v2" :class="{ 'agent-collapsed': writingStore.agentPanelCollapsed, 'outline-collapsed': writingStore.outlinePanelCollapsed }" aria-label="正式论文写作工作区">
+    <WritingOutlinePanel
+      :documents="documents"
+      :active-document-id="activeDocument?.id"
+      :outline="outline"
+      :current-heading="writingStore.editorContext.currentHeading"
+      :loading="loading"
+      :collapsed="writingStore.outlinePanelCollapsed"
+      @create-document="createNewDocument"
+      @open-document="openDocument"
+      @add-section="addSection"
+      @focus-heading="focusHeading"
+      @toggle="writingStore.setOutlinePanelCollapsed(!writingStore.outlinePanelCollapsed)"
+    />
 
     <main class="editor-column">
-      <div v-if="!activeDocument" class="editor-empty"><h3>开始正式论文写作</h3><p>正文将保存为可回溯 revision，研究产物仍保留在原来的 Artifact 区域。</p><a-button type="primary" @click="createNewDocument">新建论文文档</a-button></div>
+      <div v-if="!activeDocument" class="editor-empty">
+        <h3>开始正式论文写作</h3>
+        <p>正文将保存为可回溯 revision，研究产物仍保留在原来的 Artifact 区域。</p>
+        <a-button type="primary" @click="createNewDocument">新建论文文档</a-button>
+      </div>
       <template v-else>
-        <header class="document-header"><input v-model="documentTitle" aria-label="文档标题" @change="titleDirty = true" /><span>v{{ activeDocument.current_revision?.version || 1 }}</span><a-button :loading="auditing" @click="runCitationAudit">引用审计</a-button><a-button type="primary" :loading="saving" :disabled="!editor" @click="saveRevision">保存新版本</a-button></header>
+        <header class="document-header">
+          <input v-model="documentTitle" aria-label="文档标题" @change="titleDirty = true" />
+          <span>v{{ revisionVersion }}</span>
+          <span class="save-state" :class="{ 'save-state-error': saveError }" aria-live="polite">{{ saveError || saveStateLabel }}</span>
+          <a-button :loading="auditing" @click="runCitationAudit">引用审计</a-button>
+          <a-button type="primary" :loading="saving" :disabled="!editor" @click="saveRevision()">保存新版本</a-button>
+        </header>
         <div v-if="editor" class="editor-toolbar" role="toolbar" aria-label="文本格式">
           <button type="button" :class="{ active: editor.isActive('heading', { level: 2 }) }" @click="editor.chain().focus().toggleHeading({ level: 2 }).run()">标题</button>
-          <button type="button" :class="{ active: editor.isActive('bold') }" @click="editor.chain().focus().toggleBold().run()">粗体</button><button type="button" :class="{ active: editor.isActive('italic') }" @click="editor.chain().focus().toggleItalic().run()">斜体</button><button type="button" @click="editor.chain().focus().toggleBlockquote().run()">引用</button><button type="button" @click="editor.chain().focus().toggleBulletList().run()">列表</button>
-          <a-dropdown trigger="click"><button type="button" :disabled="!hasSelection">AI 编辑</button><template #content><a-doption v-for="action in aiActions" :key="action.value" @click="requestAIEdit(action.value)">{{ action.label }}</a-doption></template></a-dropdown>
+          <button type="button" :class="{ active: editor.isActive('bold') }" @click="editor.chain().focus().toggleBold().run()">粗体</button>
+          <button type="button" :class="{ active: editor.isActive('italic') }" @click="editor.chain().focus().toggleItalic().run()">斜体</button>
+          <button type="button" @click="editor.chain().focus().toggleBlockquote().run()">引用</button>
+          <button type="button" @click="editor.chain().focus().toggleBulletList().run()">列表</button>
+          <button type="button" :disabled="!editor.can().chain().focus().undo().run()" @click="editor.chain().focus().undo().run()">撤销</button>
+          <button type="button" :disabled="!editor.can().chain().focus().redo().run()" @click="editor.chain().focus().redo().run()">重做</button>
         </div>
-        <editor-content :editor="editor || undefined" class="editor-surface" />
-        <section v-if="proposal" class="diff-panel" aria-live="polite"><header><strong>AI 修改建议</strong><span>接受后才会写入编辑器并创建 revision</span></header><div class="diff-columns"><div><label>原文</label><p>{{ proposal.original }}</p></div><div><label for="replacement-text">建议文本</label><textarea id="replacement-text" v-model="proposal.replacement"></textarea></div></div><footer><a-button @click="proposal = null">拒绝修改</a-button><a-button type="primary" @click="acceptProposal">接受并保存版本</a-button></footer></section>
-        <section v-if="citationAudit" class="audit-panel" aria-live="polite"><header><strong>引用审计</strong><span>{{ citationAudit.citation_count }} 个引用 · {{ citationAudit.linked_evidence_count }} 个已绑定证据</span><a-button size="mini" @click="citationAudit = null">关闭</a-button></header><p v-if="citationAudit.passed && !citationAudit.issue_count" class="audit-pass">所有引用均已连接到当前项目的有效证据。</p><ul v-else><li v-for="issue in citationAudit.issues" :key="`${issue.citation_index}-${issue.code}-${issue.claim_excerpt || ''}`" :class="issue.severity"><strong v-if="issue.code === 'unsupported_claim'">Unsupported claim</strong><template v-else>引用 {{ issue.citation_index + 1 }}</template>：{{ issue.message }}<blockquote v-if="issue.claim_excerpt">{{ issue.claim_excerpt }}</blockquote></li></ul></section>
+        <div class="editor-paper"><editor-content :editor="editor || undefined" class="editor-surface" /></div>
+        <section v-if="citationAudit" class="audit-panel" aria-live="polite">
+          <header><strong>引用审计</strong><span>{{ citationAudit.citation_count }} 个引用 · {{ citationAudit.linked_evidence_count }} 个已绑定证据</span><a-button size="mini" @click="citationAudit = null">关闭</a-button></header>
+          <p v-if="citationAudit.passed && !citationAudit.issue_count" class="audit-pass">所有引用均已连接到当前项目的有效证据。</p>
+          <ul v-else><li v-for="issue in citationAudit.issues" :key="`${issue.citation_index}-${issue.code}-${issue.claim_excerpt || ''}`" :class="issue.severity"><strong v-if="issue.code === 'unsupported_claim'">Unsupported claim</strong><template v-else>引用 {{ issue.citation_index + 1 }}</template>：{{ issue.message }}<blockquote v-if="issue.claim_excerpt">{{ issue.claim_excerpt }}</blockquote></li></ul>
+        </section>
       </template>
     </main>
 
-    <aside class="evidence-rail">
-      <header><strong>研究证据</strong><span>{{ filteredEvidence.length }}</span></header><a-input v-model="evidenceSearch" allow-clear placeholder="搜索证据" />
-      <p v-if="!filteredEvidence.length" class="rail-empty">没有匹配证据。先从论文阅读器保存原文片段。</p>
-      <article v-for="item in filteredEvidence" :key="item.id"><span>{{ item.evidence_type }} · p.{{ item.page_number || '?' }}</span><strong>{{ item.source_title }}</strong><p>{{ item.snippet }}</p><div><a-button size="mini" @click="insertCitation(item)">插入引用</a-button><a-button size="mini" @click="openEvidence(item)">打开来源</a-button></div></article>
-    </aside>
+    <WritingAgentPanel
+      :context="writingStore.editorContext"
+      :collapsed="writingStore.agentPanelCollapsed"
+      :revision-version="revisionVersion"
+      :messages="writingStore.messages"
+      :proposal="writingStore.activeProposal"
+      :request-status="writingStore.requestStatus"
+      :request-stage="writingStore.requestStage"
+      :request-error="writingStore.requestError"
+      :can-submit="agentCanSubmit"
+      :replace-disabled="replaceDisabled"
+      :replace-disabled-reason="replaceDisabledReason"
+      :evidence="evidence"
+      :project-id="props.projectId"
+      @toggle="writingStore.setAgentPanelCollapsed(!writingStore.agentPanelCollapsed)"
+      @submit="submitAgentInstruction"
+      @copy="copyProposal"
+      @replace="replaceProposal"
+      @dismiss="writingStore.setProposal(null)"
+    >
+      <details v-if="activeDocument" class="evidence-library">
+        <summary>已保存证据 <span>{{ filteredEvidence.length }}</span></summary>
+        <div class="evidence-content">
+          <a-input v-model="evidenceSearch" allow-clear placeholder="搜索证据" />
+          <p v-if="!filteredEvidence.length" class="rail-empty">没有匹配证据。先从论文阅读器保存原文片段。</p>
+          <article v-for="item in filteredEvidence" :key="item.id">
+            <span>{{ item.evidence_type }} · p.{{ item.page_number || '?' }}</span><strong>{{ item.source_title }}</strong><p>{{ item.snippet }}</p>
+            <div><a-button size="mini" @click="insertCitation(item)">插入引用</a-button><a-button size="mini" @click="openEvidence(item)">打开来源</a-button></div>
+          </article>
+        </div>
+      </details>
+    </WritingAgentPanel>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Editor, EditorContent } from '@tiptap/vue-3'
-import { Node } from '@tiptap/core'
+import { Node, type Editor as CoreEditor } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { Message, Modal } from '@arco-design/web-vue'
-import { auditCitations, createDocument, createRevision, getDocument, listDocuments, proposeAIEdit, updateDocument, type AIEditProposal, type CitationAudit, type WritingDocument } from '@/api/documents'
+import { auditCitations, createDocument, createRevision, generateParagraph, getDocument, listDocuments, rewriteSelection, updateDocument, type CitationAudit, type WritingCitationMapping, type WritingDocument, type WritingGenerateRequest, type WritingRewriteRequest } from '@/api/documents'
 import { listEvidence, type EvidenceItem } from '@/api/projects'
+import { useWritingStore, type WritingProposal } from '@/stores/writing'
+import { deriveWritingContext, type WritingOutlineItem } from '@/utils/writingContext'
+import { citationPlaceholder, copyTextToClipboard, proposalInlineContent, proposalPlainText, selectionAnchorIsCurrent, type SelectionAnchor } from '@/utils/writingProposal'
+import WritingAgentPanel from './WritingAgentPanel.vue'
+import WritingOutlinePanel from './WritingOutlinePanel.vue'
 
 const props = defineProps<{ projectId: string }>()
+const writingStore = useWritingStore()
 const Citation = Node.create({ name: 'citation', group: 'inline', inline: true, atom: true, addAttributes: () => ({ paper_id: { default: null }, citation_key: { default: '' }, evidence_id: { default: null } }), parseHTML: () => [{ tag: 'span[data-citation]' }], renderHTML: ({ HTMLAttributes }) => ['span', { ...HTMLAttributes, 'data-citation': '', class: 'citation-node' }, `[${HTMLAttributes.citation_key}]`] })
-const documents = ref<WritingDocument[]>([]), activeDocument = ref<WritingDocument | null>(null), evidence = ref<EvidenceItem[]>([])
-const editor = shallowRef<Editor>(), loading = ref(false), saving = ref(false), auditing = ref(false), documentTitle = ref(''), titleDirty = ref(false), evidenceSearch = ref(''), proposal = ref<AIEditProposal | null>(null), citationAudit = ref<CitationAudit | null>(null)
-const aiActions = [{ value: 'improve_style', label: '改善学术表达' }, { value: 'make_concise', label: '精简文字' }, { value: 'clarify_argument', label: '澄清论证' }, { value: 'find_evidence', label: '寻找支持证据' }, { value: 'check_claim', label: '检查主张' }]
-const hasSelection = computed(() => !!editor.value && editor.value.state.selection.from !== editor.value.state.selection.to)
+
+const documents = ref<WritingDocument[]>([])
+const activeDocument = ref<WritingDocument | null>(null)
+const evidence = ref<EvidenceItem[]>([])
+const editor = shallowRef<Editor>()
+const outline = ref<WritingOutlineItem[]>([])
+const loading = ref(false)
+const saving = ref(false)
+const auditing = ref(false)
+const documentTitle = ref('')
+const titleDirty = ref(false)
+const evidenceSearch = ref('')
+const citationAudit = ref<CitationAudit | null>(null)
+const revisionVersion = computed(() => activeDocument.value?.current_revision?.version || 1)
+const saveError = ref('')
+const editorContentVersion = ref(0)
+const proposalEditorVersion = ref(0)
+const saveStateLabel = computed(() => saving.value ? '保存中…' : activeDocument.value ? '已保存' : '')
 const filteredEvidence = computed(() => { const query = evidenceSearch.value.toLowerCase(); return evidence.value.filter(item => !query || `${item.source_title} ${item.snippet} ${item.normalized_claim}`.toLowerCase().includes(query)) })
-const outline = computed(() => { const rows: Array<{ text: string; level: number; pos: number }> = []; editor.value?.state.doc.descendants((node, pos) => { if (node.type.name === 'heading') rows.push({ text: node.textContent || '未命名标题', level: node.attrs.level, pos }) }); return rows })
-const formatTime = (value: string) => new Date(value).toLocaleDateString('zh-CN')
-const initializeEditor = (content: Record<string, any>) => { editor.value?.destroy(); editor.value = new Editor({ extensions: [StarterKit, Citation], content }) }
-const load = async () => { loading.value = true; try { const [docs, evidenceResult] = await Promise.all([listDocuments(props.projectId), listEvidence(props.projectId)]); documents.value = docs.items || []; evidence.value = evidenceResult.items || []; if (documents.value.length) await openDocument(documents.value[0].id) } finally { loading.value = false } }
-const openDocument = async (id: string) => { const item = await getDocument(id); activeDocument.value = item; documentTitle.value = item.title; initializeEditor(item.current_revision?.content_json || { type: 'doc', content: [] }); proposal.value = null; citationAudit.value = null }
+const agentCanSubmit = computed(() => Boolean(activeDocument.value && editor.value && writingStore.requestStatus !== 'generating'))
+const citationKeyForNode = (node: { attrs: Record<string, unknown> }, index: number, seen: Set<string>) => {
+  const base = String(node.attrs.citation_key || `citation-${index + 1}`).trim() || `citation-${index + 1}`
+  let key = base
+  let suffix = 2
+  while (seen.has(key)) key = `${base}-${suffix++}`
+  seen.add(key)
+  return key
+}
+const selectedTextWithCitations = (from: number, to: number) => {
+  if (!editor.value || from === to) return { selectedText: '', citations: [] as WritingCitationMapping[] }
+  const entries: WritingCitationMapping[] = []
+  const seen = new Set<string>()
+  editor.value.state.doc.nodesBetween(from, to, node => {
+    if (node.type.name !== 'citation') return
+    const citationKey = citationKeyForNode(node, entries.length, seen)
+    entries.push({
+      citation_key: citationKey,
+      paper_id: String(node.attrs.paper_id || ''),
+      evidence_id: String(node.attrs.evidence_id || ''),
+      claim_text: String(node.attrs.claim_text || ''),
+    })
+  })
+  let citationIndex = 0
+  const selectedText = editor.value.state.doc.textBetween(from, to, '\n\n', node => {
+    if (node.type.name !== 'citation') return ''
+    const citation = entries[citationIndex++]
+    return citation ? citationPlaceholder(citation.citation_key) : ''
+  })
+  return { selectedText, citations: entries }
+}
+const currentSelectionAnchor = computed<SelectionAnchor>(() => ({
+  revisionId: activeDocument.value?.current_revision_id || '',
+  from: writingStore.editorContext.selectionFrom,
+  to: writingStore.editorContext.selectionTo,
+  selectedText: selectedTextWithCitations(writingStore.editorContext.selectionFrom, writingStore.editorContext.selectionTo).selectedText,
+}))
+const replaceDisabled = computed(() => {
+  const proposal = writingStore.activeProposal
+  if (!proposal || proposal.kind !== 'rewrite') return true
+  if (editorContentVersion.value !== proposalEditorVersion.value) return true
+  return !selectionAnchorIsCurrent({ revisionId: proposal.base_revision_id, from: proposal.selection.from, to: proposal.selection.to, selectedText: proposal.original_content }, currentSelectionAnchor.value)
+})
+const replaceDisabledReason = computed(() => replaceDisabled.value ? '正文或选区已发生变化，请重新选择后再次生成建议。' : '')
+
+const syncEditorContext = (instance: CoreEditor | undefined = editor.value) => {
+  if (!instance) return
+  saveError.value = ''
+  const { from, to } = instance.state.selection
+  const snapshot = deriveWritingContext(instance.state.doc as unknown as Parameters<typeof deriveWritingContext>[0], from, to)
+  outline.value = snapshot.outline
+  writingStore.setEditorContext({ selectionFrom: snapshot.selectionFrom, selectionTo: snapshot.selectionTo, selectedText: snapshot.selectedText, selectedCharacterCount: snapshot.selectedCharacterCount, currentHeading: snapshot.currentHeading, sectionPath: snapshot.sectionPath, nearbyText: snapshot.nearbyText })
+}
+const initializeEditor = (content: Record<string, unknown>) => {
+  editor.value?.destroy()
+  editorContentVersion.value += 1
+  editor.value = new Editor({
+    extensions: [StarterKit, Citation],
+    content,
+    onCreate: ({ editor: instance }) => syncEditorContext(instance),
+    onUpdate: ({ editor: instance }) => { editorContentVersion.value += 1; syncEditorContext(instance) },
+    onSelectionUpdate: ({ editor: instance }) => syncEditorContext(instance),
+  })
+}
+const load = async () => {
+  loading.value = true
+  writingStore.setWorkspace(props.projectId)
+  try {
+    const [docs, evidenceResult] = await Promise.all([listDocuments(props.projectId), listEvidence(props.projectId)])
+    documents.value = docs.items || []
+    evidence.value = evidenceResult.items || []
+    if (documents.value.length) await openDocument(documents.value[0].id)
+    else activeDocument.value = null
+  } finally { loading.value = false }
+}
+const openDocument = async (id: string) => {
+  const item = await getDocument(id)
+  activeDocument.value = item
+  documentTitle.value = item.title
+  writingStore.setWorkspace(props.projectId, item.id, item.current_revision_id || '')
+  initializeEditor(item.current_revision?.content_json || { type: 'doc', content: [] })
+  citationAudit.value = null
+  saveError.value = ''
+}
 const createNewDocument = () => Modal.confirm({ title: '新建论文文档', content: '将创建一份独立于旧 WritingArtifact 的正式写作文档。', okText: '新建文档', onOk: async () => { const item = await createDocument(props.projectId, { title: '未命名论文' }); documents.value.unshift(item); await openDocument(item.id) } })
-const saveRevision = async () => { if (!activeDocument.value || !editor.value) return; saving.value = true; try { if (titleDirty.value && documentTitle.value.trim()) { await updateDocument(activeDocument.value.id, { title: documentTitle.value.trim() }); activeDocument.value.title = documentTitle.value.trim(); titleDirty.value = false } const revision = await createRevision(activeDocument.value.id, { content_json: editor.value.getJSON() }); activeDocument.value.current_revision = revision; activeDocument.value.current_revision_id = revision.id; Message.success(`已保存版本 v${revision.version}`) } finally { saving.value = false } }
+const saveRevision = async (createdBy: 'user' | 'agent' = 'user') => {
+  if (!activeDocument.value || !editor.value) return
+  saving.value = true
+  saveError.value = ''
+  try {
+    if (titleDirty.value && documentTitle.value.trim()) { await updateDocument(activeDocument.value.id, { title: documentTitle.value.trim() }); activeDocument.value.title = documentTitle.value.trim(); titleDirty.value = false }
+    const revision = await createRevision(activeDocument.value.id, { content_json: editor.value.getJSON(), created_by: createdBy })
+    activeDocument.value.current_revision = revision
+    activeDocument.value.current_revision_id = revision.id
+    writingStore.setRevision(revision.id)
+    Message.success(`已保存版本 v${revision.version}`)
+  } catch (error) {
+    saveError.value = '保存失败，请稍后重试。'
+    Message.error(saveError.value)
+    throw error
+  } finally { saving.value = false }
+}
 const focusHeading = (pos: number) => editor.value?.chain().focus().setTextSelection(pos + 1).scrollIntoView().run()
 const addSection = () => editor.value?.chain().focus().insertContent([{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '新章节' }] }, { type: 'paragraph' }]).run()
-const requestAIEdit = async (action: string) => { if (!activeDocument.value || !editor.value) return; const { from, to } = editor.value.state.selection; const selected = editor.value.state.doc.textBetween(from, to, ' '); if (!selected) return; proposal.value = await proposeAIEdit(activeDocument.value.id, { action, selected_text: selected, from_pos: from, to_pos: to }) }
-const acceptProposal = async () => { if (!proposal.value || !editor.value) return; editor.value.chain().focus().insertContentAt({ from: proposal.value.range.from, to: proposal.value.range.to }, proposal.value.replacement).run(); proposal.value = null; await saveRevision() }
+const friendlyWritingError = (error: unknown) => {
+  const response = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  const detail = typeof response === 'object' && response !== null ? response as { code?: string; message?: string } : { message: typeof response === 'string' ? response : '' }
+  const messages: Record<string, string> = {
+    NO_IMPORTED_PAPERS: '当前项目还没有已导入且可用于引用的论文。请先到“文献发现”或“项目论文”导入论文。',
+    NO_RELEVANT_PAPERS: '当前项目没有已完成解析且适合本次写作的论文，请调整要求或先完成论文解析。',
+    NO_SUPPORTING_EVIDENCE: '当前项目已导入论文中没有找到足够证据支持这一写作要求。',
+    WRITING_DOCUMENT_CONFLICT: '正文已发生变化，请重新选择后再次生成建议。',
+    VERIFICATION_ERROR: '引用验证暂时不可用，建议不会被标记为已验证。',
+    GENERATION_ERROR: '段落生成暂时不可用，文档未发生变化。',
+    WRITING_REWRITE_ERROR: '改写服务暂时不可用，文档未发生变化。',
+  }
+  return messages[detail.code || ''] || detail.message || '写作建议暂时不可用，请稍后重试。'
+}
+const submitAgentInstruction = async (instruction: string) => {
+  if (!activeDocument.value || !editor.value || writingStore.requestStatus === 'generating') return
+  const hasSelection = writingStore.hasSelection
+  const baseRevisionId = activeDocument.value.current_revision_id || ''
+  const requestEditorVersion = editorContentVersion.value
+  writingStore.appendMessage({ id: `user-${Date.now()}`, role: 'user', content: instruction })
+  writingStore.startRequest(hasSelection ? '正在准备当前选区的改写建议…' : '正在准备项目论文和证据…')
+  try {
+    let proposal: WritingProposal
+    if (hasSelection) {
+      const { selectionFrom, selectionTo } = writingStore.editorContext
+      const selected = selectedTextWithCitations(selectionFrom, selectionTo)
+      if (!selected.selectedText.trim()) {
+        writingStore.failRequest('没有读取到有效选区，请重新选择正文后重试。')
+        return
+      }
+      const payload: WritingRewriteRequest = {
+        document_id: activeDocument.value.id,
+        instruction,
+        selected_text: selected.selectedText,
+        selection_from: selectionFrom,
+        selection_to: selectionTo,
+        section_path: writingStore.editorContext.sectionPath,
+        nearby_text: writingStore.editorContext.nearbyText,
+        base_revision_id: baseRevisionId,
+        citations: selected.citations,
+      }
+      proposal = await rewriteSelection(props.projectId, payload)
+    } else {
+      const payload: WritingGenerateRequest = {
+        document_id: activeDocument.value.id,
+        instruction,
+        section_path: writingStore.editorContext.sectionPath,
+        nearby_text: writingStore.editorContext.nearbyText,
+        citation_style: 'gbt7714',
+        base_revision_id: baseRevisionId,
+      }
+      proposal = await generateParagraph(props.projectId, payload)
+    }
+    writingStore.finishRequest(proposal)
+    proposalEditorVersion.value = requestEditorVersion
+    writingStore.appendMessage({ id: `assistant-${Date.now()}`, role: 'assistant', content: proposal.status === 'ready' ? '建议已生成，请检查内容和引用后决定是否复制或替换。' : '建议已生成，但有引用需要注意，请查看卡片中的验证状态。' })
+  } catch (error) {
+    writingStore.failRequest(friendlyWritingError(error))
+  }
+}
+const copyProposal = async () => {
+  const proposal = writingStore.activeProposal
+  if (!proposal) return
+  try {
+    await copyTextToClipboard(proposalPlainText(proposal.content))
+    Message.success('建议已复制到剪贴板')
+  } catch {
+    Message.error('复制失败，请检查浏览器剪贴板权限。')
+  }
+}
+const replaceProposal = async () => {
+  const proposal = writingStore.activeProposal
+  if (!proposal || proposal.kind !== 'rewrite' || !editor.value || replaceDisabled.value) {
+    if (proposal?.kind === 'rewrite' && replaceDisabled.value) writingStore.failRequest(replaceDisabledReason.value)
+    return
+  }
+  const { from, to } = proposal.selection
+  editor.value.chain().focus().insertContentAt({ from, to }, proposalInlineContent(proposal.content, proposal.citations)).run()
+  try {
+    await saveRevision('agent')
+    writingStore.markApplied()
+    writingStore.appendMessage({ id: `assistant-${Date.now()}`, role: 'assistant', content: '已替换选中内容，并保存为新的 revision。你仍可以使用撤销恢复原文。' })
+  } catch {
+    // saveRevision already surfaces the user-facing save error; keep the proposal available for retry.
+  }
+}
 const runCitationAudit = async () => { if (!activeDocument.value) return; auditing.value = true; try { citationAudit.value = await auditCitations(activeDocument.value.id) } finally { auditing.value = false } }
 const insertCitation = (item: EvidenceItem) => editor.value?.chain().focus().insertContent({ type: 'citation', attrs: { paper_id: item.paper_id, evidence_id: item.id, citation_key: `${item.source_title.slice(0, 18)}${item.source_year ? `, ${item.source_year}` : ''}` } }).run()
 const openEvidence = (item: EvidenceItem) => window.open(`/paper/${item.paper_id}?project_id=${encodeURIComponent(props.projectId)}`, '_blank', 'noopener')
-watch(() => props.projectId, load); onMounted(load); onBeforeUnmount(() => editor.value?.destroy())
+
+watch(() => props.projectId, load)
+onMounted(load)
+onBeforeUnmount(() => { editor.value?.destroy(); writingStore.clear() })
 </script>
 
 <style scoped>
-.writing-v2 { display: grid; grid-template-columns: 210px minmax(420px, 1fr) 280px; min-height: 680px; border: 1px solid var(--pa-border); border-radius: 8px; overflow: hidden; background: var(--pa-surface); }.document-rail,.evidence-rail { padding: 12px; background: var(--pa-surface-soft); }.document-rail { border-right: 1px solid var(--pa-border); }.evidence-rail { border-left: 1px solid var(--pa-border); }.document-rail header,.evidence-rail header,.document-header,.diff-panel header,.diff-panel footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }.document-rail > button,.outline button { display: flex; width: 100%; flex-direction: column; gap: 3px; margin-top: 8px; padding: 8px; border: 0; border-radius: 6px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }.document-rail > button.active { background: var(--color-primary-light-1); }.document-rail small,.document-rail p,.rail-empty { color: var(--pa-muted); font-size: 11px; }.outline { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--pa-border); }.outline button { margin-top: 2px; font-size: 12px; }.editor-column { min-width: 0; }.editor-empty { padding: 80px 24px; text-align: center; }.editor-empty p { color: var(--pa-muted); }.document-header { padding: 10px 14px; border-bottom: 1px solid var(--pa-border); }.document-header input { min-width: 0; flex: 1; border: 0; background: transparent; color: var(--pa-text); font-size: 17px; font-weight: 650; }.editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 14px; border-bottom: 1px solid var(--pa-border); }.editor-toolbar button { min-height: 32px; padding: 4px 9px; border: 1px solid var(--pa-border); border-radius: 5px; background: var(--pa-surface); color: var(--pa-text); cursor: pointer; }.editor-toolbar button.active { border-color: var(--pa-primary); color: var(--pa-primary); }.editor-surface :deep(.ProseMirror) { min-height: 470px; padding: 24px clamp(20px, 6vw, 72px); outline: 0; color: var(--pa-text); line-height: 1.75; }.editor-surface :deep(.citation-node) { padding: 1px 5px; border-radius: 4px; background: var(--color-primary-light-1); color: var(--pa-primary); }.evidence-rail article { padding: 12px 0; border-bottom: 1px solid var(--pa-border); }.evidence-rail article > span { color: var(--pa-muted); font-size: 11px; }.evidence-rail article strong { display: block; margin: 3px 0; font-size: 12px; }.evidence-rail article p { display: -webkit-box; overflow: hidden; font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }.evidence-rail article div { display: flex; gap: 6px; }.diff-panel { margin: 0 14px 14px; padding: 14px; border: 1px solid var(--pa-border); border-radius: 8px; background: var(--pa-surface-soft); }.diff-panel header span { color: var(--pa-muted); font-size: 12px; }.diff-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }.diff-columns > div { min-width: 0; }.diff-columns label { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; }.diff-columns p,.diff-columns textarea { box-sizing: border-box; width: 100%; min-height: 96px; margin: 0; padding: 10px; border: 1px solid var(--pa-border); border-radius: 6px; background: var(--pa-surface); color: var(--pa-text); line-height: 1.5; }.diff-panel footer { justify-content: flex-end; }@media (max-width: 1000px) { .writing-v2 { grid-template-columns: 180px minmax(0, 1fr); }.evidence-rail { grid-column: 1 / -1; border-top: 1px solid var(--pa-border); border-left: 0; } }@media (max-width: 767px) { .writing-v2 { display: block; }.document-rail { border-right: 0; border-bottom: 1px solid var(--pa-border); }.diff-columns { grid-template-columns: 1fr; } }
+.writing-v2 { position: relative; display: grid; grid-template-columns: 220px minmax(0, 1fr) 360px; min-height: 680px; overflow: hidden; border: 1px solid var(--pa-border); border-radius: 8px; background: var(--pa-surface); }
+.writing-v2.outline-collapsed { grid-template-columns: 52px minmax(0, 1fr) 360px; }
+.writing-v2.agent-collapsed { grid-template-columns: 220px minmax(0, 1fr) 52px; }
+.writing-v2.outline-collapsed.agent-collapsed { grid-template-columns: 52px minmax(0, 1fr) 52px; }
+.editor-column { min-width: 0; background: var(--pa-surface); }
+.editor-empty { padding: 80px 24px; text-align: center; }
+.editor-empty p { margin: 8px 0 18px; color: var(--pa-muted); }
+.document-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--pa-border); }
+.document-header input { min-width: 0; flex: 1; border: 0; background: transparent; color: var(--pa-text); font-size: 17px; font-weight: 650; }.save-state { color: var(--pa-success); font-size: 11px; white-space: nowrap; }.save-state-error { color: var(--pa-danger); }
+.document-header input:focus-visible,.editor-toolbar button:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 14px; border-bottom: 1px solid var(--pa-border); }
+.editor-toolbar button { min-height: 36px; padding: 4px 9px; border: 1px solid var(--pa-border); border-radius: 5px; background: var(--pa-surface); color: var(--pa-text); cursor: pointer; }
+.editor-toolbar button.active { border-color: var(--pa-primary); color: var(--pa-primary); }
+.editor-paper { background: var(--pa-bg); }
+.editor-surface { width: min(100%, 800px); min-height: 520px; margin: 0 auto; background: var(--pa-surface); }
+.editor-surface :deep(.ProseMirror) { min-height: 520px; padding: 32px clamp(24px, 7vw, 72px); outline: 0; color: var(--pa-text); line-height: 1.75; }
+.editor-surface :deep(.ProseMirror:focus-visible) { box-shadow: inset 0 0 0 2px var(--pa-primary-soft); }
+.editor-surface :deep(.citation-node) { padding: 1px 5px; border-radius: 4px; background: var(--pa-primary-soft); color: var(--pa-primary); }
 .audit-panel { margin: 0 14px 14px; padding: 14px; border: 1px solid var(--pa-border); border-radius: 8px; background: var(--pa-surface-soft); }
-.audit-panel header { display: flex; align-items: center; gap: 10px; }
+.audit-panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .audit-panel header span { flex: 1; color: var(--pa-muted); font-size: 12px; }
-.audit-panel ul { margin: 10px 0 0; padding-left: 20px; }
-.audit-panel li { margin-top: 5px; font-size: 12px; }
-.audit-panel li.error { color: var(--pa-danger, #c43d3d); }
-.audit-panel li.warning { color: var(--pa-warning, #9a6700); }
-.audit-panel blockquote { margin: 5px 0 0; padding-left: 8px; border-left: 2px solid currentColor; color: var(--pa-text); }
-.audit-pass { margin: 10px 0 0; color: var(--pa-success, #2d7a46); font-size: 12px; }
+.audit-panel ul { margin: 10px 0 0; padding-left: 20px; }.audit-panel li { margin-top: 5px; font-size: 12px; }.audit-panel li.error { color: var(--pa-danger); }.audit-panel li.warning { color: oklch(0.48 0.12 75); }.audit-panel blockquote { margin: 5px 0 0; padding-left: 8px; border-left: 2px solid currentColor; color: var(--pa-text); }.audit-pass { margin: 10px 0 0; color: var(--pa-success); font-size: 12px; }
+.evidence-library { margin-top: 16px; border-top: 1px solid var(--pa-border); }.evidence-library summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; color: var(--pa-text); cursor: pointer; font-size: 12px; font-weight: 650; }.evidence-library summary:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }.evidence-library summary span { color: var(--pa-muted); font-weight: 400; }.evidence-content { padding-bottom: 12px; }.rail-empty { margin-top: 10px; color: var(--pa-muted); font-size: 11px; }.evidence-content article { padding: 12px 0; border-bottom: 1px solid var(--pa-border); }.evidence-content article > span { color: var(--pa-muted); font-size: 11px; }.evidence-content article strong { display: block; margin: 3px 0; font-size: 12px; }.evidence-content article p { display: -webkit-box; overflow: hidden; font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }.evidence-content article div { display: flex; gap: 6px; margin-top: 6px; }
+@media (min-width: 1024px) and (max-width: 1279px) { .writing-v2 { grid-template-columns: 220px minmax(0, 1fr) 340px; }.writing-v2.outline-collapsed { grid-template-columns: 52px minmax(0, 1fr) 340px; }.writing-v2.agent-collapsed { grid-template-columns: 220px minmax(0, 1fr) 52px; }.writing-v2.outline-collapsed.agent-collapsed { grid-template-columns: 52px minmax(0, 1fr) 52px; } }
+@media (min-width: 768px) and (max-width: 1023px) { .writing-v2,.writing-v2.agent-collapsed { display: block; }.writing-v2 > :first-child { display: none; }.writing-v2 :deep(.agent-panel) { position: absolute; z-index: 10; top: 0; right: 0; bottom: 0; width: min(360px, 88vw); box-shadow: var(--pa-shadow-md); }.writing-v2 :deep(.agent-panel.collapsed) { width: 52px; height: 72px; bottom: auto; box-shadow: var(--pa-shadow-sm); }.editor-column { padding-right: 52px; } }
+@media (max-width: 767px) { .writing-v2,.writing-v2.agent-collapsed { display: block; }.writing-v2 > :first-child,.writing-v2 :deep(.agent-panel) { display: none; }.document-header { flex-wrap: wrap; }.document-header input { flex-basis: calc(100% - 48px); }.editor-surface :deep(.ProseMirror) { padding: 24px 18px; } }
 </style>

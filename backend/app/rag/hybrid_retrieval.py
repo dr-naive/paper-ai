@@ -134,8 +134,9 @@ def _paragraphs(section: Section, max_chars: int = 900) -> list[dict[str, Any]]:
     return [{
         "content": chunk,
         "section": section.section_title,
+        "section_id": str(getattr(section, "id", "")) or None,
         "page": section.start_page,
-        "chunk_index": f"bm25-{section.order_index}-{index}",
+        "chunk_index": f"bm25-{getattr(section, 'id', section.order_index)}-{index}",
         "chunk_type": "text",
         "retrieval_method": "bm25",
     } for index, chunk in enumerate(chunks)]
@@ -374,6 +375,7 @@ class HybridPaperRetriever:
                     "page": record.get("page") or table.page_number,
                     "chunk_type": "table_row",
                     "table_id": str(table.id),
+                    "section_id": str(table.section_id) if table.section_id else None,
                     "table_number": table.table_number,
                     "row_index": record.get("row_index"),
                     "fields": record.get("fields", []),
@@ -395,6 +397,8 @@ class HybridPaperRetriever:
                     "page": image.page_number,
                     "chunk_type": "image",
                     "image_id": str(image.id),
+                    "section_id": str(image.section_id) if image.section_id else None,
+                    "bbox": list(image.bbox or []),
                     "retrieval_method": "structured_image",
                 })
         return table_rows, images

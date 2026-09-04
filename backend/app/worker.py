@@ -35,6 +35,11 @@ from app.models.execution import AgentExecution, AgentEvent, ToolCall, TERMINAL_
 from app.models.research import MemoryItem, EvidenceItem  # noqa: F401
 from app.models.document import WritingDocument, DocumentRevision  # noqa: F401
 from app.application.execution_service import append_event, get_control, set_control, set_status
+from app.research.context.paper_profile import (
+    PaperProfileNotFoundError,
+    PaperProfileService,
+    schedule_profiles_for_parsed_paper,
+)
 from app.redis_client import close_redis, get_async_redis, get_json, initialize_redis, set_json
 
 logging.basicConfig(level=logging.INFO)
@@ -333,6 +338,36 @@ async def handle_paper_process(job: WorkerJob) -> None:
         float(payload.get("pipeline_started_at") or time.perf_counter()),
         dict(payload.get("initial_counts") or {}),
     )
+    try:
+        async with AsyncSessionLocal() as db:
+            await schedule_profiles_for_parsed_paper(db, str(payload["paper_id"]), force=True)
+    except Exception:
+        logger.exception("解析已完成，但 Paper Profile 调度失败 paper_id=%s", payload["paper_id"])
+
+
+async def handle_paper_profile(job: WorkerJob) -> None:
+    """Generate one project-scoped profile; failures are persisted and acknowledged."""
+    try:
+        async with AsyncSessionLocal() as db:
+            profile = await PaperProfileService(db).run_generation(
+                project_id=str(job.payload["project_id"]),
+                paper_id=str(job.payload["paper_id"]),
+                expected_fingerprint=str(job.payload["source_fingerprint"]),
+            )
+            if profile.status == "failed":
+                logger.warning(
+                    "Paper Profile 生成失败但不阻塞论文使用 project_id=%s paper_id=%s code=%s",
+                    profile.project_id,
+                    profile.paper_id,
+                    profile.error_code,
+                )
+    except PaperProfileNotFoundError:
+        logger.info(
+            "Paper Profile 任务目标已移除，直接确认 job_id=%s project_id=%s paper_id=%s",
+            job.id,
+            job.payload.get("project_id"),
+            job.payload.get("paper_id"),
+        )
 
 
 async def handle_arxiv_import(job: WorkerJob) -> None:
@@ -381,6 +416,10 @@ async def handle_arxiv_import(job: WorkerJob) -> None:
                     reading_priority=int(payload.get("reading_priority") or 3),
                 ))
         await db.commit()
+        try:
+            await schedule_profiles_for_parsed_paper(db, paper_id)
+        except Exception:
+            logger.exception("arXiv 已导入，但 Paper Profile 调度失败 paper_id=%s", paper_id)
     await update_import("ready")
     logger.info("arXiv 导入完成 project_id=%s arxiv_id=%s paper_id=%s", project_id, arxiv_id, paper_id)
 
@@ -485,6 +524,7 @@ async def dispatch_job(job: WorkerJob) -> None:
     handlers = {
         "chat_answer": handle_chat_answer,
         "paper_process": handle_paper_process,
+        "paper_profile": handle_paper_profile,
         "arxiv_import": handle_arxiv_import,
         "project_reading_execution": handle_project_reading_execution,
         "agent_execution_v2": handle_agent_execution_v2,

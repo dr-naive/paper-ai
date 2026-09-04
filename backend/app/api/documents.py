@@ -11,17 +11,31 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id
-from app.application.writing_service import generate_edit_proposal
+from app.application.citation_verification_service import (
+    CitationMapping,
+    CitationVerificationService,
+    evidence_supports_claim,
+)
+from app.application.writing_service import (
+    WritingGenerateRequest,
+    WritingGenerationProposal,
+    WritingRewriteProposal,
+    WritingRewriteRequest,
+    WritingService,
+    WritingServiceError,
+    generate_edit_proposal,
+)
 from app.database import get_db
 from app.config import settings
 from app.models.document import DocumentRevision, WritingDocument
 from app.models.project import ResearchProject
-from app.models.research import EvidenceItem
 
 def require_writing_v2() -> None:
     if not settings.ENABLE_WRITING_V2: raise HTTPException(status_code=404, detail="Writing V2 未启用")
 
 router = APIRouter(prefix="/api/v1", tags=["writing-documents"], dependencies=[Depends(require_writing_v2)])
+
+__all__ = ["evidence_supports_claim"]
 
 
 def empty_document() -> dict[str, Any]:
@@ -99,18 +113,6 @@ def claim_blocks(content: Any) -> list[dict[str, Any]]:
             blocks.append({"text": text, "citations": citations})
     return blocks
 
-def evidence_supports_claim(claim: str, evidence: EvidenceItem) -> bool:
-    """Conservative lexical gate; passing means only 'plausibly supported', never proven."""
-    source = f"{evidence.normalized_claim or ''} {evidence.snippet or ''}".lower()
-    claim_words = {word for word in re.findall(r"[a-z0-9]+", claim.lower())
-                   if len(word) > 3 and word not in {"have", "with", "from", "that", "this", "were", "been"}}
-    source_words = set(re.findall(r"[a-z0-9]+", source))
-    latin_supported = len(claim_words & source_words) >= min(2, max(1, len(claim_words)))
-    claim_han = set(re.findall(r"[\u4e00-\u9fff]", claim))
-    source_han = set(re.findall(r"[\u4e00-\u9fff]", source))
-    han_supported = len(claim_han & source_han) >= min(4, max(1, len(claim_han)))
-    return latin_supported or han_supported
-
 async def document_dict(item: WritingDocument, db: AsyncSession, include_content: bool = False) -> dict[str, Any]:
     result = {"id": item.id, "project_id": item.project_id, "title": item.title,
               "document_type": item.document_type, "status": item.status,
@@ -182,32 +184,110 @@ async def propose_ai_action(document_id: str, body: AIActionRequest, db: AsyncSe
             "original": body.selected_text, "replacement": replacement,
             "status": "proposal", "message": "AI 编辑建议已建立；需显式接受后创建新 revision。"}
 
+
+@router.post(
+    "/projects/{project_id}/writing/agent/rewrite",
+    response_model=WritingRewriteProposal,
+)
+async def rewrite_selection(
+    project_id: str,
+    body: WritingRewriteRequest,
+    db: AsyncSession = Depends(get_db),
+    authorization: str | None = Header(None),
+):
+    uid = await user_id(authorization, db)
+    try:
+        proposal = await WritingService(db).rewrite_selection(
+            project_id=project_id,
+            user_id=uid,
+            request=body,
+        )
+    except WritingServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return proposal.model_dump(mode="json")
+
+
+@router.post(
+    "/projects/{project_id}/writing/agent/generate",
+    response_model=WritingGenerationProposal,
+)
+async def generate_paragraph(
+    project_id: str,
+    body: WritingGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    authorization: str | None = Header(None),
+):
+    uid = await user_id(authorization, db)
+    try:
+        proposal = await WritingService(db).generate_paragraph(
+            project_id=project_id,
+            user_id=uid,
+            request=body,
+        )
+    except WritingServiceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return proposal.model_dump(mode="json")
+
 @router.post("/documents/{document_id}/citation-audit")
 async def audit_document_citations(document_id: str, db: AsyncSession = Depends(get_db), authorization: str | None = Header(None)):
     uid = await user_id(authorization, db); document = await owned_document(document_id, uid, db)
     revision = await db.get(DocumentRevision, document.current_revision_id) if document.current_revision_id else None
-    citations = citation_nodes(revision.content_json if revision else {})
-    evidence_ids = {attrs.get("evidence_id") for attrs in citations if attrs.get("evidence_id")}
-    evidence_rows = []
-    if evidence_ids:
-        evidence_rows = (await db.execute(select(EvidenceItem).where(EvidenceItem.id.in_(evidence_ids),
-                                                                     EvidenceItem.project_id == document.project_id))).scalars().all()
-    valid_evidence = {item.id: item for item in evidence_rows}
+    content = revision.content_json if revision else {}
+    citations = citation_nodes(content)
+    blocks = claim_blocks(content)
+    claims_by_citation: dict[tuple[str, str, str], str] = {}
+    for block in blocks:
+        for attrs in block["citations"]:
+            key = (
+                str(attrs.get("citation_key") or ""),
+                str(attrs.get("paper_id") or ""),
+                str(attrs.get("evidence_id") or ""),
+            )
+            claims_by_citation[key] = block["text"]
+    mappings = []
+    for attrs in citations:
+        key = (
+            str(attrs.get("citation_key") or ""),
+            str(attrs.get("paper_id") or ""),
+            str(attrs.get("evidence_id") or ""),
+        )
+        mappings.append(CitationMapping(
+            citation_key=key[0],
+            paper_id=key[1],
+            evidence_id=key[2],
+            claim_text=claims_by_citation.get(key, str(attrs.get("claim_text") or "")),
+        ))
+    batch = await CitationVerificationService(db).verify_citations(
+        project_id=document.project_id,
+        user_id=uid,
+        citations=mappings,
+    ) if mappings else None
     issues: list[dict[str, Any]] = []
-    for index, attrs in enumerate(citations):
-        evidence_id, paper_id = attrs.get("evidence_id"), attrs.get("paper_id")
-        if not paper_id: issues.append({"citation_index": index, "severity": "error", "code": "missing_paper", "message": "引用缺少论文标识。"})
-        if not evidence_id: issues.append({"citation_index": index, "severity": "warning", "code": "missing_evidence", "message": "引用尚未绑定研究证据。"})
-        elif evidence_id not in valid_evidence: issues.append({"citation_index": index, "severity": "error", "code": "invalid_evidence", "message": "引用的证据不存在或不属于当前项目。"})
-        elif paper_id and valid_evidence[evidence_id].paper_id != paper_id: issues.append({"citation_index": index, "severity": "error", "code": "paper_mismatch", "message": "引用论文与证据来源不一致。"})
-    for block in claim_blocks(revision.content_json if revision else {}):
-        linked = [valid_evidence[attrs.get("evidence_id")] for attrs in block["citations"]
-                  if attrs.get("evidence_id") in valid_evidence]
-        if not linked or not any(evidence_supports_claim(block["text"], item) for item in linked):
+    if batch:
+        for index, result in enumerate(batch.results):
+            if result.status in {"weak", "unsupported"}:
+                issues.append({
+                    "citation_index": index,
+                    "severity": "warning" if result.status == "weak" else "error",
+                    "code": result.code,
+                    "message": result.reason,
+                    "claim_excerpt": result.original_claim[:240],
+                })
+    for block in blocks:
+        if not block["citations"]:
             issues.append({"citation_index": -1, "severity": "error", "code": "unsupported_claim",
-                           "message": "Unsupported claim：该主张缺少可匹配的研究证据。",
+                           "message": "Unsupported claim：该主张未绑定结构化 Citation Mapping。",
                            "claim_excerpt": block["text"][:240]})
+    results = batch.results if batch else []
     return {"document_id": document.id, "revision_id": revision.id if revision else None,
-            "citation_count": len(citations), "linked_evidence_count": sum(1 for attrs in citations if attrs.get("evidence_id") in valid_evidence),
+            "citation_count": len(citations),
+            "linked_evidence_count": sum(1 for result in results if result.evidence_snippet),
             "issue_count": len(issues), "issues": issues,
+            "citation_results": [result.model_dump(mode="json") for result in results],
             "passed": not any(issue["severity"] == "error" for issue in issues)}

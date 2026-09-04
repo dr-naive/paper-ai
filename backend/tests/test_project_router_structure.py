@@ -13,6 +13,8 @@ EXPECTED_PROJECT_ROUTES = {
     ("PATCH", "/api/v1/projects/{project_id}/papers/{paper_id}"),
     ("GET", "/api/v1/projects/{project_id}/papers/{paper_id}/card"),
     ("PATCH", "/api/v1/projects/{project_id}/papers/{paper_id}/card"),
+    ("GET", "/api/v1/projects/{project_id}/papers/{paper_id}/profile"),
+    ("POST", "/api/v1/projects/{project_id}/papers/{paper_id}/profile/regenerate"),
     ("DELETE", "/api/v1/projects/{project_id}/papers/{paper_id}"),
     ("GET", "/api/v1/projects/{project_id}/artifacts"),
     ("POST", "/api/v1/projects/{project_id}/artifacts"),
@@ -48,3 +50,4 @@ def test_worker_registers_arxiv_import_handler():
     from pathlib import Path
     source = Path("app/worker.py").read_text(encoding="utf-8")
     assert '"arxiv_import": handle_arxiv_import' in source
+    assert '"paper_profile": handle_paper_profile' in source

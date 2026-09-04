@@ -86,6 +86,8 @@ Router：`backend/app/api/projects.py`
 | DELETE | `/api/v1/projects/{project_id}` | 删除当前用户的 Project |
 | GET | `/api/v1/projects/{project_id}/papers` | 列出正式加入 Project 的论文，可按 `role` 筛选 |
 | POST | `/api/v1/projects/{project_id}/papers` | 将当前用户拥有的论文加入 Project；重复加入时更新关系 metadata |
+| GET | `/api/v1/projects/{project_id}/papers/{paper_id}/profile` | 获取项目语境下的版本化 Paper Profile |
+| POST | `/api/v1/projects/{project_id}/papers/{paper_id}/profile/regenerate` | 异步重试或重新生成 Paper Profile |
 
 创建 Project 必须提供：
 
@@ -111,6 +113,41 @@ Router：`backend/app/api/projects.py`
 ```
 
 Project list/detail/create/update 响应均返回完整 `research_scope` shape。该字段兼容存储在现有 `preferences.research_scope` JSON 中，因此没有新增数据库列；原有 `abstract`、`phase`、`status`、`preferences` 等字段保持兼容。
+
+Paper Profile 复用 `ProjectPaper.analysis_card.paper_profile`，状态为 `pending / generating / ready / failed / stale`，并返回 `profile_version`、`generator_version`、`source_model`、`source_fingerprint` 和生成时间。只有已加入 Project 且完成解析的论文会进入现有 Worker 队列；生成失败仅更新 Profile 状态，不影响 Reader、Project Papers 或原有 QA。手动重试接口返回 `202`，未完成解析返回 `409`，Worker 队列不可用返回 `503`。
+
+启用 `ENABLE_MEMORY_V2` 时，项目级 Research Notes / Evidence 路由还提供：
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET | `/api/v1/projects/{project_id}/notes` | 读取项目笔记（可选包含旧 JSON notes） |
+| POST | `/api/v1/projects/{project_id}/notes` | 创建结构化项目笔记 |
+| PATCH | `/api/v1/projects/{project_id}/notes/{note_id}` | 更新结构化项目笔记 |
+| DELETE | `/api/v1/projects/{project_id}/notes/{note_id}` | 删除结构化项目笔记 |
+| GET | `/api/v1/projects/{project_id}/evidence` | 读取项目证据 |
+| POST | `/api/v1/projects/{project_id}/evidence` | 创建已加入项目文档库论文的证据 |
+
+除既有研究笔记类型外，V1 typed Literature Memory 使用 `project_decision`、`literature_intent`、`literature_preference` 和 `literature_exclusion`。这些类型只会在 Context Manager 的相应用例中读取；普通聊天、原始 provider 响应和 raw reasoning 不会自动进入长期上下文。旧 `/memory` JSON 读写端点保持兼容，但不作为新的 Discovery Context 来源。
+
+Writing Context 的内部服务链为 `Project Profile → ready/stale Paper Profiles → 最多 5 篇候选论文 → 候选范围内 Hybrid Retrieval → EvidenceCandidate`。候选论文和检索结果均由服务端按 Project 所有权与 `ProjectPaper` 关系限定，客户端或模型提供的论文 ID 不会绕过该范围。没有正式导入论文、没有可用 Profile、或没有支持证据时分别返回 typed status，不会从 Discover-only metadata、普通聊天或模型记忆补造引用。
+
+Evidence 创建仍复用既有 `EvidenceItem`。`POST /evidence` 现在要求 section / document element 等来源定位可在目标论文内验证；无法验证的 chunk 返回 `422`。读取有效 Evidence 时还会校验论文仍属于当前 Project，因此已移出 Project 的论文证据不会继续作为当前写作来源。
+
+`EvidenceItem` 现在持久化 `source_type`、`status`、`source_fingerprint`、`verification_status/reason/model/version` 与 `updated_at`。`status` 为 `active / stale / invalid`。确定性完整性和 lexical gate 通过后仍是 `unverified`；只有语义 verifier 直接确认支持后才更新为 `verified`，其余为 `weak / unsupported`。
+
+`POST /api/v1/documents/{document_id}/citation-audit` 复用现有 Citation Node，并通过 `CitationVerificationService` 依次执行 Project/Paper/Evidence 完整性、source locator/fingerprint、lexical gate 和结构化语义支持验证。响应保留 `issues/passed`，并返回结构化 `citation_results`：每项包含 `status`（`verified / weak / unsupported`）、`code`、`reason`、`confidence`、原始/调整后 claim 和 Evidence snippet。`weak` 产生 warning，`unsupported` 产生 error；超时、无效响应、鉴权失败和限流均不会标记为 verified。
+
+语义 verifier 复用既有 `LLMClient` 和已配置模型，只接收当前 claim、单条 Evidence 及必要论文 metadata。`CITATION_VERIFIER_TIMEOUT_SECONDS` 默认 30 秒，允许范围 1–120 秒。Application service 可为后续生成 workflow 启用最多一次保守 claim adjustment + re-verification；citation audit 不会静默修改现有文档内容。
+
+正式写作文档继续使用既有 `/api/v1/projects/{project_id}/documents`、`/api/v1/documents/{document_id}` 与 append-only revision endpoints。旧 `POST /api/v1/documents/{document_id}/ai-actions` 保持兼容。
+
+`POST /api/v1/projects/{project_id}/writing/agent/rewrite` 提供 V1 selection rewrite proposal。请求包含 `document_id`、自由 `instruction`、带结构化 citation placeholder 的 `selected_text`、selection range、`section_path`、可选 `nearby_text/base_revision_id/citations`。服务端重新校验 Project/Document ownership；若 base revision 已变化则返回 `409 WRITING_DOCUMENT_CONFLICT`。响应只返回 `ready / partially_verified / verification_failed` proposal，不修改正文或创建 revision；用户显式接受后仍通过现有 editor transaction 与 revision endpoint 保存。
+
+Citation-aware rewrite 使用 `[[CITATION:<citation_key>]]` 作为内部不可变 placeholder，并要求 `citation_keys` 与输入 mapping 数量、顺序完全一致。返回内容保留原 `paper_id/evidence_id`，随后调用既有 `CitationVerificationService`；模型结构无效时只进行一次 repair，仍失败返回 `503 WRITING_REWRITE_ERROR`。Block 6A 不包含自动生成段落或新 Evidence 检索。
+
+`POST /api/v1/projects/{project_id}/writing/agent/generate` 提供 V1 单段 Evidence-backed generation。请求包含 `document_id`、自由 `instruction`、`section_path`、可选 `nearby_text/base_revision_id` 和 `citation_style`（`gbt7714 / apa / ieee`）。服务端固定执行现有 `ProjectContextManager → CandidatePaperSelector → ProjectEvidenceRetrievalService → EvidenceService → CitationVerificationService` 路径，只允许当前 Project 中已导入、已有可用 Paper Profile 且能通过既有 Hybrid Retrieval 取得来源定位的论文。
+
+模型只能从服务端提供的临时 `E1…En` Evidence 键中选择，并返回一个段落、结构化 `citation_key/evidence_key/claim_text` 以及正文 placeholder；服务端验证 claim 确实来自正文后，重新校验 Evidence 来源、持久化实际使用的 Evidence，再解析为真实 `paper_id/evidence_id` 并强制验证。响应是 `ready / partially_verified / verification_failed` proposal，不修改正文。`unsupported` citation 保持显式 warning，绝不标记为 verified。失败码包括 `NO_IMPORTED_PAPERS`、`NO_RELEVANT_PAPERS`、`NO_SUPPORTING_EVIDENCE`、`GENERATION_ERROR`、`VERIFICATION_ERROR` 和既有 `WRITING_DOCUMENT_CONFLICT`；模型结构失败只 repair 一次。
 
 前端调用文件：`frontend/src/api/projects.ts`。Project 页面 canonical routes 为：
 

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     LLM_TIMEOUT_SECONDS: float = 180.0
     LLM_MAX_RETRIES: int = 2
+    CITATION_VERIFIER_TIMEOUT_SECONDS: float = 30.0
     ACADEMIC_SEARCH_PRIMARY_PROVIDER: str = "semantic_scholar"
     SEMANTIC_SCHOLAR_API_KEY: Optional[str] = None
     CROSSREF_MAILTO: Optional[str] = None
@@ -97,6 +98,8 @@ class Settings(BaseSettings):
             raise ValueError("LLM_TIMEOUT_SECONDS 必须大于 0")
         if not 0 <= self.LLM_MAX_RETRIES <= 5:
             raise ValueError("LLM_MAX_RETRIES 必须在 0 到 5 之间")
+        if not 1 <= self.CITATION_VERIFIER_TIMEOUT_SECONDS <= 120:
+            raise ValueError("CITATION_VERIFIER_TIMEOUT_SECONDS 必须在 1 到 120 秒之间")
         if self.ACADEMIC_SEARCH_PRIMARY_PROVIDER != "semantic_scholar":
             raise ValueError("当前 V1 仅支持 semantic_scholar 作为主学术搜索 Provider")
         if self.SEARCH_TIMEOUT_SECONDS <= 0:

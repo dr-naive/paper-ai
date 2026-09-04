@@ -1,6 +1,7 @@
 """Application use cases for Project metadata, ownership, and paper membership."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.paper import Paper
 from app.models.project import ProjectPaper, ResearchProject, WritingArtifact
+
+logger = logging.getLogger(__name__)
 
 PROJECT_SCOPE_KEY = "research_scope"
 PROJECT_SCOPE_DEFAULTS: dict[str, Any] = {
@@ -61,6 +64,28 @@ def normalize_research_scope(value: Any) -> dict[str, Any]:
                 else ""
             )
     return normalized
+
+
+def project_profile_dict(project: ResearchProject) -> dict[str, Any]:
+    """Build the typed Project Profile shape from existing project storage.
+
+    V1 keeps the profile in ``ResearchProject`` and its structured
+    ``preferences.research_scope`` JSON rather than introducing a 1:1 table.
+    """
+    scope = normalize_research_scope((project.preferences or {}).get(PROJECT_SCOPE_KEY))
+    return {
+        "project_id": str(project.id),
+        "title": str(project.title or "").strip(),
+        "research_topic": str(project.research_topic or "").strip(),
+        "field": scope["field"],
+        "research_subject": scope["research_subject"],
+        "research_question": scope["research_question"],
+        "research_goal": scope["research_goal"],
+        "keywords": list(scope["keywords"]),
+        "method_direction": scope["method_direction"],
+        "user_notes": scope["notes"] or str(project.abstract or "").strip()[:PROJECT_SCOPE_TEXT_LIMITS["notes"]],
+        "updated_at": project.updated_at,
+    }
 
 
 def project_dict(project: ResearchProject, **counts: int) -> dict[str, Any]:
@@ -310,4 +335,23 @@ class ProjectService:
             action = "created"
         await self.db.commit()
         await self.db.refresh(project_paper)
+        if action == "created" or not (project_paper.analysis_card or {}).get("paper_profile"):
+            from app.research.context.paper_profile import (
+                PaperProfileNotReadyError,
+                PaperProfileService,
+            )
+
+            try:
+                await PaperProfileService(self.db).request_generation(
+                    project_id=project_id,
+                    paper_id=paper_id,
+                    user_id=user_id,
+                )
+                await self.db.refresh(project_paper)
+            except PaperProfileNotReadyError:
+                logger.info("Project Paper 尚未完成解析，暂不生成 Profile paper_id=%s", paper_id)
+            except Exception:
+                # Profile is an enhancement; membership and Reader availability
+                # must survive queue/configuration failures.
+                logger.exception("Project Paper Profile 调度失败 paper_id=%s", paper_id)
         return {**project_paper.to_dict(), "_action": action}

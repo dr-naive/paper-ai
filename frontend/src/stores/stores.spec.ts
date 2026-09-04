@@ -4,6 +4,7 @@ import { useProjectStore } from './project'
 import { useWorkspaceStore } from './workspace'
 import { useAuthStore } from './auth'
 import { useExecutionsStore } from './executions'
+import { useWritingStore } from './writing'
 
 describe('workspace stores', () => {
   beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
@@ -58,5 +59,29 @@ describe('workspace stores', () => {
     expect(store.shouldStream({ status: 'waiting_user' } as any)).toBe(true)
     expect(store.shouldStream({ status: 'completed' } as any)).toBe(false)
     expect(store.shouldStream({ status: 'failed' } as any)).toBe(false)
+  })
+  it('keeps only bounded editor context in the writing store', () => {
+    const store = useWritingStore()
+    store.setWorkspace('project-a', 'document-a', 'revision-a')
+    store.setEditorContext({ selectionFrom: 4, selectionTo: 8, selectedText: '证据', selectedCharacterCount: 2, currentHeading: '讨论', sectionPath: ['正文', '讨论'], nearbyText: '附近正文' })
+    expect(store.hasSelection).toBe(true)
+    expect(store.editorContext.currentHeading).toBe('讨论')
+    expect(store.documentId).toBe('document-a')
+    expect('documentContent' in store).toBe(false)
+    store.clear()
+    expect(store.hasSelection).toBe(false)
+  })
+  it('tracks proposal request state without copying document content', () => {
+    const store = useWritingStore()
+    store.appendMessage({ id: 'user-1', role: 'user', content: '写一段研究现状' })
+    store.startRequest('正在准备项目论文和证据…')
+    expect(store.requestStatus).toBe('generating')
+    expect(store.requestStage).toContain('项目论文')
+    store.failRequest('当前项目没有足够证据。')
+    expect(store.requestStatus).toBe('error')
+    expect(store.requestError).toContain('证据')
+    expect('contentJson' in store).toBe(false)
+    store.clearAgent()
+    expect(store.messages).toHaveLength(0)
   })
 })

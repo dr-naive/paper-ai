@@ -268,6 +268,11 @@ class _ProjectContext:
     status: str
     memory_summary: str = ""
     memory_notes_preview: list[dict] = field(default_factory=list)
+    # Typed context is the source for new Discovery prompts. The legacy
+    # memory fields remain only so old callers/tests can still format a
+    # compatibility context while projects migrate.
+    project_profile: Any | None = None
+    literature_memory: Any | None = None
     papers_preview: list[dict] = field(default_factory=list)
     recent_artifacts: list[dict] = field(default_factory=list)
 
@@ -280,8 +285,49 @@ class _ProjectContext:
             f"- 当前阶段: {self.phase} | 状态: {self.status}",
         ]
 
-        # 1. 长期记忆
-        if self.memory_summary or self.memory_notes_preview:
+        # 1. Project Profile + typed Literature Memory
+        profile = self.project_profile
+        if profile is not None:
+            lines.append("- Project Profile:")
+            profile_values = profile.model_dump() if hasattr(profile, "model_dump") else dict(profile)
+            for label, key in (
+                ("研究领域", "field"),
+                ("研究对象", "research_subject"),
+                ("研究问题", "research_question"),
+                ("研究目标", "research_goal"),
+                ("关键词", "keywords"),
+                ("方法方向", "method_direction"),
+                ("用户备注", "user_notes"),
+            ):
+                value = profile_values.get(key)
+                if isinstance(value, list):
+                    value = ", ".join(str(item) for item in value)
+                if value:
+                    lines.append(f"  - {label}: {str(value)[:500]}")
+
+        literature_memory = self.literature_memory
+        if literature_memory is not None:
+            values = literature_memory.model_dump() if hasattr(literature_memory, "model_dump") else dict(literature_memory)
+            if any(values.get(key) for key in ("search_intent_summary", "important_keywords", "preferred_directions", "excluded_directions", "important_search_notes", "favorite_paper_ids", "imported_paper_ids")):
+                lines.append("- Literature Memory(已确认的长期信息):")
+                for label, key in (
+                    ("确认的搜索意图", "search_intent_summary"),
+                    ("重要关键词", "important_keywords"),
+                    ("偏好方向", "preferred_directions"),
+                    ("排除方向", "excluded_directions"),
+                    ("重要检索备注", "important_search_notes"),
+                    ("收藏论文标识", "favorite_paper_ids"),
+                    ("已导入论文标识", "imported_paper_ids"),
+                ):
+                    value = values.get(key)
+                    if isinstance(value, list):
+                        value = ", ".join(str(item) for item in value[:30])
+                    if value:
+                        lines.append(f"  - {label}: {str(value)[:800]}")
+
+        # Legacy memory is deliberately a compatibility fallback only. New
+        # project contexts always pass typed DTOs above.
+        if profile is None and literature_memory is None and (self.memory_summary or self.memory_notes_preview):
             lines.append("- 项目长期记忆(用户调研要点):")
             if self.memory_summary:
                 s = self.memory_summary[:_PROJ_MEMORY_MAXLEN]
@@ -368,6 +414,7 @@ async def _load_project_context(
     from sqlalchemy import select as _s
     from app.models.project import ResearchProject, ProjectPaper, WritingArtifact
     from app.models.paper import Paper
+    from app.research.context import ProjectContextManager, ProjectContextNotFoundError
 
     project = await db.get(ResearchProject, project_id)
     if project is None or (user_id and project.user_id != user_id):
@@ -375,9 +422,11 @@ async def _load_project_context(
         logger.warning("_load_project_context: project %s 不存在或 user_id 不匹配", project_id)
         return ""
 
-    memory = project.memory or {"summary": "", "notes": []}
-    mem_summary = memory.get("summary", "") or ""
-    mem_notes = memory.get("notes") or []
+    try:
+        typed_context = await ProjectContextManager(db).build_discovery_context(project_id, user_id or None)
+    except ProjectContextNotFoundError:
+        logger.warning("_load_project_context: project %s ownership check failed", project_id)
+        return ""
 
     # 文档库预览
     pp_rows = (await db.execute(
@@ -388,13 +437,19 @@ async def _load_project_context(
     )).all()
     papers_preview = []
     for pp, paper in pp_rows:
+        analysis_card = pp.analysis_card or {}
+        paper_profile = analysis_card.get("paper_profile") if isinstance(analysis_card, dict) else {}
         papers_preview.append({
             "paper_id": str(paper.id),
             "title": paper.title,
             "authors": paper.authors,
             "role": pp.role,
             "notes": pp.notes or "",
-            "card_summary": str((pp.analysis_card or {}).get("summary") or ""),
+            "card_summary": str(
+                analysis_card.get("summary")
+                or ((paper_profile or {}).get("topic") if isinstance(paper_profile, dict) else "")
+                or ""
+            ),
             "reading_plan": pp.reading_plan or {},
         })
 
@@ -416,12 +471,12 @@ async def _load_project_context(
 
     ctx = _ProjectContext(
         project_id=project.id,
-        title=project.title,
-        research_topic=project.research_topic,
+        title=typed_context.project_profile.title,
+        research_topic=typed_context.project_profile.research_topic,
         phase=project.phase,
         status=project.status,
-        memory_summary=mem_summary,
-        memory_notes_preview=list(mem_notes),
+        project_profile=typed_context.project_profile,
+        literature_memory=typed_context.literature_memory,
         papers_preview=papers_preview,
         recent_artifacts=recent_artifacts,
     )

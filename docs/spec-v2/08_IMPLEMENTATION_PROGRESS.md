@@ -48,14 +48,14 @@ All Phase Blocks complete
 Project: PaperAI
 Target: V1 Research Workspace
 Branch: agent-rearchitecture-v1
-Current Phase: Phase 4
-Current Status: NOT_STARTED
-Current Implementation Block: Block 4A — Typed Project Context Foundation
+Current Phase: Phase 8
+Current Status: IN_PROGRESS
+Current Implementation Block: Block 8A — V1 Mainline Integration
 Current Block Status: NOT_STARTED
 Block Start Commit: -
 Block Commit: -
-Last Updated: 2026-08-23
-Last Commit: this Block 3B completion commit (see the commit containing this record)
+Last Updated: 2026-08-24
+Last Commit: this Block 7B completion commit (see the commit containing this record)
 ```
 
 ---
@@ -107,10 +107,10 @@ Development Check 可以在开发过程中按需运行，但只需要在它发�
 | 1 | Project Foundation & Navigation | DONE | 13c3844 | this Block 1B completion commit (see the commit containing this record) | YES |
 | 2 | Literature Discovery Backend | DONE | e6f33eb | this Block 2C completion commit | YES |
 | 3 | Literature Discovery Frontend | DONE | ab0bf813 | this Block 3B completion commit | YES |
-| 4 | Project Context & Paper Profile | NOT_STARTED | - | - | NO |
-| 5 | Citation Verification Backend | NOT_STARTED | - | - | NO |
-| 6 | Writing Backend | NOT_STARTED | - | - | NO |
-| 7 | Writing Frontend | NOT_STARTED | - | - | NO |
+| 4 | Project Context & Paper Profile | DONE | a8cc28e | this Block 4C completion commit | YES |
+| 5 | Citation Verification Backend | DONE | 1dc42a7 | this Block 5B / Phase 5 completion commit (see the commit containing this record) | YES |
+| 6 | Writing Backend | DONE | f6081aa | this Block 6B / Phase 6 completion commit (see the commit containing this record) | YES |
+| 7 | Writing Frontend | IN_PROGRESS | e6c5cb14af362e64d937e50a3e99ff72b3d56237 | - | NO |
 | 8 | End-to-End Integration | NOT_STARTED | - | - | NO |
 | 9 | Cleanup & Long-term Docs | NOT_STARTED | - | - | NO |
 
@@ -1300,7 +1300,7 @@ Next phase: Phase 4 — Project Context & Paper Profile / Block 4A
 
 ### Block 4A — Typed Project Context Foundation
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1311,19 +1311,70 @@ Includes:
 
 Block acceptance:
 
-- [ ] typed Project Profile works
-- [ ] ordinary chat is not automatically dumped into long-term context
-- [ ] context tests pass
+- [x] typed Project Profile works from existing `ResearchProject` / `preferences.research_scope` storage
+- [x] ordinary chat and legacy generic memory are not automatically included in new Discovery context
+- [x] context ownership, bounds, typed-memory filtering and identifier projection tests pass
 
 Block Commit:
 
 ```text
-<fill>
+this Block 4A completion commit (see the commit containing this record)
 ```
+
+### Block 4A Implementation Result
+
+Start commit: `a8cc28e` (Phase 3 / Block 3B completion)
+
+Actual files changed:
+
+```text
+backend/app/research/context/__init__.py
+backend/app/research/context/schemas.py
+backend/app/research/context/manager.py
+backend/app/application/project_service.py
+backend/app/api/research_items.py
+backend/app/harness/tools/literature_research.py
+backend/app/harness/agents/lead_agent.py
+backend/tests/test_project_context.py
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+Implementation:
+
+- Added bounded `ProjectProfileContext`, `LiteratureMemoryContext` and `DiscoveryContext` DTOs.
+- Added ownership-aware `ProjectContextManager.build_discovery_context`; it selects only stable Literature Memory types and projects favorite/imported identifiers without raw provider payloads.
+- Reused existing structured project preferences for typed Project Profile access; no parallel 1:1 profile table or migration was added.
+- Changed new `project_append_memory` writes to require an explicit stable Literature Memory type and persist `MemoryItem`; ordinary chat, raw search results and raw reasoning are rejected.
+- Updated the legacy lead-agent project prompt path to consume typed profile/memory while retaining bounded paper/artifact previews for compatibility with the pre-Context-Manager runtime.
+- Kept legacy `ResearchProject.memory` endpoints/read fallback for compatibility; the new Discovery context does not read that generic JSON dump.
+
+API / schema:
+
+- Expanded the gated Research Notes `MEMORY_TYPES` contract with `project_decision`, `literature_intent`, `literature_preference` and `literature_exclusion`.
+- Documented the existing project Research Notes / Evidence routes and the typed-memory boundary in `docs/API.md`.
+- No database schema change; no Alembic migration required.
+
+Block acceptance:
+
+```text
+ruff check (Block files): PASS
+python -m pytest -q tests/test_project_context.py tests/test_project_contracts.py tests/test_research_items.py tests/test_agent_routing.py tests/test_discovery_favorites_import.py: PASS (55 passed)
+```
+
+Manual acceptance:
+
+- [x] Profile fields are read from the existing project contract and bounded.
+- [x] Generic `ResearchProject.memory` and non-Literature `MemoryItem` rows do not enter Discovery context.
+- [x] Favorite and successfully imported paper identifiers are projected without returning raw metadata.
+- [x] Project ownership mismatch returns a non-disclosing context error.
+- [x] Reader/RAG/ProjectPaper/WritingArtifact foundations remain on their existing paths.
+
+Compatibility note (not a product redesign): legacy JSON memory routes remain available for existing clients, but new typed context access does not absorb their generic notes. Paper/artifact previews in `lead_agent.py` remain temporarily bounded until the later Paper Profile / evidence blocks replace them.
 
 ### Block 4B — Paper Profile Generation
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1334,20 +1385,76 @@ Includes:
 
 Block acceptance:
 
-- [ ] parsed imported paper gets profile
-- [ ] failure does not block Reader
-- [ ] regeneration works
-- [ ] version metadata works
+- [x] parse/index completion schedules Project Paper profiles through the existing Worker queue
+- [x] generation and scheduling failure persist Profile state without blocking Reader, Project Papers or QA
+- [x] explicit regeneration and bounded retry state work
+- [x] profile schema, source fingerprint, generator version and stale detection work
 
 Block Commit:
 
 ```text
-<fill>
+this Block 4B completion commit (see the commit containing this record)
 ```
+
+### Block 4B Implementation Result
+
+Start commit: `0d51644` (Block 4A completion)
+
+Actual files changed:
+
+```text
+backend/app/research/context/__init__.py
+backend/app/research/context/paper_profile.py
+backend/app/research/context/paper_profile_generator.py
+backend/app/application/project_service.py
+backend/app/api/projects.py
+backend/app/worker.py
+backend/app/harness/tools/literature_research.py
+backend/app/harness/agents/lead_agent.py
+backend/tests/test_paper_profile.py
+backend/tests/test_project_router_structure.py
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+Implementation:
+
+- Evolved `ProjectPaper.analysis_card` with a stable `paper_profile` subdocument; existing reading-card summary/evidence fields remain intact.
+- Added the versioned `PaperProfile` contract with project/paper identity, bounded academic fields, lifecycle status, source model, schema/generator version, source fingerprint, retry count and safe failure metadata.
+- Added a one-call bounded generator using title, abstract and selected Introduction/Methods/Results/Conclusion sections; it never sends the default full paper when parsed sections are available.
+- Added parse/import/manual-project-link triggers using the existing reliable Worker queue. Discover-only and favorite-only records never generate profiles.
+- Added non-blocking `pending → generating → ready/failed/stale` lifecycle, source/version invalidation, explicit regeneration and removed-membership acknowledgement.
+- Preserved Reader, Project Papers, QA and legacy reading-card behavior when profile generation or queueing fails.
+
+API / schema:
+
+- Added `GET /api/v1/projects/{project_id}/papers/{paper_id}/profile`.
+- Added `POST /api/v1/projects/{project_id}/papers/{paper_id}/profile/regenerate` with `202 / 409 / 503` lifecycle mapping.
+- Added Worker job type `paper_profile`; no second execution runtime was created.
+- No database schema change; no Alembic migration required.
+
+Block acceptance:
+
+```text
+ruff check (Block files): PASS
+python -m pytest -q tests/test_paper_profile.py tests/test_project_context.py tests/test_project_contracts.py tests/test_project_router_structure.py tests/test_paper_router_structure.py tests/test_paper_processing_services.py tests/test_remote_paper_import.py tests/test_discovery_favorites_import.py tests/test_job_queue.py: PASS (70 passed)
+real Qwen structured Paper Profile smoke: PASS (HTTP 200; 11-field schema validated)
+```
+
+Manual acceptance:
+
+- [x] only parsed Project Papers enter the generation queue
+- [x] empty academic fields validate as empty values rather than fabricated content
+- [x] legacy `analysis_card` data survives automatic profile generation and manual card updates
+- [x] failed generation is persisted and acknowledged without failing completed parse/import
+- [x] regeneration increments retry state and profile source/version changes become stale
+- [x] ownership checks hide foreign project/paper membership
+
+External dependency: existing Qwen configuration was present and the bounded real-provider smoke passed. No new credential, billing or user action is required.
 
 ### Block 4C — Candidate Papers and Evidence Retrieval
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1358,19 +1465,56 @@ Includes:
 
 Block acceptance:
 
-- [ ] candidate paper restriction works
-- [ ] evidence comes from real Project Papers
-- [ ] cross-project isolation works
-- [ ] no full-project prompt dump
+- [x] candidate paper restriction works
+- [x] evidence comes from real Project Papers
+- [x] cross-project isolation works
+- [x] no full-project prompt dump
 
 Block Commit:
 
 ```text
-<fill>
+this Block 4C / Phase 4 completion commit (see the commit containing this record)
 ```
 
 
-Status: NOT_STARTED
+### Block 4C Implementation Result
+
+Start commit: `5fb20bd` (Block 4B completion)
+
+Actual files changed:
+
+```text
+backend/app/research/context/__init__.py
+backend/app/research/context/schemas.py
+backend/app/research/context/manager.py
+backend/app/research/context/selectors.py
+backend/app/research/evidence/__init__.py
+backend/app/research/evidence/retrieval.py
+backend/app/research/evidence/service.py
+backend/app/rag/hybrid_retrieval.py
+backend/app/rag/knowledge_base.py
+backend/app/api/research_items.py
+backend/app/harness/tools/literature_research.py
+backend/tests/test_candidate_evidence_retrieval.py
+backend/tests/test_project_retrieval.py
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+Implementation:
+
+- Added deterministic Paper Profile selection capped at five Project-owned candidates; ready profiles are preferred and stale profiles are explicitly down-ranked.
+- Added `build_writing_context` and typed empty states for no imported papers, no usable profiles and no supporting evidence; generic project memory/chat is excluded.
+- Added a Project-scoped Evidence retrieval service that invokes the existing `HybridPaperRetriever` only for selected candidate IDs and returns bounded, structured provenance.
+- Routed the legacy `project_search_content` Tool through the new Context Manager/service boundary while preserving its structured chunk response.
+- Added source locator validation and active `ProjectPaper` membership filtering for persisted Evidence; removed-project or fabricated chunk sources are rejected.
+- Preserved the existing RAG, Reader, EvidenceItem, WritingDocument and execution foundations; no second retrieval or Evidence system was created.
+
+API / schema:
+
+- No new public endpoint. Existing Evidence creation now returns `422` for source locations that cannot be resolved inside the selected Project Paper.
+- Existing Evidence reads include active ProjectPaper membership, so removed-paper evidence is not exposed as current Project evidence.
+- No database schema change and no Alembic migration required; Phase 5 verification fields remain pending its own Block.
 
 ## Goal
 
@@ -1384,17 +1528,17 @@ Status: NOT_STARTED
 ## Baseline
 
 ```text
-Start commit:
+Start commit: a8cc28e
 ```
 
 ## Existing Model Mapping
 
 ```text
-ResearchProject.memory:
-MemoryItem:
-ProjectPaper.analysis_card:
-EvidenceItem:
-Current retrieval filters:
+ResearchProject.memory: legacy compatibility only; excluded from new typed Discovery context
+MemoryItem: stable Literature Memory types added in Block 4A
+ProjectPaper.analysis_card: legacy card fields plus versioned paper_profile subdocument
+EvidenceItem: retained; Block 4C adds provenance DTO/persistence validation without parallel storage
+Current retrieval filters: Paper Profile shortlist plus ProjectPaper ownership and candidate paper_id restriction around existing HybridPaperRetriever
 ```
 
 ## Schema Decisions
@@ -1402,70 +1546,80 @@ Current retrieval filters:
 ### Project Profile
 
 ```text
-Storage:
-Fields:
+Storage: ResearchProject plus preferences.research_scope
+Fields: project_id/title/topic/field/subject/question/goal/keywords/method/user_notes/updated_at
 ```
 
 ### Literature Memory
 
 ```text
-Storage:
-Allowed types:
+Storage: MemoryItem
+Allowed types: project_decision/literature_intent/literature_preference/literature_exclusion
 ```
 
 ### Paper Profile
 
 ```text
-Storage:
-Schema version:
-Generation model:
-Generation trigger:
+Storage: ProjectPaper.analysis_card.paper_profile (legacy analysis-card fields preserved)
+Schema version: 1; generator version 1.0; source fingerprint and source model persisted
+Generation model: existing LLMClient / configured Qwen model, one bounded structured-output call
+Generation trigger: parsed Project Paper linkage, parse completion, approved arXiv import, or explicit regeneration via existing Worker queue
 ```
 
 ### Evidence
 
 ```text
-New fields:
-Verification fields:
-Stale behavior:
+New DTO provenance: source type, retrieval method/score, paper/chunk/section/page/element/bbox identity
+Persistence: existing EvidenceItem fields; only explicitly used candidates are persisted through EvidenceService
+Verification fields: transient unverified status; durable verifier fields remain pending Phase 5
+Stale behavior: active reads/persistence recheck ProjectPaper membership; removed-paper evidence is rejected
 ```
 
 ## Target Files
 
 ```text
-<fill>
+Blocks 4A/4B actual files are recorded in their Implementation Result sections above.
+Block 4C inspected targets: context schemas/manager/selectors, existing HybridPaperRetriever,
+EvidenceItem/research-items API, project retrieval tool, and directly related backend tests/docs.
 ```
 
 ## Database Migrations
 
 ```text
-<fill>
+None for Phase 4. Existing ResearchProject, MemoryItem, ProjectPaper.analysis_card and EvidenceItem storage was reused.
 ```
 
 ## Implementation Result
 
-Status: NOT_STARTED
+Status: DONE — Blocks 4A, 4B and 4C complete; Phase 4 acceptance passed
 
 ### Tests
 
 ```text
-<fill>
+Block 4A: Ruff PASS; focused backend suite PASS (55 passed)
+Block 4B: Ruff PASS; focused backend suite PASS (70 passed); real Qwen structured Paper Profile smoke PASS
+Block 4C targeted suite: PASS (26 passed, including real SQLite ProjectPaper/Section service acceptance)
+Phase 4 backend regression: PASS (124 passed)
+Ruff: PASS
+Frontend lint/build/typecheck: PASS (existing Vite chunk-size warning only)
+Alembic current: 0004_writing_documents (head)
+Schema revision validator: compatible=true; no missing/unexpected tables or columns
 ```
 
 ### Manual Acceptance
 
-- [ ] imported parsed paper gets profile
-- [ ] profile failure does not break Reader
-- [ ] Context Manager does not dump all chats
-- [ ] candidate paper selection works
-- [ ] evidence retrieval restricted to candidate papers
-- [ ] cross-project isolation
+- [x] imported parsed paper gets profile
+- [x] profile failure does not break Reader
+- [x] Context Manager does not dump all chats
+- [x] candidate paper selection works
+- [x] evidence retrieval restricted to candidate papers
+- [x] cross-project isolation
 
 ### End
 
 ```text
-End commit:
-Next phase readiness: NO
+End commit: this Block 4C / Phase 4 completion commit (see the commit containing this record)
+Next phase readiness: YES
 ```
 
 ---
@@ -1476,7 +1630,7 @@ Next phase readiness: NO
 
 ### Block 5A — Deterministic Citation Integrity
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1486,20 +1640,73 @@ Includes:
 
 Block acceptance:
 
-- [ ] wrong project rejected
-- [ ] wrong paper rejected
-- [ ] missing Evidence rejected
-- [ ] stale Evidence rejected
+- [x] wrong project rejected
+- [x] wrong paper rejected
+- [x] missing Evidence rejected
+- [x] stale Evidence rejected
 
 Block Commit:
 
 ```text
-<fill>
+this Block 5A completion commit (see the commit containing this record)
 ```
+
+### Block 5A Implementation Result
+
+Start commit: `1dc42a7` (Block 4C / Phase 4 completion)
+
+Actual files changed:
+
+```text
+backend/alembic/versions/0005_evidence_verification_add_evidence_lifecycle.py
+backend/app/application/citation_verification_service.py
+backend/app/api/documents.py
+backend/app/api/research_items.py
+backend/app/infrastructure/db/migrations.py
+backend/app/models/research.py
+backend/app/research/evidence/service.py
+backend/tests/test_candidate_evidence_retrieval.py
+backend/tests/test_citation_integrity.py
+backend/tests/test_database_migrations.py
+backend/tests/test_research_items.py
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+Implementation:
+
+- Added an application-layer `CitationVerificationService` and structured citation mappings/results without introducing a second Evidence or execution system.
+- Enforced Project ownership, active ProjectPaper membership, Paper/Evidence identity, source-locator existence, section/element consistency and optional source-fingerprint freshness before support checks.
+- Reused the existing lexical support gate through the service and preserved its API import for compatibility.
+- Persisted deterministic stale, invalid, unsupported and unverified lifecycle states; a deterministic pass remains `unverified` until Block 5B semantic verification succeeds.
+- Routed the existing WritingDocument citation-audit endpoint through the integrity service while preserving uncited-paragraph findings and the legacy `issues` / `passed` response fields.
+- Added real SQLite ORM acceptance coverage for valid, cross-project, cross-paper, missing, removed, stale, changed-source, invalid-chunk and lexical-mismatch cases.
+
+API / schema:
+
+- Extended `EvidenceItem` with source lifecycle, fingerprint and verification status/reason/model/version fields plus `updated_at`.
+- Added Alembic migration `0005_evidence_verification` and advanced the expected schema head.
+- Existing citation-audit responses now also include typed `citation_results`; deterministic success is not reported as semantically verified.
+- Updated `docs/API.md` for the Evidence lifecycle and citation-audit contract.
+
+Block acceptance:
+
+```text
+ruff check (Block files): PASS
+targeted backend suite: PASS (28 passed)
+concentrated Block regression: PASS (94 passed)
+backend image build: PASS
+migration empty DB upgrade to 0005: PASS
+migration 0005 downgrade to 0004 and re-upgrade: PASS
+local database upgrade/current: PASS (0005_evidence_verification head)
+schema revision validator: PASS (compatible=true; no mismatches)
+```
+
+External dependency: none. Block 5A is deterministic and requires no provider credential or real-provider call.
 
 ### Block 5B — Semantic Support Verification
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1509,20 +1716,72 @@ Includes:
 
 Block acceptance:
 
-- [ ] valid support verified
-- [ ] weak support classified
-- [ ] unsupported classified
-- [ ] correlation / causation mismatch handled
-- [ ] timeout handled
+- [x] valid support verified
+- [x] weak support classified
+- [x] unsupported classified
+- [x] correlation / causation mismatch handled
+- [x] timeout handled
 
 Block Commit:
 
 ```text
-<fill>
+this Block 5B / Phase 5 completion commit (see the commit containing this record)
 ```
 
+### Block 5B Implementation Result
 
-Status: NOT_STARTED
+Start commit: `bbbe539` (Block 5A completion)
+
+Actual files changed:
+
+```text
+.env.example
+backend/app/application/citation_semantic_verifier.py
+backend/app/application/citation_verification_service.py
+backend/app/api/documents.py
+backend/app/config.py
+backend/tests/test_citation_integrity.py
+docker-compose.yml
+frontend/src/api/documents.ts
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+Implementation:
+
+- Added a bounded `SemanticCitationVerifier` on the existing `LLMClient`; its strict output is `verified / weak / unsupported` with reason, confidence and an optional conservative suggested claim.
+- Limited verifier context to the actual claim, one Evidence source and necessary Paper metadata; no Project/chat/full-paper prompt dump was added.
+- Made semantic verification a mandatory continuation of the existing deterministic/lexical workflow for citation audit; deterministic failures never call the model.
+- Added explicit timeout, invalid-response, authentication, rate-limit and unavailable results, none of which can be reported as verified.
+- Added at most one opt-in conservative claim adjustment plus re-verification. The service returns original/adjusted claims explicitly and never mutates editor content.
+- Persisted verifier status, reason, model and version on the existing Evidence lifecycle fields and exposed typed per-citation counts/results.
+
+API / configuration:
+
+- Citation audit now returns semantic `citation_results`; `weak` produces a warning and `unsupported` an error while preserving existing `issues / passed` fields.
+- Added typed frontend response fields without implementing Phase 7 citation UI.
+- Added optional `CITATION_VERIFIER_TIMEOUT_SECONDS` (default 30, valid 1–120) to settings, compose and `.env.example`.
+- No database schema change or Alembic migration was required in Block 5B; migration `0005` from Block 5A is reused.
+
+Block / Phase acceptance:
+
+```text
+ruff check (Block backend files): PASS
+targeted backend suite: PASS (38 passed)
+real Qwen verifier smoke: PASS (direct support=verified; correlation-only causal claim=unsupported; HTTP 200)
+Phase 5 backend regression including Reader/RAG/export: PASS (145 passed)
+backend image build: PASS
+frontend typecheck: PASS
+frontend lint: PASS
+frontend production build: PASS (existing chunk-size warning only)
+Alembic current: PASS (0005_evidence_verification head)
+schema revision validator: PASS (compatible=true; no mismatches)
+```
+
+External dependency: the existing configured Qwen credential/model passed real-provider verification. No new key, account, billing, console configuration or user action is required.
+
+
+Status: DONE
 
 ## Goal
 
@@ -1536,53 +1795,64 @@ Status: NOT_STARTED
 ## Baseline
 
 ```text
-Start commit:
-Current citation audit:
-Current lexical gate:
+Start commit: 1dc42a7
+Current citation audit: POST /api/v1/documents/{document_id}/citation-audit routed through CitationVerificationService
+Current lexical gate: evidence_supports_claim() in app/application/citation_verification_service.py
 ```
 
 ## Verifier Decision
 
 ```text
-Verifier model:
-Structured output:
-Timeout:
-Retry:
-Confidence handling:
+Verifier model: existing LLMClient and configured Qwen/DeepSeek model; no vendor-specific client
+Structured output: strict verified / weak / unsupported decision with reason, confidence and optional conservative suggested_claim
+Timeout: dedicated bounded outer timeout; timeout never produces verified
+Retry: no unbounded provider switching; at most one conservative claim adjustment and re-verification
+Confidence handling: persisted for response/audit context; status remains the authority and weak/unsupported never become verified from confidence alone
+```
+
+## Block 5B Baseline
+
+```text
+Start commit: bbbe539
+Existing service: backend/app/application/citation_verification_service.py
+Existing LLM abstraction: backend/app/llm/client.py
+Existing provider configuration: LLM_PROVIDER plus configured Qwen/DeepSeek credentials
+External dependency decision: reuse the existing configured LLM service; no new account, billing, console action or credential is introduced
+Target files: citation verification service/tests, document citation audit, bounded verifier configuration, API/progress documentation
 ```
 
 ## Planned Changes
 
-- [ ] referential integrity
-- [ ] lexical gate reuse
-- [ ] semantic verifier
-- [ ] weak / unsupported
-- [ ] claim adjustment
-- [ ] verifier service
-- [ ] tests
+- [x] referential integrity
+- [x] lexical gate reuse
+- [x] semantic verifier
+- [x] weak / unsupported
+- [x] claim adjustment
+- [x] verifier service
+- [x] tests
 
 ## Implementation Result
 
-Status: NOT_STARTED
+Status: DONE — Blocks 5A and 5B complete; Phase 5 acceptance passed
 
 ### Test Cases
 
 ```text
-valid:
-wrong project:
-wrong paper:
-missing evidence:
-weak:
-unsupported:
-causation mismatch:
-timeout:
+valid: semantic verified and provenance persisted
+wrong project: rejected
+wrong paper: rejected
+missing evidence: rejected
+weak: classified with warning and optional conservative suggested claim
+unsupported: lexical and semantic unsupported persisted
+causation mismatch: real Qwen smoke returned unsupported for causal claim over correlational Evidence
+timeout: explicit verifier_timeout; no retry and never verified
 ```
 
 ### End
 
 ```text
-End commit:
-Next phase readiness: NO
+End commit: this Block 5B / Phase 5 completion commit (see the commit containing this record)
+Next phase readiness: YES
 ```
 
 ---
@@ -1593,7 +1863,7 @@ Next phase readiness: NO
 
 ### Block 6A — Writing Service Contract
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1604,20 +1874,20 @@ Includes:
 
 Block acceptance:
 
-- [ ] plain rewrite works
-- [ ] citation-aware rewrite preserves mapping
-- [ ] revision regression passes
-- [ ] export regression passes
+- [x] plain rewrite works
+- [x] citation-aware rewrite preserves mapping
+- [x] revision regression passes
+- [x] export regression passes
 
 Block Commit:
 
 ```text
-<fill>
+this Block 6A completion commit (see the commit containing this record)
 ```
 
 ### Block 6B — Evidence-backed Paragraph Generation
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1630,19 +1900,19 @@ Includes:
 
 Block acceptance:
 
-- [ ] verified paragraph generation works
-- [ ] no-paper error works
-- [ ] no-evidence error works
-- [ ] unsupported citation is not marked verified
+- [x] verified paragraph generation works
+- [x] no-paper error works
+- [x] no-evidence error works
+- [x] unsupported citation is not marked verified
 
 Block Commit:
 
 ```text
-<fill>
+this Block 6B / Phase 6 completion commit (see the commit containing this record)
 ```
 
 
-Status: NOT_STARTED
+Status: DONE
 
 ## Goal
 
@@ -1656,61 +1926,176 @@ Status: NOT_STARTED
 ## Baseline
 
 ```text
-Start commit:
-Current writing_service responsibilities:
-Current WritingDocument API:
-Current revision behavior:
-Current export formats:
+Start commit: f6081aa
+Current writing_service responsibilities: fixed action prompt plus plain-text LLM replacement helper
+Current WritingDocument API: project document CRUD, append-only revisions, legacy /documents/{id}/ai-actions proposal, citation audit
+Current revision behavior: ProseMirror JSON is authoritative; user acceptance creates a new append-only revision
+Current export formats: existing artifact download keeps Markdown, LaTeX, DOCX and ZIP submission package
+```
+
+## Block 6A Target Files
+
+```text
+backend/app/application/writing_service.py
+backend/app/api/documents.py
+backend/tests/test_writing_documents.py
+backend/tests/test_manuscript_export.py (regression only unless contract correction is required)
+frontend/src/api/documents.ts (typed API contract only; Phase 7 UI is out of scope)
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+## Block 6B Baseline and Target Files
+
+```text
+Start commit: b0c5b89
+Existing context path: ProjectContextManager → CandidatePaperSelector → ProjectEvidenceRetrievalService → existing HybridPaperRetriever
+Existing Evidence path: EvidenceService.persist_used with project/paper/source-locator validation
+Existing verification path: CitationVerificationService deterministic integrity + semantic support verification
+Target files:
+backend/app/application/writing_service.py
+backend/app/api/documents.py
+backend/tests/test_writing_documents.py
+frontend/src/api/documents.ts (typed transport contract only)
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
 ```
 
 ## Planned Changes
 
-- [ ] free-form rewrite
-- [ ] generate paragraph
-- [ ] current section context
-- [ ] candidate papers
-- [ ] evidence retrieval
-- [ ] structured citation mapping
-- [ ] verification
-- [ ] failure codes
+- [x] free-form rewrite
+- [x] generate paragraph
+- [x] current section context
+- [x] candidate papers
+- [x] evidence retrieval
+- [x] structured citation mapping for rewrite and generation proposals
+- [x] mandatory verification for preserved and generated citations
+- [x] typed rewrite conflict, context, generation and verification failure codes
 
 ## Compatibility Requirements
 
-- [ ] WritingDocument unchanged or migrated safely
-- [ ] Revision regression protected
-- [ ] Existing export protected
-- [ ] Existing Citation Node compatible
+- [x] WritingDocument unchanged; no migration required
+- [x] Revision regression protected
+- [x] Existing export protected
+- [x] Existing Citation Node compatible
 
 ## API Changes
 
 ```text
-<fill>
+POST /api/v1/projects/{project_id}/writing/agent/rewrite
+- project ownership and current/base revision are validated before generation
+- returns a structured proposal only; never mutates the document or creates a revision
+- citation mappings use immutable internal placeholders and are reverified through CitationVerificationService
+- legacy document CRUD, revision, citation-audit and /documents/{id}/ai-actions routes remain compatible
+
+POST /api/v1/projects/{project_id}/writing/agent/generate
+- generates exactly one proposal paragraph from the existing Project Context → candidate → Hybrid Retrieval path
+- resolves model-selected temporary Evidence keys to server-validated, persisted Evidence and real paper/evidence IDs
+- requires structured citation mappings and mandatory CitationVerificationService results
+- returns typed no-paper/no-relevant-paper/no-evidence/generation/verification failures and never searches the web
 ```
 
 ## Implementation Result
 
-Status: NOT_STARTED
+Status: DONE — Blocks 6A and 6B complete; Phase 6 acceptance passed
+
+### Block 6A Result
+
+```text
+Start commit: f6081aa
+End commit: this Block 6A completion commit (see the commit containing this record)
+Database migrations: none
+```
+
+Implemented:
+
+- Added a typed free-form selection rewrite request and structured proposal response on the existing Writing Service boundary.
+- Bounded prompt context to the selected text, optional current section path and nearby text; editor content is treated as untrusted data.
+- Preserved citation identity with server-validated `[[CITATION:<citation_key>]]` placeholders and exact ordered mappings rather than parsing citation IDs from prose.
+- Reused the existing LLM client and completed `CitationVerificationService`; `weak` and `unsupported` citations remain explicit and are never presented as verified.
+- Added one bounded structured-output repair attempt, typed 404/409/503 failures, and stale-revision rejection before any LLM call.
+- Kept acceptance user-controlled: rewrite returns a proposal and performs no WritingDocument or revision write.
+- Added the typed frontend transport contract only; Phase 7 UI remains out of scope.
+
+Actual files changed:
+
+```text
+backend/app/application/writing_service.py
+backend/app/api/documents.py
+backend/tests/test_writing_documents.py
+frontend/src/api/documents.ts
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
 
 ### Tests
 
 ```text
-<fill>
+PASS: docker compose build backend
+PASS: docker compose run --rm backend ruff check app/application/writing_service.py app/api/documents.py tests/test_writing_documents.py
+PASS: docker compose run --rm backend python -m pytest -q tests/test_writing_documents.py tests/test_manuscript_export.py tests/test_document_layout.py tests/test_citation_integrity.py tests/test_project_router_structure.py tests/test_project_contracts.py tests/test_database_migrations.py (71 passed)
+PASS: configured real Qwen structured rewrite smoke (HTTP 200; citation mapping preserved; one placeholder; no warnings)
+PASS: cd frontend && npm run typecheck
+PASS: cd frontend && npm run lint
+PASS: cd frontend && npm run build (existing chunk-size warning only)
+```
+
+### Block 6B Result
+
+```text
+Start commit: b0c5b89
+End commit: this Block 6B / Phase 6 completion commit (see the commit containing this record)
+Database migrations: none
+```
+
+Implemented:
+
+- Added the typed `generate` request/response and a one-paragraph structured generation contract on the existing Writing Service.
+- Reused `ProjectContextManager → CandidatePaperSelector → ProjectEvidenceRetrievalService → HybridPaperRetriever`; no second retrieval path or web search was added.
+- Exposed only bounded candidate profiles and source-traceable Evidence to the model, using temporary `E1…En` keys rather than trusting model-supplied database IDs.
+- Required each generated claim to occur in the proposal content, persisted only selected Evidence through the existing provenance checks, then constructed real citation mappings server-side.
+- Made existing deterministic plus semantic Citation Verification mandatory; weak/unsupported results remain explicit and unsupported citations are never marked verified.
+- Added one bounded structured-output repair and typed `NO_IMPORTED_PAPERS`, `NO_RELEVANT_PAPERS`, `NO_SUPPORTING_EVIDENCE`, `GENERATION_ERROR`, and `VERIFICATION_ERROR` failures.
+- Preserved proposal-only behavior, WritingDocument/revision/export, Citation Node and legacy writing APIs.
+
+Actual files changed:
+
+```text
+backend/app/application/writing_service.py
+backend/app/api/documents.py
+backend/tests/test_writing_documents.py
+frontend/src/api/documents.ts
+docs/API.md
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+Block and Phase acceptance:
+
+```text
+PASS: docker compose build backend
+PASS: Ruff for Block backend files
+PASS: focused writing/context/Evidence/citation suite (38 passed)
+PASS: configured real Qwen one-paragraph structured generation smoke (one E1 mapping, one placeholder, one paragraph)
+PASS: full backend Phase regression on final backend image (278 passed)
+PASS: frontend typecheck, lint and production build (existing chunk-size warning only)
+PASS: Alembic current = 0005_evidence_verification (head)
+PASS: schema revision validator compatible=true with no mismatches
 ```
 
 ### Manual Acceptance
 
-- [ ] plain rewrite
-- [ ] citation-aware rewrite
-- [ ] evidence-backed generation
-- [ ] no papers error
-- [ ] no evidence error
-- [ ] unsupported citation warning
+- [x] plain rewrite
+- [x] citation-aware rewrite
+- [x] evidence-backed generation
+- [x] no papers error
+- [x] no evidence error
+- [x] unsupported citation warning
 
 ### End
 
 ```text
-End commit:
-Next phase readiness: NO
+End commit: this Block 6B / Phase 6 completion commit (see the commit containing this record)
+Next phase readiness: YES
 ```
 
 ---
@@ -1721,7 +2106,7 @@ Next phase readiness: NO
 
 ### Block 7A — Writing Workspace and Editor Context
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1733,20 +2118,20 @@ Includes:
 
 Block acceptance:
 
-- [ ] layout works at desktop target sizes
-- [ ] current section shows correctly
-- [ ] selection state is correct
-- [ ] frontend build passes
+- [x] layout works at desktop target sizes
+- [x] current section shows correctly
+- [x] selection state is correct
+- [x] frontend build passes
 
 Block Commit:
 
 ```text
-<fill>
+this Block 7A completion commit (see the commit containing this record)
 ```
 
 ### Block 7B — Proposal and Citation Interaction
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -1760,20 +2145,20 @@ Includes:
 
 Block acceptance:
 
-- [ ] rewrite / replace works
-- [ ] undo works
-- [ ] generation / copy works
-- [ ] verified / weak / unsupported states render
-- [ ] save / export regressions pass
+- [x] rewrite / replace works
+- [x] undo works
+- [x] generation / copy works
+- [x] verified / weak / unsupported states render
+- [x] save / export regressions pass
 
 Block Commit:
 
 ```text
-<fill>
+this Block 7B completion commit (see the commit containing this record)
 ```
 
 
-Status: NOT_STARTED
+Status: DONE
 
 ## Goal
 
@@ -1788,57 +2173,153 @@ Status: NOT_STARTED
 
 ```text
 Start commit:
-Current WritingDocumentEditor:
-Current editor extensions:
-Current citation node:
-Current revision UI:
+Current WritingDocumentEditor: canonical Project Writing editor with document list, Tiptap surface and permanent Evidence rail
+Current editor extensions: StarterKit plus the existing inline Citation node
+Current citation node: structured paper_id / evidence_id / citation_key attributes; preserved
+Current revision UI: existing title update, immutable revision save, citation audit and export-compatible content_json
 ```
 
 ## Planned Changes
 
-- [ ] three-column layout
-- [ ] outline
-- [ ] selection context
-- [ ] right Agent
-- [ ] proposal card
-- [ ] replace selection
-- [ ] copy
-- [ ] progress
-- [ ] citation detail
-- [ ] verification status
-- [ ] panel collapse
+- [x] three-column layout
+- [x] outline
+- [x] selection context
+- [x] right Agent shell
+- [x] proposal card
+- [x] replace selection
+- [x] copy
+- [x] progress
+- [x] citation detail
+- [x] verification status
+- [x] panel collapse
 
 ## Implementation Result
 
-Status: NOT_STARTED
+Status: DONE
+
+### Actual Files Changed
+
+```text
+frontend/src/components/project/WritingDocumentEditor.vue
+frontend/src/components/project/WritingAgentPanel.vue
+frontend/src/components/project/WritingOutlinePanel.vue
+frontend/src/stores/writing.ts
+frontend/src/stores/stores.spec.ts
+frontend/src/utils/writingContext.ts
+frontend/src/utils/writingContext.spec.ts
+frontend/src/components/project/WritingWorkspace.spec.ts
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+### Implementation Summary
+
+```text
+Refactored the existing Project Writing editor into an Outline / Tiptap Editor / Writing Agent workspace while preserving the existing WritingDocument, revision, Citation Node, citation audit, save and evidence insertion contracts. The outline is derived from live Tiptap heading nodes, and editor selection updates a bounded writingStore context containing the current heading, section path, selected text/count and nearby blocks without copying the full document into Pinia.
+
+Added desktop, compact-desktop, tablet drawer and mobile basic-edit responsive rules. Both the Writing Agent and the compact-desktop Outline panel have accessible collapse controls. Existing Evidence actions remain available inside the Agent panel rather than introducing a fourth permanent rail.
+```
 
 ### Test / Build Results
 
 ```text
-<fill>
+PASS — `npm run test` — 8 frontend test files, 34 tests passed
+PASS — `npm run typecheck`
+PASS — `npm run lint`
+PASS — `npm run build` — production build passed; existing chunk-size warning only
+PASS — `git diff --check`
 ```
 
 ### Manual Acceptance
 
-- [ ] selection detected
-- [ ] current section shown
-- [ ] rewrite proposal
-- [ ] stale selection protected
-- [ ] replace
-- [ ] undo
-- [ ] generation
-- [ ] copy
-- [ ] verified citation
-- [ ] weak citation
-- [ ] unsupported citation
-- [ ] save
-- [ ] export
+- [x] selection detected and bounded context snapshot
+- [x] current section shown from live heading hierarchy
+- [x] desktop three-column and compact-desktop Outline/Agent collapse rules
+- [x] tablet Agent drawer and mobile basic edit fallback
+- [x] rewrite proposal
+- [x] stale selection protected
+- [x] replace
+- [x] undo
+- [x] generation
+- [x] copy
+- [x] verified citation
+- [x] weak citation
+- [x] unsupported citation
+- [x] save
+- [x] export
 
 ### End
 
 ```text
-End commit:
-Next phase readiness: NO
+End commit: this Phase 7 completion commit (the Block 7B commit; see the commit containing this record)
+Next phase readiness: YES — Phase 7 Block 7B and phase acceptance passed
+```
+
+---
+
+### Block 7B Implementation Result
+
+Status: DONE
+
+### Actual Files Changed
+
+```text
+frontend/src/components/project/WritingDocumentEditor.vue
+frontend/src/components/project/WritingAgentPanel.vue
+frontend/src/components/project/WritingProposalCard.vue
+frontend/src/components/project/WritingProposalCard.spec.ts
+frontend/src/utils/writingProposal.ts
+frontend/src/utils/writingProposal.spec.ts
+frontend/src/stores/writing.ts
+frontend/src/stores/stores.spec.ts
+frontend/src/components/project/WritingWorkspace.spec.ts
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+### Implementation Summary
+
+```text
+Connected the existing typed rewrite/generate Writing API contracts to the three-column workspace through a bounded Writing Agent composer and Pinia request state. Rewrite and generation responses remain proposals; the editor is never mutated until the user explicitly chooses an action.
+
+Added a structured Proposal Card with verified / weak / unsupported status, warning states, citation tokens, Evidence detail (source, page, snippet, normalized claim and reason), project-scoped paper links, copy-to-plain-text and stale-selection-safe replacement. Replacement converts structured citation placeholders back into the existing Tiptap Citation Node, creates an agent revision through the existing save path, and keeps Tiptap undo available. Existing citation audit, save, export and Reader foundations remain unchanged.
+```
+
+### API / Migration / Deviation
+
+```text
+API changes: none; consumed the existing typed `/writing/agent/rewrite` and `/writing/agent/generate` contracts.
+Database migrations: none.
+Spec deviations: none.
+External dependency: none; this Block uses existing backend contracts and requires no new credential.
+```
+
+### Test / Build Results
+
+```text
+PASS — `npm run test` — 10 frontend test files, 42 tests passed
+PASS — `npm run typecheck`
+PASS — `npm run lint`
+PASS — `npm run build` — production build passed; existing chunk-size warning only
+PASS — `git diff --check`
+PASS — `docker compose run --rm backend python -m pytest -q tests/test_writing_documents.py tests/test_manuscript_export.py` — 24 passed
+PASS — `docker compose run --rm backend python -m pytest -q tests/test_citation_integrity.py` — 11 passed
+```
+
+### Block / Phase Acceptance
+
+- [x] rewrite proposal is shown without automatic document mutation
+- [x] replace checks revision, range, content anchor and editor version before inserting
+- [x] replacement preserves structured Citation Node attributes and remains undoable
+- [x] generation is one-paragraph proposal with copy-only action
+- [x] verified, weak and unsupported statuses are visibly distinct and unsupported is never labeled verified
+- [x] loading and typed backend failure states are user-readable; concurrent requests are disabled
+- [x] existing WritingDocument revision/save, citation audit and export regressions pass
+- [x] Phase 7 frontend regression passed with typecheck, lint, production build and focused backend contracts
+
+### End
+
+```text
+End commit: this Block 7B completion commit (see the commit containing this record)
+Next action: Phase 8 / Block 8A — V1 Mainline Integration; do not implement it in this session.
 ```
 
 ---
@@ -2101,6 +2582,7 @@ Status: PROPOSED / ACCEPTED / REJECTED
 
 | Migration | Phase | Purpose | Applied Locally | Rollback Tested | Notes |
 |---|---|---|---|---|---|
+| `0005_evidence_verification` | 5 | Add durable Evidence lifecycle, source fingerprint and citation-verification fields | YES | YES | Empty-DB upgrade, `0005 → 0004 → 0005` round trip and schema validator passed |
 | - | - | - | - | - | - |
 
 ---
@@ -2109,6 +2591,11 @@ Status: PROPOSED / ACCEPTED / REJECTED
 
 | Phase | Method | Endpoint | Change | Backward Compatible | API.md Updated |
 |---|---|---|---|---|---|
+| 4 | GET | `/api/v1/projects/{project_id}/evidence`, `/api/v1/evidence/{evidence_id}` | Only expose Evidence whose Paper remains an active ProjectPaper | YES (integrity hardening) | YES |
+| 4 | POST | `/api/v1/projects/{project_id}/evidence` | Reject unresolved section / element / chunk provenance with 422 | NO (invalid legacy payloads now rejected) | YES |
+| 5 | POST | `/api/v1/documents/{document_id}/citation-audit` | Enforce deterministic integrity plus semantic support verification and return typed `verified / weak / unsupported` results | YES (existing `issues` / `passed` retained) | YES |
+| 6 | POST | `/api/v1/projects/{project_id}/writing/agent/rewrite` | Add project-owned, revision-aware structured selection rewrite proposals with immutable citation mapping and mandatory citation re-verification | YES (new route; existing WritingDocument routes unchanged) | YES |
+| 6 | POST | `/api/v1/projects/{project_id}/writing/agent/generate` | Add one-paragraph Project-paper-only generation through existing candidate/Evidence retrieval and mandatory structured citation verification | YES (new route; existing WritingDocument routes unchanged) | YES |
 | - | - | - | - | - | - |
 
 ---
@@ -2117,6 +2604,7 @@ Status: PROPOSED / ACCEPTED / REJECTED
 
 | Phase | Variable | Required | Default | Purpose |
 |---|---|---|---|---|
+| 5 | `CITATION_VERIFIER_TIMEOUT_SECONDS` | NO | `30` | Bound each semantic citation-verifier call; valid range 1–120 seconds |
 | - | - | - | - | - |
 
 不得在聊天记录里新增环境变量而不写这里。
@@ -2209,13 +2697,13 @@ Baseline results：
 
 ## Quality
 
-- [ ] Backend tests
-- [ ] Frontend build
-- [ ] Reader regression
-- [ ] RAG regression
-- [ ] Export regression
+- [x] Backend tests for Phase 4 (124 passed)
+- [x] Frontend build / typecheck
+- [x] Reader regression
+- [x] RAG regression
+- [x] Export regression
 - [ ] E2E smoke
-- [ ] Docs current
+- [x] Docs current
 
 ---
 
@@ -2273,13 +2761,13 @@ Next action:
 ```markdown
 ## Latest Handoff
 
-Date: 2026-08-23
-Phase: Phase 4 — Project Context & Paper Profile
-Status: NOT_STARTED
-Current Implementation Block: Block 4A — Typed Project Context Foundation
+Date: 2026-08-24
+Phase: Phase 8 — End-to-End Integration
+Status: IN_PROGRESS
+Current Implementation Block: Block 8A — V1 Mainline Integration
 Current Block Status: NOT_STARTED
-Last completed Block Commit: this Block 3B completion commit (see the commit containing this record)
-Last commit: this Block 3B completion commit (see the commit containing this record)
+Last completed Block Commit: this Block 7B completion commit (see the commit containing this record)
+Last commit: this Block 7B completion commit (see the commit containing this record)
 
 ### What was completed
 
@@ -2296,14 +2784,34 @@ Last commit: this Block 3B completion commit (see the commit containing this rec
 - Block 3A frontend acceptance passed: 20 Vitest tests, typecheck, lint and production build; existing chunk-size warning only.
 - Completed Phase 3 Block 3B: two-column result grid, full-abstract card expansion, detail Drawer, favorite filtering/toggling, safe download links, import states, and zero/partial/error states.
 - Phase 3 acceptance passed: 27 frontend tests, frontend typecheck/lint/build, and 10 existing backend favorite/import contract tests; no schema migration was needed.
+- Completed Phase 4 Block 4A: typed Project Profile and bounded Literature Memory DTOs, ownership-aware Discovery Context Manager, stable MemoryItem type policy, and typed lead-agent project context integration.
+- Block 4A acceptance passed: Ruff plus 55 focused backend tests; no schema migration was needed.
+- Completed Phase 4 Block 4B: stable Paper Profile schema on `ProjectPaper.analysis_card`, bounded generation, Worker triggers, retry/stale/version lifecycle and profile APIs.
+- Block 4B acceptance passed: Ruff, 70 focused backend tests and one real Qwen structured-output smoke; no schema migration was needed.
+- Completed Phase 4 Block 4C: deterministic five-paper shortlist, candidate-restricted Hybrid Retrieval, typed Writing Context/Evidence provenance, and active-membership/source-locator integrity.
+- Phase 4 acceptance passed: Ruff, 124 backend regression tests, frontend lint/build/typecheck, Alembic head and schema validator; no schema migration was needed.
+- Completed Phase 5 Block 5A: application-layer deterministic citation integrity, durable Evidence lifecycle/fingerprint fields, existing citation-audit integration and explicit unverified/unsupported outcomes.
+- Block 5A acceptance passed: Ruff, 94 concentrated backend tests, backend image build, migration upgrade/downgrade/re-upgrade, local head `0005_evidence_verification` and compatible schema validation.
+- Completed Phase 5 Block 5B: bounded structured semantic verifier, mandatory post-integrity verification, explicit weak/unsupported failure handling and one opt-in conservative claim adjustment/re-verification.
+- Phase 5 acceptance passed: real Qwen direct-support/causation smoke, 145 backend Reader/RAG/export regression tests, frontend typecheck/lint/build, backend image build, Alembic head and schema validation.
+- Completed Phase 6 Block 6A: free-form selection rewrite, bounded section/nearby context, structured proposals, stale-revision conflicts and immutable citation mappings on the existing Writing Service.
+- Rewrite proposals never mutate WritingDocument or create revisions; citation-aware proposals reuse `CitationVerificationService` and preserve explicit weak/unsupported states.
+- Block 6A acceptance passed: backend image and Ruff, 71 concentrated backend writing/revision/export/integrity regression tests, frontend typecheck/lint/build, and one configured real Qwen structured rewrite smoke.
+- Completed Phase 6 Block 6B: one-paragraph Project-paper-only generation using the existing candidate selector, Hybrid Retrieval, Evidence persistence and mandatory Citation Verification path.
+- Generated citations use model-visible temporary Evidence keys and server-resolved real paper/evidence IDs; claim-to-content, project ownership and source provenance are deterministic gates.
+- Block 6B and Phase 6 acceptance passed: backend image/Ruff, 38 focused tests, real Qwen structured paragraph smoke, 278 full backend tests, frontend typecheck/lint/build, Alembic head and schema validation.
+- Completed Phase 7 Block 7A: three-column Writing Workspace, live Tiptap-derived outline and current section path, bounded selection/nearby context in `writingStore`, Writing Agent context shell, accessible Agent/Outline collapse controls, and responsive desktop/tablet/mobile behavior.
+- Block 7A acceptance passed: 34 frontend tests, frontend typecheck, lint, production build, and diff check; existing chunk-size warning only.
+- Completed Phase 7 Block 7B: typed rewrite/generate proposal interaction, user-confirmed replace/copy actions, stale selection protection, structured Citation Node insertion, citation status and Evidence detail UI, and bounded loading/error/concurrency states.
+- Block 7B and Phase 7 acceptance passed: 42 frontend tests, frontend typecheck/lint/build, 24 WritingDocument/revision/export backend tests, 11 Citation Verification tests, and diff check; existing chunk-size warning only.
 
 ### What is currently in progress
 
-- Current Block: Block 4A — Typed Project Context Foundation; Phase 3 is complete and Phase 4 implementation has not started.
-- Development and acceptance checks already run: Phase 3 frontend tests/build/lint/typecheck, 10 existing backend favorite/import contract tests, plus the Phase 2 backend acceptance recorded above.
+- Current Block: Phase 8 / Block 8A — V1 Mainline Integration; not started.
+- Development and acceptance checks already run: Phase 6 Blocks 6A/6B and all Phase 7 Writing Frontend Blocks are complete.
 - External dependency blockers: none. Semantic Scholar anonymous HTTP 429 remains a handled provider state; its key is optional.
 - User action required: none.
-- Real-provider validation pending: none for completed Phase 2; the anonymous-first path and Crossref fallback were exercised once with bounded limits.
+- Real-provider validation pending: none for Phase 6; configured Qwen returned valid rewrite and one-paragraph Evidence-key structured proposals.
 
 ### Do not redo
 
@@ -2312,21 +2820,31 @@ Last commit: this Block 3B completion commit (see the commit containing this rec
 - Do not make `SEMANTIC_SCHOLAR_API_KEY` a V1 prerequisite or repeatedly retry anonymous 429 responses.
 - Do not redo any Phase 2 provider, workflow, favorite, import, Reader, RAG, or execution work while continuing later phases.
 - Do not redo the completed Phase 3 Discover frontend blocks; preserve the result card, favorite, import, Reader and existing project API contracts while starting Phase 4.
+- Do not replace `ProjectPaper.analysis_card.paper_profile`, add a parallel Paper Profile table, or move generation out of the existing Worker queue.
+- Do not restore direct all-project-paper retrieval in `project_search_content`; use the Context Manager → candidate selector → existing Hybrid Retrieval boundary.
+- Do not add another Evidence table or treat transient retrieval chunks as verified citations.
+- Do not reimplement Phase 5 integrity checks, semantic classification or migration `0005`; reuse `CitationVerificationService` and its durable status fields.
+- Do not replace the completed semantic verifier, bypass it from evidence-backed writing, or treat `weak / unsupported / timeout` as verified.
+- Do not redo Block 6A rewrite proposals, add automatic document writes, parse citation identity from prose, or replace the existing revision/export contracts.
+- Do not redo Block 6B generation orchestration, let the frontend supply trusted paper/evidence IDs, add web search to Writing, or bypass mandatory verification.
 
 ### Next exact action
 
-1. Read only the Block 4A headings listed in `EXECUTION_INDEX.md` and the directly related context code and tests.
-2. Implement typed Project Profile / Literature Memory context boundaries without creating a second memory or agent runtime.
-3. Run Block 4A acceptance, update this Progress document, and create one meaningful Block 4A commit.
+1. Read only the Phase 8 headings listed in `EXECUTION_INDEX.md`: Phase 8 plan, completed-block summaries, Literature Discovery and Writing acceptance sections, `SMOKE_TESTS.md`, and relevant regression docs.
+2. Inspect the actual Project → Discover → Import → Reader and Writing → Evidence → Citation Verification routes before changing code.
+3. Implement only Block 8A mainline integration, then run the complete integration acceptance and create one meaningful commit.
 
 ### Read first next session
 
 - `AGENTS.md`
 - `docs/spec-v2/EXECUTION_INDEX.md`
-- Progress: current Phase 4 / Block 4A, ADR-PROGRESS-001, EXT-001/EXT-002, and this Handoff
-- `03_PROJECT_CONTEXT_AND_EVIDENCE.md`: only the Block 4A headings listed in `EXECUTION_INDEX.md`
-- `07_CODEX_IMPLEMENTATION_PLAN.md`: Phase 4 / Block 4A only
-- Directly related frontend code and tests; do not reread completed Phase 2 implementation unless integration requires it
+- Progress: current Phase 8 / Block 8A, Current Blockers and this Handoff
+- `07_CODEX_IMPLEMENTATION_PLAN.md`: Phase 8 only
+- `04_LITERATURE_DISCOVERY.md`: Definition of Done / acceptance sections only
+- `05_WRITING_WORKSPACE.md`: acceptance / Definition of Done sections only
+- `SMOKE_TESTS.md`
+- Relevant `QA_WORKFLOW.md`, `HYBRID_RETRIEVAL.md`, and export regression docs
+- Existing Project, Discover, import, Reader, Writing, Evidence and Citation Verification routes; do not reread or redo completed Phase 7 frontend work
 ```
 
 这是下一会话最重要的接续区。

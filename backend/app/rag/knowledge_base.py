@@ -372,6 +372,8 @@ class PaperKnowledgeBase:
                     metadata["coverage_source"] = str(chunk["coverage_source"])
                 if chunk.get("element_id"):
                     metadata["element_id"] = str(chunk["element_id"])
+                if chunk.get("section_id"):
+                    metadata["section_id"] = str(chunk["section_id"])
                 if chunk.get("element_type"):
                     metadata["element_type"] = str(chunk["element_type"])
                 if chunk.get("bbox"):
@@ -532,6 +534,7 @@ class PaperKnowledgeBase:
                     "caption",
                     "page",
                     "element_id",
+                    "section_id",
                     "element_type",
                     "layout_confidence",
                     "table_id",

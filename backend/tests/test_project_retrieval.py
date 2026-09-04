@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.harness.tools.literature_research import _rank_project_chunks
+from app.research.evidence.retrieval import rank_project_chunks
 from app.utils.qa_helpers import build_deterministic_citations
 
 
@@ -31,7 +31,7 @@ def test_project_ranking_keeps_cross_paper_provenance_and_diversity():
         ),
     ]
 
-    chunks = _rank_project_chunks("这些论文使用了哪些数据集", groups, top_k=3)
+    chunks = rank_project_chunks("这些论文使用了哪些数据集", groups, top_k=3)
 
     assert {chunk["paper_id"] for chunk in chunks} == {"paper-a", "paper-b"}
     assert [chunk["source_id"] for chunk in chunks] == ["S1", "S2", "S3"]
@@ -39,7 +39,7 @@ def test_project_ranking_keeps_cross_paper_provenance_and_diversity():
 
 
 def test_project_citations_expose_paper_and_pdf_location():
-    chunks = _rank_project_chunks(
+    chunks = rank_project_chunks(
         "数据集",
         [(
             _project_paper("project-1"),

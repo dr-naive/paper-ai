@@ -7,7 +7,9 @@ def test_research_item_models_match_phase_five_contract():
     memory = set(MemoryItem.__table__.columns.keys())
     evidence = set(EvidenceItem.__table__.columns.keys())
     assert {"project_id", "user_id", "type", "content", "source_type", "source_id", "confidence", "tags", "superseded_by"} <= memory
-    assert {"project_id", "paper_id", "section_id", "element_id", "chunk_id", "page_number", "bbox", "evidence_type", "snippet", "normalized_claim"} <= evidence
+    assert {"project_id", "paper_id", "section_id", "element_id", "chunk_id", "page_number", "bbox", "evidence_type", "snippet", "normalized_claim",
+            "source_type", "status", "source_fingerprint", "verification_status", "verification_reason",
+            "verification_model", "verification_version", "updated_at"} <= evidence
     assert "decision" in MEMORY_TYPES and "hypothesis" in MEMORY_TYPES
     assert "quote" in EVIDENCE_TYPES and "limitation" in EVIDENCE_TYPES
 

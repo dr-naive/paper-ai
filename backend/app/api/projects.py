@@ -65,6 +65,11 @@ from app.models.project import (
     ResearchProject,
     WritingArtifact,
 )
+from app.research.context.paper_profile import (
+    PaperProfileNotFoundError,
+    PaperProfileNotReadyError,
+    PaperProfileService,
+)
 from app.utils.manuscript_export import build_docx, build_submission_package, markdown_to_latex
 
 logger = logging.getLogger(__name__)
@@ -735,10 +740,66 @@ async def update_project_paper_card(
     card = body.model_dump()
     card["updated_at"] = datetime.utcnow().isoformat()
     card["generated_by"] = "user"
+    existing_profile = (pp.analysis_card or {}).get("paper_profile")
+    if isinstance(existing_profile, dict):
+        card["paper_profile"] = existing_profile
     pp.analysis_card = card
     await db.commit()
     await db.refresh(pp)
     return {"project_id": project_id, "paper_id": paper_id, "card": pp.analysis_card}
+
+
+@router.get("/{project_id}/papers/{paper_id}/profile")
+async def get_project_paper_profile(
+    project_id: str,
+    paper_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Read the current versioned Paper Profile without regenerating it."""
+    user_id = await get_current_user_id(authorization, db)
+    try:
+        profile = await PaperProfileService(db).get_profile(
+            project_id=project_id,
+            paper_id=paper_id,
+            user_id=user_id,
+        )
+    except PaperProfileNotFoundError:
+        raise HTTPException(status_code=404, detail="该论文不在项目中")
+    return {
+        "project_id": project_id,
+        "paper_id": paper_id,
+        "profile": profile.model_dump(mode="json") if profile else None,
+    }
+
+
+@router.post("/{project_id}/papers/{paper_id}/profile/regenerate", status_code=202)
+async def regenerate_project_paper_profile(
+    project_id: str,
+    paper_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Queue a bounded retry without blocking Reader or Project Papers."""
+    user_id = await get_current_user_id(authorization, db)
+    try:
+        profile = await PaperProfileService(db).request_generation(
+            project_id=project_id,
+            paper_id=paper_id,
+            user_id=user_id,
+            force=True,
+        )
+    except PaperProfileNotFoundError:
+        raise HTTPException(status_code=404, detail="该论文不在项目中")
+    except PaperProfileNotReadyError:
+        raise HTTPException(status_code=409, detail="论文尚未完成解析，暂时无法生成 Profile")
+    if profile.status == "failed" and profile.error_code == "PROFILE_QUEUE_UNAVAILABLE":
+        raise HTTPException(status_code=503, detail="Paper Profile Worker 暂时不可用")
+    return {
+        "project_id": project_id,
+        "paper_id": paper_id,
+        "profile": profile.model_dump(mode="json"),
+    }
 
 
 @router.delete("/{project_id}/papers/{paper_id}", status_code=204)

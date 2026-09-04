@@ -15,13 +15,18 @@ from app.config import settings
 from app.models.paper import Paper
 from app.models.project import ProjectPaper, ResearchProject
 from app.models.research import EvidenceItem, MemoryItem
+from app.research.context.schemas import DISCOVERY_MEMORY_TYPES
+from app.research.evidence.service import EvidenceProvenanceError, EvidenceService
 
 def require_memory_v2() -> None:
     if not settings.ENABLE_MEMORY_V2: raise HTTPException(status_code=404, detail="Research Notes V2 未启用")
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["research-notes-evidence"], dependencies=[Depends(require_memory_v2)])
 evidence_router = APIRouter(prefix="/api/v1/evidence", tags=["research-notes-evidence"], dependencies=[Depends(require_memory_v2)])
-MEMORY_TYPES = {"finding", "question", "hypothesis", "decision", "definition", "constraint", "preference", "summary"}
+MEMORY_TYPES = {
+    "finding", "question", "hypothesis", "decision", "definition", "constraint", "preference", "summary",
+    *DISCOVERY_MEMORY_TYPES,
+}
 EVIDENCE_TYPES = {"quote", "result", "method", "definition", "limitation", "comparison", "background"}
 
 
@@ -70,11 +75,20 @@ def evidence_dict(item: EvidenceItem) -> dict[str, Any]:
     return {column.name: (value.isoformat() if isinstance(value, datetime) else value)
             for column in item.__table__.columns for value in [getattr(item, column.name)]}
 
+def source_authors(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
 @evidence_router.get("/{evidence_id}")
 async def get_evidence(evidence_id: str, db: AsyncSession = Depends(get_db), authorization: str | None = Header(None)):
     user_id = await get_current_user_id(authorization, db)
-    item = (await db.execute(select(EvidenceItem).join(ResearchProject, ResearchProject.id == EvidenceItem.project_id)
-                             .where(EvidenceItem.id == evidence_id, ResearchProject.user_id == user_id))).scalar_one_or_none()
+    item = (await db.execute(select(EvidenceItem)
+                             .join(ResearchProject, ResearchProject.id == EvidenceItem.project_id)
+                             .join(ProjectPaper, (ProjectPaper.project_id == EvidenceItem.project_id) &
+                                   (ProjectPaper.paper_id == EvidenceItem.paper_id))
+                             .where(EvidenceItem.id == evidence_id,
+                                    ResearchProject.user_id == user_id))).scalar_one_or_none()
     if item is None: raise HTTPException(status_code=404, detail="研究证据不存在")
     return evidence_dict(item)
 
@@ -125,7 +139,10 @@ async def delete_note(project_id: str, note_id: str, db: AsyncSession = Depends(
 @router.get("/evidence")
 async def list_evidence(project_id: str, paper_id: str | None = Query(None), db: AsyncSession = Depends(get_db), authorization: str | None = Header(None)):
     await auth_project(project_id, authorization, db)
-    query = select(EvidenceItem).where(EvidenceItem.project_id == project_id)
+    query = (select(EvidenceItem)
+             .join(ProjectPaper, (ProjectPaper.project_id == EvidenceItem.project_id) &
+                   (ProjectPaper.paper_id == EvidenceItem.paper_id))
+             .where(EvidenceItem.project_id == project_id))
     if paper_id: query = query.where(EvidenceItem.paper_id == paper_id)
     rows = (await db.execute(query.order_by(EvidenceItem.created_at.desc()))).scalars().all()
     return {"items": [evidence_dict(row) for row in rows]}
@@ -138,9 +155,26 @@ async def create_evidence(project_id: str, body: EvidenceCreate, db: AsyncSessio
                               .where(Paper.id == body.paper_id, Paper.user_id == user_id,
                                      ProjectPaper.project_id == project_id))).scalar_one_or_none()
     if paper is None: raise HTTPException(status_code=404, detail="论文不在当前项目文档库")
+    try:
+        evidence_service = EvidenceService(db)
+        _, element = await evidence_service.validate_locator(
+            paper_id=body.paper_id,
+            section_id=body.section_id,
+            element_id=body.element_id,
+            chunk_id=body.chunk_id,
+        )
+    except EvidenceProvenanceError:
+        raise HTTPException(status_code=422, detail="证据位置无法在当前论文中验证")
+    values = body.model_dump()
+    if element:
+        values["page_number"] = values["page_number"] or element.page_number
+        values["bbox"] = values["bbox"] or element.bbox
+    fingerprint = await evidence_service.source_fingerprint(paper)
     item = EvidenceItem(project_id=project_id, created_by="user", source_title=paper.title,
-                        source_authors=paper.authors or [], source_year=paper.publication_year, doi=paper.doi,
-                        **body.model_dump())
+                        source_authors=source_authors(paper.authors), source_year=paper.publication_year, doi=paper.doi,
+                        source_type="user_saved", status="active", source_fingerprint=fingerprint,
+                        verification_status="unverified",
+                        **values)
     db.add(item); await db.commit(); await db.refresh(item); return evidence_dict(item)
 
 @router.delete("/evidence/{evidence_id}", status_code=204)
