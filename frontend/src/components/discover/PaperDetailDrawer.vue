@@ -7,7 +7,6 @@
     :footer="false"
     unmount-on-close
     @cancel="$emit('close')"
-    @close="$emit('close')"
   >
     <template v-if="paper">
       <article class="detail-content">

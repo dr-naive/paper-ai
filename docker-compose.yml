@@ -20,6 +20,10 @@ services:
   backend:
     build: ./backend
     container_name: paperai-backend
+    # Optional host egress proxy. The mapping is harmless when no proxy is set
+    # and lets Linux Docker reach a proxy bound on the host gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     healthcheck:
@@ -34,6 +38,14 @@ services:
       - REDIS_ANSWER_TASK_TTL_SECONDS=${REDIS_ANSWER_TASK_TTL_SECONDS:-86400}
       - REDIS_UPLOAD_TASK_TTL_SECONDS=${REDIS_UPLOAD_TASK_TTL_SECONDS:-604800}
       - DEBUG=${DEBUG:-true}
+      # Optional runtime egress proxy for academic APIs and model endpoints.
+      # Leave PAPERAI_* unset for direct access.
+      - HTTP_PROXY=${PAPERAI_HTTP_PROXY:-}
+      - HTTPS_PROXY=${PAPERAI_HTTPS_PROXY:-}
+      - NO_PROXY=${PAPERAI_NO_PROXY:-localhost,127.0.0.1,db,redis,host.docker.internal}
+      - http_proxy=${PAPERAI_HTTP_PROXY:-}
+      - https_proxy=${PAPERAI_HTTPS_PROXY:-}
+      - no_proxy=${PAPERAI_NO_PROXY:-localhost,127.0.0.1,db,redis,host.docker.internal}
       - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?请在 .env 中设置 DEFAULT_ADMIN_PASSWORD}
       - ENABLE_AGENT_RUNTIME_V2=${ENABLE_AGENT_RUNTIME_V2:-true}
@@ -59,6 +71,8 @@ services:
       - SEARCH_MAX_ROUNDS=${SEARCH_MAX_ROUNDS:-3}
       - SEARCH_MAX_QUERIES_PER_ROUND=${SEARCH_MAX_QUERIES_PER_ROUND:-3}
       - SEARCH_RESULT_LIMIT=${SEARCH_RESULT_LIMIT:-10}
+      - REMOTE_IMPORT_READ_TIMEOUT_SECONDS=${REMOTE_IMPORT_READ_TIMEOUT_SECONDS:-45}
+      - REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS=${REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS:-300}
       - VISION_MODEL=${VISION_MODEL:-qwen-vl-max}
       - VISION_BASE_URL=${VISION_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       - VECTOR_STORE_PATH=/app/data/vectorstore
@@ -88,6 +102,8 @@ services:
     build: ./backend
     container_name: paperai-worker
     command: ["python", "-m", "app.worker"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import os,redis; redis.Redis.from_url(os.environ['REDIS_URL']).ping()\" || exit 1"]
       interval: 10s
@@ -100,6 +116,14 @@ services:
       - REDIS_ANSWER_TASK_TTL_SECONDS=${REDIS_ANSWER_TASK_TTL_SECONDS:-86400}
       - REDIS_UPLOAD_TASK_TTL_SECONDS=${REDIS_UPLOAD_TASK_TTL_SECONDS:-604800}
       - DEBUG=${DEBUG:-true}
+      # Keep the Worker on the same optional egress path as the API because
+      # remote PDF downloads run asynchronously in this container.
+      - HTTP_PROXY=${PAPERAI_HTTP_PROXY:-}
+      - HTTPS_PROXY=${PAPERAI_HTTPS_PROXY:-}
+      - NO_PROXY=${PAPERAI_NO_PROXY:-localhost,127.0.0.1,db,redis,host.docker.internal}
+      - http_proxy=${PAPERAI_HTTP_PROXY:-}
+      - https_proxy=${PAPERAI_HTTPS_PROXY:-}
+      - no_proxy=${PAPERAI_NO_PROXY:-localhost,127.0.0.1,db,redis,host.docker.internal}
       - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?请在 .env 中设置 DEFAULT_ADMIN_PASSWORD}
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
@@ -121,6 +145,8 @@ services:
       - SEARCH_MAX_ROUNDS=${SEARCH_MAX_ROUNDS:-3}
       - SEARCH_MAX_QUERIES_PER_ROUND=${SEARCH_MAX_QUERIES_PER_ROUND:-3}
       - SEARCH_RESULT_LIMIT=${SEARCH_RESULT_LIMIT:-10}
+      - REMOTE_IMPORT_READ_TIMEOUT_SECONDS=${REMOTE_IMPORT_READ_TIMEOUT_SECONDS:-45}
+      - REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS=${REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS:-300}
       - VISION_MODEL=${VISION_MODEL:-qwen-vl-max}
       - VISION_BASE_URL=${VISION_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       - VECTOR_STORE_PATH=/app/data/vectorstore

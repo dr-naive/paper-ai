@@ -40,6 +40,8 @@ from app.research.context.paper_profile import (
     PaperProfileService,
     schedule_profiles_for_parsed_paper,
 )
+from app.services.remote_paper_import import download_arxiv_pdf
+from app.utils.task_manager import update_task
 from app.redis_client import close_redis, get_async_redis, get_json, initialize_redis, set_json
 
 logging.basicConfig(level=logging.INFO)
@@ -337,7 +339,10 @@ async def handle_paper_process(job: WorkerJob) -> None:
         dict(payload.get("initial_timings") or {}),
         float(payload.get("pipeline_started_at") or time.perf_counter()),
         dict(payload.get("initial_counts") or {}),
+        bool(payload.get("media_only")),
     )
+    if payload.get("media_only"):
+        return
     try:
         async with AsyncSessionLocal() as db:
             await schedule_profiles_for_parsed_paper(db, str(payload["paper_id"]), force=True)
@@ -371,7 +376,7 @@ async def handle_paper_profile(job: WorkerJob) -> None:
 
 
 async def handle_arxiv_import(job: WorkerJob) -> None:
-    """Run the standard PDF pipeline, then attach a successful import to its project."""
+    """Download in the Worker, run the standard pipeline, then attach the ProjectPaper."""
     from app.api.papers import _schedule_process_paper
 
     payload = job.payload
@@ -394,9 +399,43 @@ async def handle_arxiv_import(job: WorkerJob) -> None:
             await db.commit()
 
     await update_import("processing")
+    file_path = str(payload.get("file_path") or "")
+    initial_counts = dict(payload.get("initial_counts") or {})
+    if not file_path:
+        update_task(
+            job.id,
+            status="processing",
+            progress=1,
+            message="正在安全下载 arXiv PDF...",
+        )
+        download_started_at = time.perf_counter()
+        try:
+            downloaded = await download_arxiv_pdf(
+                arxiv_id,
+                paper_id=paper_id,
+                storage_path=settings.FILE_STORAGE_PATH,
+                max_size=settings.MAX_UPLOAD_SIZE,
+                timeout_seconds=settings.REMOTE_IMPORT_READ_TIMEOUT_SECONDS,
+                total_timeout_seconds=settings.REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning("arXiv PDF 下载失败 arxiv_id=%s: %s", arxiv_id, exc)
+            update_task(
+                job.id,
+                status="failed",
+                progress=0,
+                message="arXiv PDF 下载失败，请稍后重试",
+            )
+            await update_import("failed", type(exc).__name__)
+            return
+        file_path = downloaded.file_path
+        initial_counts.update({
+            "remote_file_size": downloaded.file_size,
+            "remote_download_seconds": round(time.perf_counter() - download_started_at, 3),
+        })
     await _schedule_process_paper(
-        paper_id, str(payload["file_path"]), str(payload["user_id"]), None,
-        {}, time.perf_counter(), dict(payload.get("initial_counts") or {}),
+        paper_id, file_path, str(payload["user_id"]), None,
+        {}, time.perf_counter(), initial_counts,
     )
     async with AsyncSessionLocal() as db:
         paper = await db.get(Paper, paper_id)
@@ -524,6 +563,7 @@ async def dispatch_job(job: WorkerJob) -> None:
     handlers = {
         "chat_answer": handle_chat_answer,
         "paper_process": handle_paper_process,
+        "paper_media_enhance": handle_paper_process,
         "paper_profile": handle_paper_profile,
         "arxiv_import": handle_arxiv_import,
         "project_reading_execution": handle_project_reading_execution,

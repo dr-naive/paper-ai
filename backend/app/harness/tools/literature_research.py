@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
@@ -25,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.paper import Paper
 from app.config import settings
 from app.job_queue import enqueue_job
-from app.services.remote_paper_import import download_arxiv_pdf, normalize_arxiv_id
+from app.services.remote_paper_import import normalize_arxiv_id
 from app.utils.task_manager import create_task, update_task
 from app.models.project import (
     ARTIFACT_STATUS_DRAFT,
@@ -582,14 +581,6 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
         if pending:
             return f"该论文正在导入，task_id={pending.get('task_id')}，请等待解析完成。"
         paper_id = str(uuid.uuid4())
-        try:
-            downloaded = await download_arxiv_pdf(
-                arxiv_id, paper_id=paper_id, storage_path=settings.FILE_STORAGE_PATH,
-                max_size=settings.MAX_UPLOAD_SIZE,
-            )
-        except Exception as exc:
-            logger.warning("arXiv PDF 下载失败 arxiv_id=%s: %s", arxiv_id, exc)
-            return f"错误:arXiv PDF 下载失败:{type(exc).__name__}"
         task = create_task(paper_id, _uid)
         import_item = {
             "arxiv_id": arxiv_id, "paper_id": paper_id, "task_id": task.task_id,
@@ -603,22 +594,23 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
         await db.commit()
         try:
             await enqueue_job("arxiv_import", {
-                "paper_id": paper_id, "file_path": downloaded.file_path, "user_id": _uid,
+                "paper_id": paper_id, "user_id": _uid,
                 "project_id": _pid, "arxiv_id": arxiv_id, "source_url": source_url,
                 "role": role, "tags": import_item["tags"], "notes": import_item["notes"],
                 "reading_priority": import_item["reading_priority"],
                 "initial_counts": {"original_filename": f"arxiv-{arxiv_id}.pdf", "remote_source": "arxiv"},
             }, job_id=task.task_id)
         except Exception:
-            if os.path.exists(downloaded.file_path):
-                os.remove(downloaded.file_path)
             update_task(task.task_id, status="failed", progress=0, message="导入任务入队失败")
             import_item["status"] = "failed"
             project.preferences = {**preferences, "paper_imports": imports[-30:]}
             await db.commit()
             return "错误:论文处理 Worker 暂时不可用。"
-        return (f"已安全下载 arXiv:{arxiv_id} 并进入解析队列。task_id={task.task_id}，paper_id={paper_id}。"
-                "解析完成后会自动加入当前项目文档库。")
+        return (
+            f"arXiv:{arxiv_id} 导入任务已创建，正在后台安全下载。"
+            f"task_id={task.task_id}，paper_id={paper_id}。"
+            "解析完成后会自动加入当前项目文档库。"
+        )
 
     async def append_memory_impl(**kwargs: Any) -> str:
         project = await _assert_owned()

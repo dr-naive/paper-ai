@@ -1,5 +1,5 @@
 <template>
-  <ProductHeader :context="project.title" back-to="/projects" back-label="项目列表">
+  <ProductHeader :context="project.title" :show-brand="false" back-to="/projects" back-label="项目列表">
     <template #navigation>
       <nav class="project-tabs" aria-label="项目导航">
         <RouterLink
@@ -38,17 +38,17 @@ const tabs = [
   display: flex;
   align-items: center;
   gap: 3px;
-  margin-left: 8px;
+  margin-left: 4px;
 }
 
 .project-tab {
   display: inline-flex;
-  min-height: 36px;
+  min-height: 32px;
   align-items: center;
-  padding: 0 11px;
+  padding: 0 9px;
   border-radius: 6px;
   color: var(--pa-muted);
-  font-size: 13px;
+  font-size: 12px;
   text-decoration: none;
   white-space: nowrap;
   transition: color 180ms ease-out, background-color 180ms ease-out;
@@ -68,7 +68,7 @@ const tabs = [
   display: block;
   overflow: hidden;
   color: var(--pa-muted);
-  font-size: 13px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -22,7 +22,14 @@ export const routes: RouteRecordRaw[] = [
       hash: to.hash,
     }),
   },
-  { path: '/project/:id/chat', name: 'ProjectChat', component: () => import('@/views/ProjectChat.vue') },
+  {
+    path: '/project/:id/chat',
+    name: 'LegacyProjectChat',
+    redirect: to => ({
+      name: 'ProjectOverview',
+      params: { projectId: to.params.id },
+    }),
+  },
   {
     path: '/projects/:projectId',
     name: 'ProjectRoot',

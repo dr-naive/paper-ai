@@ -19,6 +19,22 @@ describe('project route foundation', () => {
     expect(legacy?.redirect).toBeTypeOf('function')
   })
 
+  it('does not expose the removed universal project chat surface', () => {
+    const legacyChat = routes.find(route => route.name === 'LegacyProjectChat')
+    expect(legacyChat?.path).toBe('/project/:id/chat')
+    expect(legacyChat?.component).toBeUndefined()
+    expect(legacyChat?.redirect).toBeTypeOf('function')
+    expect((legacyChat?.redirect as (to: { params: { id: string } }) => unknown)({ params: { id: 'project-1' } })).toEqual({
+      name: 'ProjectOverview',
+      params: { projectId: 'project-1' },
+    })
+  })
+
+  it('keeps only the four V1 project tabs in the project header contract', () => {
+    expect(routes.map(route => route.name)).not.toContain('ProjectChat')
+    expect(routes.map(route => route.name)).not.toContain('ProjectWorkspace')
+  })
+
   it('gives each V1 project tab its own page boundary', () => {
     const names = ['ProjectOverview', 'ProjectDiscover', 'ProjectPapers', 'ProjectWriting']
     const components = names.map(name => routes.find(route => route.name === name)?.component)

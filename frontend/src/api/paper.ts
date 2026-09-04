@@ -16,6 +16,27 @@ export const uploadPaper = (file: File) => {
 export const getPaperList = (params?: { skip?: number; limit?: number; status?: string; search?: string }) =>
   request.get('/api/v1/papers/', { params })
 
+export interface PaperImportTask {
+  task_id: string
+  paper_id: string
+  filename: string
+  status: 'pending' | 'processing' | 'failed'
+  message: string
+  retry_available: boolean
+  updated_at: string
+}
+
+export interface PaperRetryResponse {
+  task_id: string
+  paper_id: string
+  retry_type: 'import' | 'media'
+  status: 'queued'
+  message: string
+}
+
+export const retryPaperTask = (taskId: string) =>
+  request.post<PaperRetryResponse>(`/api/v1/papers/tasks/${encodeURIComponent(taskId)}/retry`)
+
 export const getPaper = (paperId: string) => request.get(`/api/v1/papers/${paperId}`)
 
 export const getPaperSections = (paperId: string) => request.get(`/api/v1/papers/${paperId}/sections`)
@@ -25,9 +46,20 @@ export const rebuildPaperSections = (paperId: string) =>
 
 export const deletePaper = (paperId: string) => request.delete(`/api/v1/papers/${paperId}`)
 
+export interface PaperTaskStatusResponse {
+  task_id: string
+  paper_id: string
+  status: 'pending' | 'processing' | 'ready' | 'completed' | 'failed'
+  progress: number
+  message: string
+  details?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 export const getTaskStatus = (taskId: string) => {
   const token = localStorage.getItem('access_token')
-  return request.get(`/api/v1/papers/tasks/${taskId}`, {
+  return request.get<PaperTaskStatusResponse>(`/api/v1/papers/tasks/${taskId}`, {
     headers: {
       'Authorization': token ? `Bearer ${token}` : undefined
     }

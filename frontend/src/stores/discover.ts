@@ -11,6 +11,7 @@ import {
   type SearchFilters,
   type SearchIntent,
 } from '@/api/discovery'
+import { getTaskStatus } from '@/api/paper'
 
 export type DiscoveryStatus =
   | 'idle'
@@ -28,6 +29,12 @@ export interface RequirementMessage {
 
 export type FavoriteFilter = 'all' | 'favorites'
 export type ImportState = 'idle' | 'importing' | 'imported' | 'failed'
+
+const IMPORT_POLL_INTERVAL_MS = 1500
+// Remote import includes a bounded download (up to five minutes) followed by
+// the existing parse/index pipeline. Keep the UI monitor bounded, but long
+// enough to observe the Worker-owned terminal state on slower direct links.
+const IMPORT_POLL_ATTEMPTS = 400
 
 const emptyIntent = (): SearchIntent => ({
   topic: '',
@@ -68,7 +75,7 @@ export const useDiscoverStore = defineStore('discover', () => {
   const importMessages = ref<Record<string, string>>({})
   const actionError = ref('')
   const activePaper = ref<PaperSearchResult | null>(null)
-  const detailDrawerOpen = ref(false)
+  const importWatchTokens = new Map<string, number>()
 
   const isWorking = computed(() => status.value === 'searching')
   const isReady = computed(() => status.value === 'ready_for_search' || status.value === 'completed' || status.value === 'failed')
@@ -102,9 +109,9 @@ export const useDiscoverStore = defineStore('discover', () => {
     favoritePending.value = {}
     importStates.value = {}
     importMessages.value = {}
+    importWatchTokens.clear()
     actionError.value = ''
     activePaper.value = null
-    detailDrawerOpen.value = false
     messages.value = [{ id: 'assistant-1', role: 'assistant', content: initialAssistantMessage }]
   }
 
@@ -267,6 +274,14 @@ export const useDiscoverStore = defineStore('discover', () => {
       const nextState: ImportState = response.status === 'failed' ? 'failed' : response.status === 'imported' ? 'imported' : 'importing'
       importStates.value = { ...importStates.value, [paper.result_id]: nextState }
       importMessages.value = { ...importMessages.value, [paper.result_id]: response.message }
+      // A duplicate import can return the existing task without a paper_id.
+      // The owned task-status endpoint resolves the paper identity, so task_id
+      // alone is sufficient to keep the UI state truthful and recoverable.
+      if (nextState === 'importing' && response.task_id) {
+        const token = (importWatchTokens.get(paper.result_id) || 0) + 1
+        importWatchTokens.set(paper.result_id, token)
+        void monitorImport(paper.result_id, response.task_id, token, projectId.value)
+      }
       return nextState !== 'failed'
     } catch (error: any) {
       importStates.value = { ...importStates.value, [paper.result_id]: 'failed' }
@@ -275,8 +290,54 @@ export const useDiscoverStore = defineStore('discover', () => {
     }
   }
 
-  const openPaperDetails = (paper: PaperSearchResult) => { activePaper.value = paper; detailDrawerOpen.value = true }
-  const closePaperDetails = () => { detailDrawerOpen.value = false }
+  const monitorImport = async (resultId: string, taskId: string, token: number, watchedProjectId: string) => {
+    const isCurrent = () => importWatchTokens.get(resultId) === token
+      && importStates.value[resultId] === 'importing'
+      && projectId.value === watchedProjectId
+
+    for (let attempt = 0; attempt < IMPORT_POLL_ATTEMPTS && isCurrent(); attempt += 1) {
+      if (attempt > 0) await new Promise(resolve => window.setTimeout(resolve, IMPORT_POLL_INTERVAL_MS))
+      if (!isCurrent()) return
+      try {
+        const task = await getTaskStatus(taskId)
+        if (!isCurrent()) return
+        // `ready` means the core Reader/RAG assets are available, but the
+        // arXiv Worker attaches ProjectPaper only after the shared media stage
+        // reaches its terminal `completed` state. Keep polling so Discover
+        // never reports an import before it appears in Project Papers.
+        if (task.status === 'completed') {
+          importStates.value = { ...importStates.value, [resultId]: 'imported' }
+          importMessages.value = { ...importMessages.value, [resultId]: task.message || '论文已导入项目，可在项目论文中打开。' }
+          return
+        }
+        if (task.status === 'failed') {
+          importStates.value = { ...importStates.value, [resultId]: 'failed' }
+          importMessages.value = { ...importMessages.value, [resultId]: task.message || '论文解析失败，请稍后重试。' }
+          return
+        }
+        importMessages.value = {
+          ...importMessages.value,
+          [resultId]: task.message || `正在导入…${task.progress ? ` ${task.progress}%` : ''}`,
+        }
+      } catch (error: any) {
+        if (!isCurrent()) return
+        const statusCode = error?.response?.status ?? error?.status
+        if (statusCode === 401 || statusCode === 403 || statusCode === 404) {
+          importStates.value = { ...importStates.value, [resultId]: 'failed' }
+          importMessages.value = { ...importMessages.value, [resultId]: '导入任务不可用，请刷新后重试。' }
+          return
+        }
+        importMessages.value = { ...importMessages.value, [resultId]: '正在确认导入进度…' }
+      }
+    }
+
+    if (isCurrent()) {
+      importMessages.value = { ...importMessages.value, [resultId]: '导入仍在处理中，请稍后到项目论文中刷新。' }
+    }
+  }
+
+  const openPaperDetails = (paper: PaperSearchResult) => { activePaper.value = paper }
+  const closePaperDetails = () => { activePaper.value = null }
 
   return {
     projectId,
@@ -301,7 +362,6 @@ export const useDiscoverStore = defineStore('discover', () => {
     importMessages,
     actionError,
     activePaper,
-    detailDrawerOpen,
     isWorking,
     isReady,
     canSearch,

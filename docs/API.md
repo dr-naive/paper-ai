@@ -53,12 +53,16 @@ Router：`backend/app/api/papers.py`
 
 | Method | Path | 用途 |
 | --- | --- | --- |
-| GET | `/api/v1/papers/` | 获取论文列表，支持分页、状态、搜索 |
+| GET | `/api/v1/papers/` | 获取论文列表，支持分页、状态、搜索；同时返回当前用户尚未生成 Paper 记录的 `import_tasks` |
 | POST | `/api/v1/papers/upload` | 上传 PDF 论文 |
 | GET | `/api/v1/papers/tasks/{task_id}` | 获取后台处理任务状态 |
+| POST | `/api/v1/papers/tasks/{task_id}/retry` | 重试当前用户失败的导入任务，或仅重试已可用论文失败的图表增强阶段 |
 | GET | `/api/v1/papers/{paper_id}` | 获取论文详情 |
 | GET | `/api/v1/papers/{paper_id}/pdf` | 获取论文 PDF 文件 |
 | GET | `/api/v1/papers/{paper_id}/sections` | 获取论文章节 |
+| GET | `/api/v1/papers/{paper_id}/elements` | 获取可定位的正文/媒体元素 |
+| POST | `/api/v1/papers/{paper_id}/sections/rebuild` | 按当前解析结果重建章节 |
+| PATCH | `/api/v1/papers/{paper_id}/status` | 更新论文处理状态（受保护的内部任务契约） |
 | DELETE | `/api/v1/papers/{paper_id}` | 删除论文 |
 | POST | `/api/v1/papers/{paper_id}/qa` | 针对论文提问 |
 | POST | `/api/v1/papers/{paper_id}/interpret` | 论文解读 |
@@ -86,6 +90,8 @@ Router：`backend/app/api/projects.py`
 | DELETE | `/api/v1/projects/{project_id}` | 删除当前用户的 Project |
 | GET | `/api/v1/projects/{project_id}/papers` | 列出正式加入 Project 的论文，可按 `role` 筛选 |
 | POST | `/api/v1/projects/{project_id}/papers` | 将当前用户拥有的论文加入 Project；重复加入时更新关系 metadata |
+| PATCH | `/api/v1/projects/{project_id}/papers/{paper_id}` | 更新 Project Paper 关系 metadata |
+| DELETE | `/api/v1/projects/{project_id}/papers/{paper_id}` | 从 Project 移除论文关系 |
 | GET | `/api/v1/projects/{project_id}/papers/{paper_id}/profile` | 获取项目语境下的版本化 Paper Profile |
 | POST | `/api/v1/projects/{project_id}/papers/{paper_id}/profile/regenerate` | 异步重试或重新生成 Paper Profile |
 
@@ -126,6 +132,8 @@ Paper Profile 复用 `ProjectPaper.analysis_card.paper_profile`，状态为 `pen
 | DELETE | `/api/v1/projects/{project_id}/notes/{note_id}` | 删除结构化项目笔记 |
 | GET | `/api/v1/projects/{project_id}/evidence` | 读取项目证据 |
 | POST | `/api/v1/projects/{project_id}/evidence` | 创建已加入项目文档库论文的证据 |
+| DELETE | `/api/v1/projects/{project_id}/evidence/{evidence_id}` | 删除项目证据 |
+| GET | `/api/v1/evidence/{evidence_id}` | 获取仍属于当前用户项目的单条证据 |
 
 除既有研究笔记类型外，V1 typed Literature Memory 使用 `project_decision`、`literature_intent`、`literature_preference` 和 `literature_exclusion`。这些类型只会在 Context Manager 的相应用例中读取；普通聊天、原始 provider 响应和 raw reasoning 不会自动进入长期上下文。旧 `/memory` JSON 读写端点保持兼容，但不作为新的 Discovery Context 来源。
 
@@ -180,9 +188,54 @@ Router：`backend/app/api/chat.py`
 
 前端主要调用文件：`frontend/src/api/paper.ts`
 
-## 已移除接口
+## Writing Documents 与 Citation Verification
 
-当前不提供笔记功能，`/api/v1/notes` 未挂载到 FastAPI 应用。
+Router：`backend/app/api/documents.py`。接口受 `ENABLE_WRITING_V2` feature flag 保护，所有
+文档按 Project 所有权校验；revision 是 append-only。
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| GET | `/api/v1/projects/{project_id}/documents` | 列出项目写作文档 |
+| POST | `/api/v1/projects/{project_id}/documents` | 创建文档及初始 revision |
+| GET | `/api/v1/documents/{document_id}` | 获取文档与当前 revision |
+| PATCH | `/api/v1/documents/{document_id}` | 更新标题或文档状态 |
+| GET | `/api/v1/documents/{document_id}/revisions` | 列出 append-only revisions |
+| POST | `/api/v1/documents/{document_id}/revisions` | 创建新 revision |
+| POST | `/api/v1/documents/{document_id}/ai-actions` | 旧兼容 proposal 接口，不直接改正文 |
+| POST | `/api/v1/documents/{document_id}/citation-audit` | 执行完整性、lexical 与语义 Citation Verification |
+| POST | `/api/v1/projects/{project_id}/writing/agent/rewrite` | 返回选中文本 rewrite proposal |
+| POST | `/api/v1/projects/{project_id}/writing/agent/generate` | 返回单段 evidence-backed proposal |
+
+Writing Agent 的两个 V1 endpoint 都只返回 proposal；用户明确 Replace/Copy 后才由编辑器提交
+revision。`verified`、`weak`、`unsupported` 等 Citation 状态保持结构化，不从正文标记推断。
+
+## Agent Execution / SSE
+
+Router：`backend/app/api/executions.py`。接口受 `ENABLE_AGENT_RUNTIME_V2` 保护，所有执行按用户
+和 Project 所有权校验；事件可通过分页接口重放，也可通过 SSE 持续读取。
+
+| Method | Path | 用途 |
+| --- | --- | --- |
+| POST | `/api/v1/projects/{project_id}/executions` | 创建执行并排队（202） |
+| GET | `/api/v1/projects/{project_id}/executions` | 列出项目执行 |
+| GET | `/api/v1/executions` | 列出当前用户执行 |
+| GET | `/api/v1/executions/{execution_id}` | 获取执行状态 |
+| GET | `/api/v1/executions/{execution_id}/events` | 分页读取事件 |
+| GET | `/api/v1/executions/{execution_id}/stream` | SSE 读取事件并支持断点 `after` |
+| POST | `/api/v1/executions/{execution_id}/cancel` | 取消执行 |
+| POST | `/api/v1/executions/{execution_id}/pause` | 暂停执行 |
+| POST | `/api/v1/executions/{execution_id}/resume` | 恢复执行 |
+| POST | `/api/v1/executions/{execution_id}/approve` | 通过等待用户审批的执行 |
+
+## 路由兼容与未挂载接口
+
+顶层 `/api/v1/notes` 没有挂载；笔记只通过启用 `ENABLE_MEMORY_V2` 后的项目作用域
+`/api/v1/projects/{project_id}/notes` 提供。旧 `/project/:id` 和 `/project/:id/chat` 是前端
+路由兼容重定向，不是后端 Project Chat API；canonical Project 页面只使用 Overview、Discover、
+Papers、Writing。
+
+旧 Project artifact、memory、reading-execution 和 `/external-papers/*` 路由仍可能被旧脚本或
+兼容客户端调用，但不属于 V1 主导航，也不应作为新的用户入口扩展。
 
 ## Literature Discovery API
 
@@ -220,9 +273,10 @@ POST 请求体为 `{intent, filters?, max_results?}`：`intent.topic` 必填，`
 
 ## 文档维护规则
 
-`API.md` 是当前实现 Contract，不是未来 API 设计文档。
+`API.md` 是当前实现 Contract，不是未来 API 设计文档；上面的兼容路由明确标记为非 V1 主入口。
 
-以下接口只有在对应 Phase 实现、测试通过后才能加入：
+新增接口只有在对应 Phase 实现、测试通过后才能加入；以下是维护检查项，不代表这些未来能力
+已经存在：
 
 - Project V1 后续新增 / 调整接口
 - Literature Discovery API

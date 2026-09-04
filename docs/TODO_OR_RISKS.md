@@ -80,73 +80,15 @@ Tool 保持原子，不允许一个 Tool 同时完成理解需求、搜索、筛
 
 ---
 
-## RISK-003 — 当前 Project Workspace 产品面过载
-
-Status: OPEN
-Priority: P0
-Owner Phase: Phase 1 / Phase 9
-
-当前 `ProjectWorkspace.vue` 暴露了大量研究地图、证据矩阵、实验设计、写作产物、Agent 活动等功能。
-
-风险：
-
-- 用户主线不清楚。
-- 新功能继续以 Tab 形式堆积。
-- 前端复杂度持续集中在单页面。
-
-V1 目标只保留：
-
-```text
-Overview
-Discover
-Papers
-Writing
-```
-
-旧功能底层代码可暂时保留，但不再作为一级产品入口继续扩展。
-
----
-
-## RISK-004 — Academic Search Provider 尚未最终选型
-
-Status: OPEN
-Priority: P0
-Owner Phase: Phase 2
-
-当前已有 arXiv 与 Semantic Scholar 相关能力，但尚未形成稳定的 V1 主搜索 Provider 策略。
-
-需要在 Phase 2 开始时明确：
-
-- Primary Provider
-- Secondary / enrichment Provider
-- rate limit
-- API key / auth
-- abstract coverage
-- year / language / field / publication-type filter support
-- open-access / PDF metadata support
-
-候选包括：
-
-- Semantic Scholar
-- OpenAlex
-- arXiv
-- Crossref
-
-不要求 V1 同时接入全部 Provider。
-
-最终决策记录到：
-
-`docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`
-
----
-
 ## RISK-005 — Citation Audit 不能等同于语义 Citation Verification
 
-Status: OPEN
+Status: MITIGATED
 Priority: P0
 Owner Phase: Phase 5
 
-当前已有 citation audit / lexical 检查基础，但仅依靠字符或关键词重叠不足以判断：
+Phase 5 已在既有 citation audit / lexical gate 后接入结构化 semantic support verifier，
+并持久化 `verified / weak / unsupported`。残余风险是外部模型对复杂 claim、因果关系和证据
+强度的判断仍需持续抽样评估：
 
 > Evidence 是否真正支持 Generated Claim。
 
@@ -156,7 +98,7 @@ Owner Phase: Phase 5
 - 相关性被夸大为因果关系。
 - 引用存在但 claim strength 超出来源。
 
-处理方向：
+当前保护：
 
 ```text
 Referential Integrity
@@ -165,17 +107,17 @@ Referential Integrity
 → verified / weak / unsupported
 ```
 
-Lexical audit 保留为基础层，不推倒重写。
+Lexical audit 保留为基础层；超时、无效响应、鉴权失败和限流不得标记为 verified。
 
 ---
 
 ## RISK-006 — Project Context 仍有退化为“大 Prompt”的风险
 
-Status: OPEN
+Status: MITIGATED
 Priority: P0
 Owner Phase: Phase 4
 
-V1 Context 必须明确分层：
+Phase 4 已落地并通过回归验证的 Context 分层：
 
 ```text
 Project Profile
@@ -191,55 +133,22 @@ Writing Context
 - 普通对话污染长期研究 Context。
 - Writing 每次重新读取全部论文，成本和稳定性不可控。
 
-处理方向：
+当前保护：
 
-- 引入 Context Manager。
-- Paper Profile 用于候选论文筛选。
-- Evidence 按需从真实全文检索。
+- `ContextManager` 先构造 Project Profile / Literature Memory，再由 Paper Profile 缩小候选。
+- Evidence 只按需从真实全文检索，不把全文或所有项目论文塞进单次 prompt。
 - ordinary chat history 默认不作为长期 Writing Memory。
-
----
-
-## RISK-007 — Paper Profile 与现有 `analysis_card` 可能形成重复模型
-
-Status: OPEN
-Priority: P1
-Owner Phase: Phase 4
-
-当前 `ProjectPaper.analysis_card` 已经具备结构化论文分析基础。
-
-风险：
-
-如果新建：
-
-```text
-PaperMemory
-PaperProfileV2
-PaperContextCard
-```
-
-会形成重复数据源。
-
-处理方向：
-
-优先将 `analysis_card` 演化为稳定 Paper Profile schema，并加入：
-
-- schema version
-- generation status
-- provenance
-- regeneration support
-
-只有确认现有字段无法扩展后，才考虑新表。
+- 残余风险是后续新用例绕过这些边界；新增 Writing/Discovery 代码必须继续使用 typed services。
 
 ---
 
 ## RISK-008 — Writing Agent 改造可能破坏现有编辑能力
 
-Status: OPEN
+Status: MITIGATED
 Priority: P0
 Owner Phase: Phase 6–8
 
-当前分支已经有：
+当前分支已经有并通过 Phase 6–8 回归验证：
 
 - Tiptap
 - WritingDocument
@@ -248,7 +157,7 @@ Owner Phase: Phase 6–8
 - citation audit
 - export
 
-风险：
+仍需持续监控的残余风险：
 
 为了实现新的右侧 Writing Agent 而重造编辑器或修改持久化模型，可能破坏：
 
@@ -258,24 +167,24 @@ Owner Phase: Phase 6–8
 - export
 - existing document data
 
-处理方向：
+当前保护：
 
 - 现有编辑器核心 KEEP。
 - 只重构布局和 Agent interaction。
 - Writing backend 新能力优先通过 Application Service 接入。
-- Phase 6–8 必须有 revision/export regression tests。
+- Phase 6–8 的 revision/export regression tests 已通过；Proposal 仍不会自动写入正文。
 
 ---
 
 ## RISK-009 — 新 Project 主线可能破坏现有 Reader / RAG
 
-Status: OPEN
+Status: MITIGATED
 Priority: P0
 Owner Phase: Phase 1 / 4 / 8
 
 用户已明确 V1 不重做 Reader。
 
-风险：
+残余风险：后续 Project 路由或 Context 变更仍可能侵入 Reader/RAG。
 
 - Project route 重构破坏 Reader 入口。
 - Project Context 改造侵入旧 QA。
@@ -286,19 +195,19 @@ Owner Phase: Phase 1 / 4 / 8
 - `PaperReader.vue` 作为 V1 protected asset。
 - Writing Evidence Retrieval 复用现有 Hybrid Retrieval。
 - 不建立第二套向量库。
-- Phase 1、4、8 做 Reader regression。
+- Phase 1、4、8 的 Reader/RAG regression 已通过；后续改动仍必须复用同一套检索和 Reader 资产。
 
 ---
 
 ## RISK-010 — Search Provider 与 PDF Import 安全边界可能被混淆
 
-Status: OPEN
+Status: MITIGATED
 Priority: P0
 Owner Phase: Phase 2
 
 搜索 API 可以返回任意论文页面和链接，但这不代表这些 URL 都可以被后端安全下载。
 
-风险：
+残余风险：新增 Provider 或 approved source 时仍可能错误扩大下载边界。
 
 - 为了支持更多 Provider，把 `remote_paper_import.py` 变成 arbitrary URL downloader。
 - SSRF / 非 PDF / 超大文件风险。
@@ -308,53 +217,9 @@ Owner Phase: Phase 2
 
 - Search Provider 与 Import Provider 分离。
 - 保留 host allowlist、size limit、PDF magic bytes、temporary file cleanup。
-- 无可批准全文来源时：
+- 无可批准全文来源时仍必须：
   - Download disabled
   - Import disabled
-
----
-
-## RISK-013 — 当前 `ARCHITECTURE.md` 已落后于代码事实
-
-Status: MITIGATED
-Priority: P1
-Owner Phase: Phase 9
-
-Phase 0 已把 `ARCHITECTURE.md` 更新为当前架构事实与 V1 迁移边界，但它在迁移期间仍不是最终稳定架构文档。
-
-- application layer
-- execution service
-- Project models
-- research/evidence models
-- WritingDocument / revision
-- Agent runtime evolution
-- V1 migration boundary
-
-剩余处理：
-
-- Phase 9 根据最终代码同步为稳定长期架构文档。
-- 删除迁移期目标措辞，只保留实际落地事实。
-
----
-
-## RISK-014 — `API.md` 不完整，但不能提前写未来 API
-
-Status: OPEN
-Priority: P1
-Owner Phase: Phase 1–9
-
-当前 `API.md` 只覆盖部分认证、论文和聊天接口。
-
-风险：
-
-- Project / execution / writing 等当前真实 API 未完整记录。
-- 如果现在直接写入未来 discovery/writing endpoint，会让文档再次失真。
-
-处理方向：
-
-- Phase 0 只增加文档状态与维护规则。
-- 每个 Phase 在真实 API + tests 完成后同步 `API.md`。
-- `API.md` 只记录已存在并经过测试的接口。
 
 ---
 
@@ -405,8 +270,6 @@ Phase 0 还消除了以下旧风险，因此不再保留为当前 OPEN 条目：
 
 - lead_agent God Object
 - literature_research God Object
-- Project Workspace overload
-- search provider selection
 - citation verification quality
 - context architecture
 - Writing regression
@@ -415,9 +278,8 @@ Phase 0 还消除了以下旧风险，因此不再保留为当前 OPEN 条目：
 
 ## P1
 
-- Paper Profile schema reuse
-- ARCHITECTURE sync
-- API documentation completeness
+- optional container egress still depends on host proxy listener binding if the enhancement is reopened; direct egress is the accepted V1 path (see `BLOCKER-004`)
+- continued boundary regression checks for mitigated Reader/Writing/import risks
 
 ## P2
 

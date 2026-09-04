@@ -55,7 +55,7 @@ const formatTime = (value: string) => new Date(value).toLocaleString('zh-CN', { 
 const openExecution = (execution: AgentExecution) => {
   if (!execution.project_id) return
   open.value = false
-  router.push({ path: `/project/${execution.project_id}`, query: { panel: 'activity', execution: execution.id } })
+  router.push({ name: 'ProjectOverview', params: { projectId: execution.project_id } })
 }
 onMounted(() => executionStore.loadGlobal().catch(() => undefined))
 </script>

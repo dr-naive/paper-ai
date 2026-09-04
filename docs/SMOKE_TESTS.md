@@ -22,6 +22,27 @@ docker compose up -d
 - 后端健康检查：http://localhost:8000/health
 - API 文档：http://localhost:8000/docs
 
+## 可选 Docker 出站代理
+
+默认不设置代理时，`backend` 和 `worker` 直连外部服务。需要使用宿主机代理时，
+先让代理程序允许 Docker 网桥访问，再在本地 `.env` 配置（不要提交该文件）：
+
+```env
+PAPERAI_HTTP_PROXY=http://host.docker.internal:7892
+PAPERAI_HTTPS_PROXY=http://host.docker.internal:7892
+```
+
+重建并检查两个服务收到的代理地址：
+
+```bash
+docker compose up -d --build backend worker
+docker compose exec backend sh -lc 'python -c "import os; print(os.environ.get(\"HTTPS_PROXY\") or \"direct\")"'
+docker compose exec worker sh -lc 'python -c "import os; print(os.environ.get(\"HTTPS_PROXY\") or \"direct\")"'
+```
+
+如果代理只监听宿主机 `127.0.0.1`，容器不能访问它；不要把容器代理地址写成
+`127.0.0.1:7892`。未配置或代理不可用时，PaperAI 仍使用直连和既有超时/失败处理。
+
 ## 后端基础检查
 
 ```bash
@@ -117,108 +138,72 @@ docker compose logs --tail 200 backend
 3. 触发一种深度解读。
 4. 确认解读能生成或显示缓存。
 
-## 研究项目完整流程
+## V1 Project 主链
 
-先登录并从浏览器开发者工具的 `localStorage.access_token` 获取测试令牌。测试账号至少需要有一篇已上传论文。
+这是 Phase 9 之后仍应保持稳定的产品级 smoke；它不把旧 Research Map、Reading Plan、Evidence
+Matrix、Experiment Design、Activity 或 Universal Project Chat 当作验收步骤。
+
+### 1. Discover → Papers
+
+1. 登录后进入 `/projects`，创建或打开一个 Project。
+2. 确认 Project 内只出现 `/projects/{id}/overview`、`/discover`、`/papers`、`/writing` 四个
+   canonical 页面；`/projects/{id}`、`/project/{id}` 和 `/project/{id}/chat` 均应重定向到 Overview。
+3. 在 Discover 输入检索意图并提交结构化 filters（年份、语言、领域、出版物类型）。结果必须是
+   真实结构化论文对象，摘要保留完整 Provider 内容，不由前端解析 prose。
+4. Provider 路径应遵守：Semantic Scholar Academic Graph 未认证优先；Crossref 仅用于 metadata
+   enrichment / bounded fallback；`SEMANTIC_SCHOLAR_API_KEY` 是可选增强，不是启动条件。匿名
+   429/401/403/超时应显示有界错误或回退，不得伪造论文或无限 retry。
+5. 分别验证 Favorite、Download、Import 是独立动作。Import 只接受合法 arXiv 标识和 approved
+   locator；Worker 负责下载、PDF 校验、解析、索引和 Project Papers 关联，前端显示 queued →
+   processing → completed/failed。重复导入同一论文不得创建重复任务。
+
+### 2. Papers → Reader / Profile
+
+1. 在 Project Papers 打开已完成导入的论文，确认 `/paper/{id}` Reader 能加载 PDF、章节和可定位
+   elements，并能执行原有正文问答/RAG。
+2. 确认导入完成后 Paper Profile 在 Worker 中异步生成；Profile 失败不影响 Reader、Project Papers
+   或既有 QA。
+
+### 3. Writing → Evidence → Citation
+
+1. 进入 `/projects/{id}/writing`，创建或打开 WritingDocument；确认 Tiptap、当前 revision 和
+   导出能力保持可用。
+2. 无选中文本时请求生成一段文字；服务端只能从当前 Project 已导入、可检索且有可用 Profile 的
+   论文中取得 Evidence。返回 proposal，不应自动改正文。
+3. 选中文本请求 rewrite；确认 proposal 显示结构化 citation 状态，并可显式 Replace、Copy 或
+   放弃。接受后才创建新 revision；过期 `base_revision_id` 返回冲突。
+4. 对包含 Citation Node 的 revision 执行 citation audit，确认 Project/Paper/Evidence 归属、
+   source locator、lexical gate 和 semantic verifier 均执行；`unsupported` / `weak` 不得显示为
+   verified。
+5. 导出 Markdown、LaTeX、Word 或投稿包时，确认正文、引用映射和审计结果与当前 revision 一致。
+
+### 4. Compatibility / developer-only checks
+
+以下脚本仍用于兼容后端 artifact/tool 链路和历史数据回归，不是 V1 产品验收，也不应据此恢复
+已删除的旧前端入口：
 
 ```bash
 cd backend
 PAPERAI_TOKEN='<access-token>' python -m scripts.verify_project_flow
-```
-
-也可以指定论文和服务地址：
-
-```bash
-PAPERAI_TOKEN='<access-token>' \
-PAPERAI_PAPER_ID='<paper-id>' \
-PAPERAI_BASE_URL='http://localhost:8000' \
-python -m scripts.verify_project_flow
-```
-
-脚本覆盖项目 CRUD、项目文档库、精读队列、结构化论文阅读卡片、带论文/页码来源的长期记忆、领域地图、写作产物以及项目会话的 `project_id` 贯穿。默认无论成功或失败都会删除测试项目；传 `--keep` 可保留数据用于前端检查。
-
-脚本还会建立“证据矩阵 → 实验设计 → 论文蓝图 → 章节草稿”的血缘样本，并确认通用 REST
-接口不能伪造受信任审计报告或论文终稿。
-
-### Agent 工具链完整验证
-
-下面的验证器不调用 LLM，不消耗模型额度，但会加载真实的 21 个项目 `StructuredTool`，并使用
-数据库中一篇现有论文生成临时项目，并一路执行到终稿和投稿包：
-
-```bash
 docker compose run --rm --no-deps backend \
   python -m scripts.verify_agent_manuscript_flow
 ```
 
-覆盖论文卡片、领域地图、精读计划、证据矩阵、实验设计、论文蓝图、分节草稿、确定性参考
-文献、全文组装、审计、定稿、LaTeX 引用、Word 容器和投稿 ZIP。默认成功或失败都会清理
-临时项目；传 `--keep` 可保留产物做人工检查。
+如需检查旧 artifact 导出或 Agent tool trace，可单独运行上述脚本；失败时应先判断是否为兼容
+代码问题，不得把 Research Map 等非 V1 能力重新接回 canonical route。
 
-若要额外验证当前配置的真实 LLM 能看到项目上下文并自主选择项目工具，可运行一次最小在线冒烟
-（会产生一次很短的模型调用）：
+### 5. Block 9C optional proxy acceptance
 
-```bash
-docker compose run --rm --no-deps backend \
-  python -m scripts.verify_project_agent_live
-```
-
-脚本只要求 Agent 调用 `project_append_memory`，验证 trace 和数据库副作用后自动删除临时项目。
-
-如果已有一次由 Agent 真正完成并锁定的终稿，可追加两个参数验证四种导出与投稿包内部结构：
+代理是可选增强，不是 V1 启动条件。默认直连即可完成 V1；只有在用户主动配置并希望验证宿主机代理时才执行以下检查：
 
 ```bash
-PAPERAI_TOKEN='<access-token>' \
-python -m scripts.verify_project_flow \
-  --existing-project-id '<project-id>' \
-  --final-artifact-id '<final-manuscript-id>'
+docker compose exec backend sh -lc 'python -c "import os; print(os.environ.get(\"HTTPS_PROXY\") or \"direct\")"'
+docker compose exec worker sh -lc 'python -c "import os; print(os.environ.get(\"HTTPS_PROXY\") or \"direct\")"'
 ```
 
-也可使用 `PAPERAI_EXISTING_PROJECT_ID` 和 `PAPERAI_FINAL_ARTIFACT_ID` 环境变量。该模式会检查
-Markdown、LaTeX、Word 的 MIME 与内容、DOCX 容器，以及投稿 ZIP 中的正文、BibTeX、审计报告和清单。
-
-前端手动检查：
-
-1. 登录后从首页账户菜单进入“研究项目”，地址应为 `/projects`。
-2. 新建项目后进入 `/project/{id}`，确认研究地图、精读计划、证据矩阵、实验设计、论文写作、文档库、写作产物和长期记忆等工作区可切换。
-3. 新建空项目应首先显示“研究任务书”阶段；让 Agent 澄清题材后，工作台应显示已知背景、约束、未知项、检索式、纳入排除标准和选题评价准则，并推进到候选筛选阶段。
-4. 让 Agent 按任务书执行检索并保存候选台账；确认查询来源与结果数、去重数、纳入/排除/待定、相关度、覆盖维度和理由可见，且至少一个候选被纳入后才推进到文献入库。
-5. “领域地图”空状态应说明如何生成；生成后应显示关键词、研究问题、方法、数据集、研究空白和候选选题。
-6. 即使文档库为空，“进入项目对话”也应可用，并进入 `/project/{id}/chat`；输入框应预填当前工作流的下一步建议。
-7. 在项目对话中让 Agent 从已纳入候选中导入一个严格的 arXiv ID。工作台应显示导入的排队、处理、完成或失败状态；处理完成后论文自动加入项目文档库。重复导入同一篇论文不得创建重复任务。
-8. 加入论文、生成精读计划，确认论文按队列顺序展示，阅读理由、重点、待回答问题和状态可见。
-9. 手动把队列状态切换为“精读中”；Agent 保存论文卡片后应自动变为“已完成”。
-10. 点击“自动精读”，确认显示当前论文和总体进度；暂停应在当前论文完成后生效，继续或失败重试应从未完成论文开始。
-11. 至少完成两张论文卡片后生成“跨论文证据矩阵”，确认方法、数据集、指标、发现和局限来自卡片，冲突项显示来源编号。
-12. 基于证据矩阵保存实验设计，确认研究问题、假设、变量、数据、评价指标和威胁项可见，并正确设置是否需要新实证结果。
-13. 实证研究在用户提供真实输出后登记结果，确认运行标识、来源定位或校验和、指标、不确定性、协议偏差与假设结论可见；通用产物 REST 不能伪造 `experiment_results`。
-14. 基于已满足结果关口的实验设计生成论文蓝图，确认每个章节都有目标字数、核心主张、证据引用和引用需求；缺少证据的主张必须列入待解决项。
-15. 分章节生成草稿，确认草稿记录蓝图章节 ID、论文来源和未解决问题。结果章节写入实际数值时必须绑定对应 `experiment_results_id`。
-16. 先从章节 `evidence_refs` 生成参考文献列表，再尝试组装全文：章节缺失、仍有待解决项、参考文献键缺失或实证设计没有结果章节绑定时默认应拒绝；通过后应按蓝图顺序生成带 `[@citation_key]` 的 `full_draft`。
-17. 对完整草稿执行全文审计，确认报告绑定具体全文和版本，并分别统计 blocker、major、minor；工作台显示“草稿 → 审计 → 终稿”状态。
-18. blocker 大于零时尝试定稿，后端必须拒绝；定向修订章节、重新组装和重新审计后，旧报告不得用于新版本定稿。
-19. 确认未被章节使用的项目论文不会混入参考文献，重复作者年份生成不同引用键，缺 DOI 或 page/source_id 会明确提示；参考文献更新后，旧全文不得直接定稿。
-20. 最新审计 blocker 为零、全文无占位符且引用与参考文献一致后生成 `final_manuscript`；分别下载 Markdown、LaTeX、Word 和投稿 ZIP。
-21. 解压投稿包，确认包含 `manuscript.md`、`manuscript.tex`、`manuscript.docx`、`references.bib`、`audit-report.md` 和 `MANIFEST.txt`。
-22. 追加一条带来源论文和页码的记忆，刷新后来源仍可点击并能回到对应论文。
-23. 项目对话刷新后应恢复同一项目会话；从回答中的论文引用可跳转到对应阅读页。
-24. 在 360px、768px 和桌面宽度下检查工具栏、项目列表与研究驾驶舱：桌面端研究路线应保持可见，窄屏应变成可横向浏览的阶段导航，工作区不应横向挤压。
-25. 在研究路线依次选择任务书、候选文献、领域地图、证据矩阵、实验与写作阶段，确认右侧工作区正确切换；点击“在 Agent 中处理”后，项目对话应预填与当前工作区对应的具体任务。
-26. 删除或移除操作必须显示明确的确认说明。
-
-Agent 写作链路建议依次发送：
-
-1. “基于证据矩阵制定实验设计，明确是否需要新实证结果。”
-2. “这是实际实验输出及其来源，请登记结果；不要补写文件中不存在的数值。”
-3. “基于已满足结果关口的实验设计制定论文蓝图并保存。”
-4. “按蓝图撰写方法和结果章节；每个主张标记论文来源，结果数值绑定实验结果产物，无法支持的内容保留为待解决项。”
-5. “继续完成其余章节，不要虚构实验结果。”
-6. “检查章节、结果来源和参考文献完整性并组装全文；若仍有缺口，先返回缺口清单。”
-7. “审计全文的事实、引用、结果完整性、主张证据覆盖与结构问题，并保存审计报告。”
-8. “按审计报告定向修订阻断项，重新组装并审计；通过后锁定终稿。”
-
-验收重点不是模型是否能生成长文本，而是 Agent 是否调用 `project_save_paper_blueprint`、
-`project_save_section_draft`、`project_assemble_full_draft`、`project_audit_full_draft` 和
-`project_finalize_manuscript`，以及后端是否拒绝越过证据、版本、审计与完整性约束。
+随后由 Worker 发起一次有界 arXiv/Crossref 请求，确认代理路径成功；401/403/429/超时不得无限
+重试。当前代理监听仅绑定宿主机 loopback 时，可记录为可选验证未执行；直连路径仍是默认验收路径，
+不得因此阻塞 V1。
 
 前端构建验证：
 

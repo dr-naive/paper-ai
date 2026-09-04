@@ -398,7 +398,11 @@ class HybridPaperRetriever:
                     "chunk_type": "image",
                     "image_id": str(image.id),
                     "section_id": str(image.section_id) if image.section_id else None,
-                    "bbox": list(image.bbox or []),
+                    # Image stores do not currently persist a bbox (unlike
+                    # DocumentElement/TableCell). Keep the optional locator
+                    # field stable without assuming a model attribute that
+                    # is absent in the current schema.
+                    "bbox": list(getattr(image, "bbox", None) or []),
                     "retrieval_method": "structured_image",
                 })
         return table_rows, images

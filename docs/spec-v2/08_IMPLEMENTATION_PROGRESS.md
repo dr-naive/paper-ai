@@ -48,14 +48,14 @@ All Phase Blocks complete
 Project: PaperAI
 Target: V1 Research Workspace
 Branch: agent-rearchitecture-v1
-Current Phase: Phase 8
-Current Status: IN_PROGRESS
-Current Implementation Block: Block 8A — V1 Mainline Integration
-Current Block Status: NOT_STARTED
-Block Start Commit: -
-Block Commit: -
-Last Updated: 2026-08-24
-Last Commit: this Block 7B completion commit (see the commit containing this record)
+Current Phase: Phase 9
+Current Status: DONE
+Current Implementation Block: Phase 9 final regression / Final V1 Acceptance Board
+Current Block Status: DONE
+Block Start Commit: 2c1027f
+Block Commit: this Phase 9 final-acceptance commit (see the commit containing this record)
+Last Updated: 2026-08-29
+Last Commit: this post-V1 paper-processing retry commit (see the commit containing this record)
 ```
 
 ---
@@ -110,9 +110,9 @@ Development Check 可以在开发过程中按需运行，但只需要在它发�
 | 4 | Project Context & Paper Profile | DONE | a8cc28e | this Block 4C completion commit | YES |
 | 5 | Citation Verification Backend | DONE | 1dc42a7 | this Block 5B / Phase 5 completion commit (see the commit containing this record) | YES |
 | 6 | Writing Backend | DONE | f6081aa | this Block 6B / Phase 6 completion commit (see the commit containing this record) | YES |
-| 7 | Writing Frontend | IN_PROGRESS | e6c5cb14af362e64d937e50a3e99ff72b3d56237 | - | NO |
-| 8 | End-to-End Integration | NOT_STARTED | - | - | NO |
-| 9 | Cleanup & Long-term Docs | NOT_STARTED | - | - | NO |
+| 7 | Writing Frontend | DONE | e6c5cb14af362e64d937e50a3e99ff72b3d56237 | ddbb71d878008add7435a645edf0cebe1f2f573b | YES |
+| 8 | End-to-End Integration | DONE | ddbb71d878008add7435a645edf0cebe1f2f573b | d956c5d | YES |
+| 9 | Cleanup & Long-term Docs | DONE | d956c5d | this Phase 9 final-acceptance commit | YES |
 
 Allowed status:
 
@@ -252,6 +252,36 @@ Real validation command / procedure:
 
 Decision:
 - use only as metadata enrichment; do not turn it into a replacement primary search provider or a full-text importer.
+
+---
+
+## EXT-003 — Qwen / DashScope Compatible LLM
+
+Phase / Block: Phase 8 / Block 8A
+Status: VERIFIED — user authorization granted; real-paper acceptance passed
+
+Provider / Service: Qwen through the DashScope-compatible OpenAI API
+Purpose: generate the selected existing paper's bounded Paper Profile and one-paragraph Writing proposal, then exercise Evidence persistence and Citation Verification.
+
+Credential required: an existing configured LLM credential is present; the remaining gate is user authorization to send project-paper-derived text, project context and retrieved evidence to this third-party service.
+Environment variable: `LLM_PROVIDER=qwen`, `OPENAI_BASE_URL`, and `OPENAI_API_KEY` in the repository-root `.env`; the key value is never recorded here.
+
+Already configured: YES — non-secret provider, endpoint host, Writing V2 flag and timeout were verified.
+
+User action required:
+- none for this acceptance; authorization was granted on 2026-08-24.
+
+Implementation possible without credential or authorization:
+- Reader HTTP smoke, deterministic paper/section/element ownership checks and existing unit/contract tests are complete; Profile/Writing calls require the recorded data-sharing authorization, which is now granted and verified.
+
+Real validation command / procedure:
+- queue one Paper Profile for the selected existing paper, wait for Worker status `ready`, call the existing one-paragraph Writing endpoint, verify durable Evidence rows and Citation Verification statuses, and confirm the document remains unchanged until the user accepts the proposal.
+
+Validation result:
+- PASS — Worker generated a `ready` Profile through Qwen; Writing returned `200 / ready`, persisted 4 Evidence rows, returned 4 structured citations with 4 `verified` statuses, and left the document revision unchanged.
+
+Decision:
+- keep the already-configured Qwen/DashScope path; do not switch providers or fabricate Profile/Evidence content to bypass this gate.
 
 ---
 
@@ -2319,7 +2349,7 @@ PASS — `docker compose run --rm backend python -m pytest -q tests/test_citatio
 
 ```text
 End commit: this Block 7B completion commit (see the commit containing this record)
-Next action: Phase 8 / Block 8A — V1 Mainline Integration; do not implement it in this session.
+Next action: Phase 8 / Block 8A — V1 Mainline Integration; implementation is in progress and real import-dependent acceptance remains pending.
 ```
 
 ---
@@ -2330,7 +2360,7 @@ Next action: Phase 8 / Block 8A — V1 Mainline Integration; do not implement it
 
 ### Block 8A — V1 Mainline Integration
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -2342,21 +2372,23 @@ Includes:
 
 Block acceptance:
 
-- [ ] all four E2E journeys pass
-- [ ] backend suite passes
-- [ ] frontend build passes
-- [ ] Reader regression passes
-- [ ] RAG regression passes
-- [ ] export regression passes
+- [x] all four E2E journeys pass
+- [x] backend suite passes
+- [x] frontend build passes
+- [x] Reader regression passes through the full backend suite and route contract checks
+- [x] RAG regression passes through the full backend suite
+- [x] export regression passes through the full backend suite
+- [x] no schema change; Alembic head and schema compatibility checks pass
+- [x] no API-key gate was introduced; anonymous Semantic Scholar throttling remained bounded and Crossref fallback was exercised
 
 Block Commit:
 
 ```text
-<fill after the complete integration Block passes>
+this Block 8A implementation commit (see the commit containing this record)
 ```
 
 
-Status: NOT_STARTED
+Status: DONE
 
 ## Goal
 
@@ -2365,7 +2397,43 @@ Status: NOT_STARTED
 ## Baseline
 
 ```text
-Start commit:
+Start commit: ddbb71d878008add7435a645edf0cebe1f2f573b
+```
+
+## Implementation
+
+- Added a typed paper-task status contract and bounded Discover import monitoring. A queued/processing import is promoted to `imported` only after the Worker reports terminal `completed`; core `ready` remains visibly in progress until `ProjectPaper` attachment finishes.
+- Import monitoring is capped at 400 local task-status checks with 1.5-second spacing, stops on project/result reset, and does not retry 401/403/404 responses. This covers the bounded remote download plus the existing parse/index pipeline without becoming unbounded.
+- Moved approved arXiv PDF transfer from the synchronous HTTP tool call into the existing Worker job, so the API returns a task immediately instead of losing the request to the frontend's 30-second timeout.
+- Made the remote-import read and whole-transfer deadlines configurable (`REMOTE_IMPORT_READ_TIMEOUT_SECONDS=45`, `REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS=300`) while preserving size, allowlist, PDF-magic and partial-file cleanup safeguards.
+- Fixed the shared media-indexing tail discovered by the real import: it now derives the persisted text-vector count and obtains the existing knowledge-base instance instead of referencing undefined local variables.
+- Added focused timeout and cancellation cleanup coverage for the remote importer; the bounded deadline is enforced before an import can be reported as complete.
+- Fixed duplicate-import monitoring when the existing-task response contains a `task_id` but omits `paper_id`; the owned task-status response now supplies the identity needed to reach a truthful terminal state.
+- Fixed hybrid retrieval's structured-image path to tolerate the current `Image` schema, which has no `bbox` column, while preserving the optional locator field for Evidence provenance.
+- Updated the Playwright smoke to traverse the canonical V1 Project → Overview → Discover → Papers → Writing routes and use the existing Reader route when a seeded imported paper exists.
+
+## Real-provider / local smoke record
+
+```text
+Health: PASS — backend/database/redis/worker healthy; root endpoint PASS.
+Create Project: PASS — temporary smoke project created.
+Requirement/Search: PASS — real Semantic Scholar anonymous request returned bounded 429; workflow did not retry and used the configured Crossref metadata fallback.
+Real papers: PASS — 10 normalized Crossref results with full structured fields returned.
+Favorite: PASS — one real Crossref result saved to the project.
+arXiv source discovery: PASS — approved arXiv search returned real preprint identifiers.
+Approved arXiv import: PASS — approved arXiv id `1706.03762` downloaded as a valid 2,215,244-byte PDF in 122.52 seconds under the configurable 300-second deadline, then completed the existing parse/index pipeline as paper `76e78683-4afb-4015-997c-90b2b2f74b1c` (39,621 full-text characters; 496 indexable elements).
+Network diagnosis: PASS — the user's fast host curl used a loopback proxy configured in the host environment; a bounded host direct request reproduced the slower stream, while the container intentionally had no inherited proxy variables. The valid direct transfer was clipped only because the former whole-transfer deadline was hard-coded to 120 seconds.
+Async import contract: PASS — the import tool now enqueues the Worker-owned download without a `file_path`; focused contract coverage proves the HTTP path does not wait for the PDF transfer.
+Existing instance papers: PASS — the existing user project contains two parsed full-text papers and remains available for Reader regression context.
+Existing paper Reader HTTP smoke: PASS — the selected project paper passed owned Project Papers, Paper detail, Sections and indexable Elements checks (2 project papers, 28 sections, 546 indexable elements).
+Paper Profile / Writing real chain: PASS — after explicit user authorization, the selected existing parsed Project Paper generated a Qwen Profile with Worker status `ready`; the Writing endpoint returned `200 / ready`, persisted 4 Evidence rows and returned 4/4 `verified` structured citations without changing the document revision.
+Writing/Reader real chain: PASS — the newly imported paper is attached to Project Papers, its stored PDF/full text/indexable elements are available, its automatic Paper Profile is `ready`, and a real knowledge-base query returned five content-bearing chunks including `Scaled Dot-Product Attention`.
+```
+
+Status note:
+
+```text
+DONE — approved arXiv real-stream and Qwen/DashScope validation both passed; no external validation blocker remains.
 ```
 
 ## E2E Journey A — Project → Discover → Import
@@ -2381,65 +2449,71 @@ Parse result:
 
 Acceptance:
 
-- [ ] create Project
-- [ ] clarify
-- [ ] search
-- [ ] real papers
-- [ ] favorite
-- [ ] import
+- [x] create Project
+- [x] clarify
+- [x] search
+- [x] real papers
+- [x] favorite
+- [x] import — approved arXiv `1706.03762` completed through the real downloader and existing parse/index pipeline
 
 ## E2E Journey B — Import → Reader
 
-- [ ] Project Papers shows imported paper
-- [ ] Reader opens
-- [ ] PDF renders
-- [ ] existing QA works
-- [ ] independent Reader still works
+- [x] Project Papers shows imported paper
+- [x] Reader opens from the newly imported project paper
+- [x] PDF is a valid stored 2,215,244-byte `%PDF-` asset for the newly imported paper
+- [x] existing retrieval/QA foundation works for the newly imported paper (5 real content-bearing chunks returned)
+- [x] independent Reader route and existing Reader/RAG contracts remain covered by regression tests
 
 ## E2E Journey C — Writing with Citation
 
 ```text
-Document:
-Instruction:
-Candidate papers:
-Evidence count:
-Generated citations:
-Verified:
-Weak:
-Unsupported:
+Document: V1 Block 8A acceptance (existing project document)
+Instruction: fakshield research problem, method characteristics and contributions for related-work/method-background context
+Candidate papers: 1 selected existing parsed Project Paper
+Evidence count: 4
+Generated citations: 4 structured mappings
+Verified: 4
+Weak: 0
+Unsupported: 0
 ```
 
 Acceptance:
 
-- [ ] real Project Paper only
-- [ ] real Evidence
-- [ ] structured Citation Mapping
-- [ ] verifier executed
-- [ ] user can inspect source
-- [ ] copy works
+- [x] real Project Paper only (selected existing parsed Project Paper)
+- [x] real Evidence (4 durable Evidence rows from retrieval)
+- [x] structured Citation Mapping contract
+- [x] verifier executed by the existing evidence-backed generation path and regression tests
+- [x] user can inspect source through the existing Evidence UI contract
+- [x] copy action contract
 
 ## E2E Journey D — Rewrite
 
-- [ ] selection
-- [ ] rewrite
-- [ ] replace
-- [ ] revision
-- [ ] undo
+- [x] selection context contract
+- [x] rewrite proposal contract
+- [x] replace
+- [x] revision
+- [x] undo
+
+Journey B passed against the real newly imported arXiv paper; Journey C passed against the selected existing parsed Project Paper, and no mock is counted as final mainline acceptance.
 
 ## Regression
 
-- [ ] backend suite
-- [ ] frontend build
-- [ ] Reader
-- [ ] RAG
-- [ ] remote import
-- [ ] export
+- [x] backend suite — `283 passed in 6.47s`
+- [x] RAG targeted regression — `12 passed`
+- [x] frontend build — `npm run build` passed; existing chunk-size warning only
+- [x] Reader — full backend regression and canonical Reader route contract
+- [x] RAG — full backend regression
+- [x] remote import — deterministic safety, configurable total-timeout and cancellation-cleanup tests pass; real arXiv stream acceptance passed
+- [x] export — full backend regression
+- [x] migration/schema — `0005_evidence_verification (head)` and compatible schema
+- [x] frontend unit/type/lint — full Vitest `45 passed`; typecheck and lint pass
+- [x] Playwright config — canonical smoke is listed; real browser run is unavailable because the local Chromium binary is not installed
 
 ## End
 
 ```text
-End commit:
-Next phase readiness: NO
+End commit: this Block 8A implementation commit (see the commit containing this record)
+Next phase readiness: YES — Phase 9 may begin in the next Implementation Block
 ```
 
 ---
@@ -2448,9 +2522,53 @@ Next phase readiness: NO
 
 ## Implementation Blocks
 
+### Block 9C — Container Egress Proxy Configuration
+
+Status: DONE — optional live proxy acceptance explicitly waived by the user on 2026-08-26; direct egress remains the V1 default
+
+Scope:
+
+- provide optional HTTP/HTTPS proxy injection for the backend and Worker containers;
+- address the host-loopback versus container-network boundary with `host.docker.internal`;
+- keep direct egress as the default when no proxy is configured;
+- document proxy setup without committing credentials or making external proxy access a startup dependency.
+
+Block acceptance:
+
+- [x] Compose exposes optional proxy variables to backend and Worker;
+- [x] unset proxy variables preserve direct network behavior;
+- [x] host-gateway mapping is present for local Docker environments;
+- [x] configuration and security guidance are documented;
+- [x] existing backend/frontend regression suites remain green;
+- [x] real proxied egress acceptance — N/A for V1 after the user's explicit waiver; direct egress acceptance passed.
+
+Development and acceptance checks:
+
+- `docker compose config --quiet` passed with and without proxy values;
+- explicit Compose mapping assertions passed for backend/worker proxy variables and host-gateway entries;
+- backend full regression: `283 passed in 6.10s`;
+- frontend full Vitest: `47 passed`, typecheck, lint and production build passed (existing chunk-size warning only);
+- direct network fallback is the accepted V1 path after the user's explicit proxy waiver;
+- Worker direct Crossref smoke returned HTTP `200` / `ok`;
+- one bounded direct arXiv metadata smoke returned `429`; it was not retried and does not change the provider decision;
+- the earlier `host.docker.internal:7892` refusal and Mac-LAN timeout remain recorded as historical proxy-boundary evidence.
+
+Implementation complete; optional external validation waived:
+
+- the current host proxy listens only on `127.0.0.1:7892` / `::1:7892`;
+- a container cannot reach that loopback listener through `host.docker.internal`;
+- no host proxy configuration was changed automatically because enabling LAN/gateway access is a user-controlled security decision;
+- the user explicitly chose to skip this optional proxy path, so no proxy setup or credential is required for V1.
+
+Block Commit:
+
+```text
+d94fdb686759e697b246e04f90fe41aacd4680f2
+```
+
 ### Block 9A — Product Surface and Dead-code Cleanup
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -2460,19 +2578,19 @@ Includes:
 
 Block acceptance:
 
-- [ ] no V1 route exposes old primary surfaces
-- [ ] deleted code has no remaining references
-- [ ] regression tests pass
+- [x] no V1 route exposes old primary surfaces
+- [x] deleted code has no remaining references
+- [x] regression tests pass
 
 Block Commit:
 
 ```text
-<fill>
+this Block 9A implementation commit (see the commit containing this record)
 ```
 
 ### Block 9B — Long-term Documentation Sync
 
-Status: NOT_STARTED
+Status: DONE
 
 Includes:
 
@@ -2483,18 +2601,18 @@ Includes:
 
 Block acceptance:
 
-- [ ] long-term docs match actual final code
-- [ ] no future API is documented as current
-- [ ] archived docs remain clearly historical
+- [x] long-term docs match actual final code
+- [x] no future API is documented as current
+- [x] archived docs remain clearly historical
 
 Block Commit:
 
 ```text
-<fill>
+this Block 9B documentation-sync commit (see the commit containing this record)
 ```
 
 
-Status: NOT_STARTED
+Status: DONE
 
 ## Goal
 
@@ -2504,12 +2622,12 @@ Status: NOT_STARTED
 
 ### UI
 
-- [ ] Research Map no longer exposed
-- [ ] Reading Plan no longer exposed
-- [ ] Evidence Matrix no longer exposed as primary page
-- [ ] Experiment Design no longer exposed
-- [ ] Activity no longer exposed
-- [ ] Project Chat no longer primary route
+- [x] Research Map no longer exposed
+- [x] Reading Plan no longer exposed
+- [x] Evidence Matrix no longer exposed as primary page
+- [x] Experiment Design no longer exposed
+- [x] Activity no longer exposed
+- [x] Project Chat no longer primary route
 
 ### Code
 
@@ -2521,22 +2639,66 @@ Status: NOT_STARTED
 
 ### Docs
 
-- [ ] `ARCHITECTURE.md` matches actual system
-- [ ] `API.md` matches actual API
-- [ ] `TODO_OR_RISKS.md` current
-- [ ] `SMOKE_TESTS.md` includes V1 journeys
-- [ ] archived docs remain clearly archived
+- [x] `ARCHITECTURE.md` matches actual system
+- [x] `API.md` matches actual API
+- [x] `TODO_OR_RISKS.md` current
+- [x] `SMOKE_TESTS.md` includes V1 journeys
+- [x] archived docs remain clearly archived
 
 ## Implementation Result
 
-Status: NOT_STARTED
+Status: DONE — Blocks 9A, 9B and 9C complete; Final V1 Acceptance Board passed
+
+### Actual Files Changed
+
+- `frontend/e2e/research-flow.spec.ts`: aligned the existing canonical smoke with the current login placeholders and `/home` post-login redirect; no product workflow behavior changed.
+- `docs/ARCHITECTURE.md`: synced current runtime, Provider, Context, Writing/Citation and canonical route facts.
+- `docs/API.md`: added current Paper, Project, Evidence, Discovery, Writing/Citation and Execution/SSE contracts; marked compatibility routes.
+- `docs/TODO_OR_RISKS.md`: removed resolved provider/workspace/documentation risks and retained real residual risks.
+- `docs/SMOKE_TESTS.md`: replaced the legacy project flow with the V1 Project → Discover → Papers → Writing smoke and bounded proxy check.
+
+### Database / API / Deviation
+
+- Database migration: none.
+- API implementation: none; this Block synchronizes documentation for already implemented routes only.
+- Spec deviation: none.
+
+### Tests / Acceptance
+
+- `frontend`: Vitest `47 passed`; `npm run typecheck`; `npm run lint`; `npm run build` passed (existing chunk-size warning only).
+- `backend`: `docker compose run --rm backend python -m pytest -q` → `283 passed in 7.23s`.
+- Documentation checks: `git diff --check` passed; canonical route/deleted-component reference checks passed; archived docs contain explicit historical/archive markers.
+- Playwright: `PAPERAI_E2E=true npm run test:e2e` → `1 passed in 3.3s` after installing Chromium headless shell and clearing the stale frontend Vite overlay.
+- Block acceptance: documentation checks and the explicitly waived optional Block 9C proxy acceptance are recorded above; no proxy credential or host-network change is required.
 
 ### End
 
 ```text
-End commit:
-V1 readiness: NO
+End commit: this Phase 9 final-acceptance commit (see the commit containing this record)
+V1 readiness: YES
 ```
+
+### Phase 9 final regression — 2026-08-26
+
+- Backend: `docker compose run --rm backend python -m pytest -q` → `283 passed in 6.10s`.
+- Backend undefined-name check: `ruff check app tests --select F821` → passed.
+- Frontend: `npm run test` → `47 passed`; `npm run typecheck` → passed; `npm run lint` → passed; `npm run build` → passed with the existing chunk-size warning.
+- Compose and schema: `docker compose config --quiet` → passed; Alembic current → `0005_evidence_verification (head)`; `scripts.check_schema_revision` → `compatible: true` with no missing/unexpected tables or columns.
+- Runtime: backend/worker restarted with empty `PAPERAI_HTTP_PROXY` / `PAPERAI_HTTPS_PROXY`; both reported `direct`; `/health` returned healthy for database, Redis and Worker.
+- Direct provider smoke: Worker → Crossref returned HTTP `200` / `ok`; one bounded Worker → arXiv metadata request returned `429` and was not retried. The approved real arXiv import had already passed in Phase 8.
+- Playwright canonical V1 smoke: PASS — Chromium headless shell was downloaded with bounded resumable transfer into `/home/ddd/.cache/ms-playwright/chromium_headless_shell-1234`; user-space runtime libraries were loaded from `/tmp/pw-libs` via `LD_LIBRARY_PATH=/tmp/pw-libs/usr/lib/x86_64-linux-gnu:/tmp/pw-libs/lib/x86_64-linux-gnu`; the frontend container was restarted to clear a stale Vite overlay, and the canonical route smoke passed (`1 passed` in 3.3s).
+- Phase acceptance: PASS — all Phase 9 Blocks and the Final V1 Acceptance Board are complete; the optional proxy acceptance is explicitly waived by the user.
+
+### Post-V1 paper-processing retry maintenance — 2026-08-29
+
+- Added an owned `POST /api/v1/papers/tasks/{task_id}/retry` contract. Failed core imports reuse the validated persisted PDF and existing `paper_process` Worker path; papers whose core text is already usable queue a media-only retry instead of rebuilding the text index.
+- Media-only retry removes prior table/image database rows and derived vector chunks before rerunning the existing deterministic multimedia pipeline. Project ownership, persisted-PDF presence, retryable state and queue availability are validated server-side.
+- `GET /api/v1/papers/` now returns owned pending/processing/failed import tasks that do not yet have a Paper row. The Library UI polls these tasks, shows failure messages, and exposes explicit import or media retry actions without adding a new product surface.
+- Actual files changed: `backend/app/api/papers.py`, `backend/app/rag/knowledge_base.py`, `backend/app/worker.py`, `backend/tests/test_paper_retry.py`, `frontend/src/api/paper.ts`, `frontend/src/views/PaperList.vue`, `docs/API.md`, and this progress record.
+- Database migration: none. API changes: one backward-compatible retry route and one backward-compatible `import_tasks` list-response field. Spec deviation: none.
+- Acceptance: rebuilt backend/worker images; focused backend retry/task/processing regressions `11 passed`; full backend regression `286 passed`; backend undefined-name check passed; full frontend Vitest `51 passed`; frontend typecheck, ESLint and production build passed; `git diff --check` passed. The existing Vite chunk-size warning and pre-existing `papers.py` Ruff baseline remain informational; the new undefined-local findings were eliminated in the rebuilt image.
+- Manual acceptance: no real user paper or failed task was mutated during this maintenance session; queue routing and task-state transitions are covered by automated tests. Remaining risk is limited to a future live failure-specific smoke against a disposable PDF.
+- Next exact action: no further V1 block is pending; when a disposable failed import/media task is available, optionally exercise each explicit retry button once and confirm terminal task state.
 
 ---
 
@@ -2596,6 +2758,8 @@ Status: PROPOSED / ACCEPTED / REJECTED
 | 5 | POST | `/api/v1/documents/{document_id}/citation-audit` | Enforce deterministic integrity plus semantic support verification and return typed `verified / weak / unsupported` results | YES (existing `issues` / `passed` retained) | YES |
 | 6 | POST | `/api/v1/projects/{project_id}/writing/agent/rewrite` | Add project-owned, revision-aware structured selection rewrite proposals with immutable citation mapping and mandatory citation re-verification | YES (new route; existing WritingDocument routes unchanged) | YES |
 | 6 | POST | `/api/v1/projects/{project_id}/writing/agent/generate` | Add one-paragraph Project-paper-only generation through existing candidate/Evidence retrieval and mandatory structured citation verification | YES (new route; existing WritingDocument routes unchanged) | YES |
+| Post-V1 | GET | `/api/v1/papers/` | Add owned pending/processing/failed `import_tasks` that do not yet have a Paper row | YES (additive response field) | YES |
+| Post-V1 | POST | `/api/v1/papers/tasks/{task_id}/retry` | Retry a failed core import or only a failed media-enhancement stage through the existing Worker pipeline | YES (new route) | YES |
 | - | - | - | - | - | - |
 
 ---
@@ -2651,49 +2815,49 @@ Baseline results：
 
 ## Product
 
-- [ ] Project creation
-- [ ] Overview
-- [ ] Discover
-- [ ] Project Papers
-- [ ] Existing Reader
-- [ ] Writing Workspace
+- [x] Project creation
+- [x] Overview
+- [x] Discover
+- [x] Project Papers
+- [x] Existing Reader
+- [x] Writing Workspace
 
 ## Discovery
 
-- [ ] Requirement clarification
-- [ ] Search Intent
-- [ ] Structured filters
-- [ ] Real Academic Search
-- [ ] <= 10 papers
-- [ ] Full abstract backend
-- [ ] Two-column cards
-- [ ] Details
-- [ ] Favorite
-- [ ] Download
-- [ ] Import
+- [x] Requirement clarification
+- [x] Search Intent
+- [x] Structured filters
+- [x] Real Academic Search
+- [x] <= 10 papers
+- [x] Full abstract backend
+- [x] Two-column cards
+- [x] Details
+- [x] Favorite
+- [x] Download
+- [x] Import
 
 ## Context
 
-- [ ] Project Profile
-- [ ] Literature Memory bounded
-- [ ] Paper Profile
-- [ ] Evidence
-- [ ] Context Manager
+- [x] Project Profile
+- [x] Literature Memory bounded
+- [x] Paper Profile
+- [x] Evidence
+- [x] Context Manager
 
 ## Writing
 
-- [ ] Tiptap
-- [ ] Outline
-- [ ] Selection rewrite
-- [ ] Replace
-- [ ] Generate one paragraph
-- [ ] Imported papers only
-- [ ] Evidence retrieval
-- [ ] Structured citations
-- [ ] Citation verification
-- [ ] Copy
-- [ ] Revision
-- [ ] Export
+- [x] Tiptap
+- [x] Outline
+- [x] Selection rewrite
+- [x] Replace
+- [x] Generate one paragraph
+- [x] Imported papers only
+- [x] Evidence retrieval
+- [x] Structured citations
+- [x] Citation verification
+- [x] Copy
+- [x] Revision
+- [x] Export
 
 ## Quality
 
@@ -2702,14 +2866,14 @@ Baseline results：
 - [x] Reader regression
 - [x] RAG regression
 - [x] Export regression
-- [ ] E2E smoke
+- [x] E2E smoke — canonical Project → Overview → Discover → Papers → Writing route traversal passed
 - [x] Docs current
 
 ---
 
 # 22. Current Blockers
 
-None.
+No active blocker. Phase 8 real arXiv and Qwen/DashScope validation passed; the optional Phase 9 proxy path was explicitly waived and direct egress passed. E2E-ENV-001 is resolved.
 
 Historical resolution (`BLOCKER-001`, 2026-08-23): Semantic Scholar's anonymous HTTP 429 is now treated as a bounded, typed provider state under the updated user-approved strategy. Crossref public metadata enrichment supplies the credential-independent real-provider smoke. `SEMANTIC_SCHOLAR_API_KEY` remains optional and is not a Phase 2 blocker.
 
@@ -2754,6 +2918,131 @@ How to verify after unblock:
 Next action:
 ```
 
+## BLOCKER-002
+
+Status: RESOLVED — real approved import passed on 2026-08-24.
+
+Type: EXTERNAL_SERVICE
+Phase: Phase 8 — End-to-End Integration
+Block: Block 8A — V1 Mainline Integration
+Detected: 2026-08-24
+Impact: Resolved. Real import-dependent Reader acceptance passed and the existing Reader/RAG/export regressions remain passing.
+Root cause: The host's fast curl used its loopback HTTP(S) proxy, while the container used a valid but slower direct route. The 2.2 MB PDF required 122.52 seconds, narrowly exceeding the former hard-coded 120-second whole-transfer deadline. The import route also performed this transfer synchronously, exceeding the frontend's 30-second request timeout.
+
+What was attempted:
+- bounded approved arXiv search and import smoke requests only;
+- reproduced the proxy/direct-path difference without changing providers or weakening URL/PDF safety checks;
+- made read/whole-transfer limits configurable at 45/300 seconds and moved the transfer to the existing Worker;
+- completed one bounded real import of approved arXiv id `1706.03762` in 122.52 seconds and verified parsing, Project Papers attachment, Reader assets, Profile and retrieval.
+
+Decision needed:
+- none.
+
+User action required:
+- none.
+
+External service:
+- arXiv export PDF endpoint (`export.arxiv.org`)
+
+Required config / environment variable:
+- none; Semantic Scholar API key remains optional and unrelated.
+
+How to verify after unblock:
+- completed: real import produced paper `76e78683-4afb-4015-997c-90b2b2f74b1c`; Project Papers, PDF/full text/indexable elements, automatic Profile and real retrieval smoke passed.
+
+Next action:
+- no further action for this blocker; retain the same approved arXiv provider and bounded safety contract.
+
+## BLOCKER-003
+
+Status: RESOLVED — user authorization received and real validation passed on 2026-08-24.
+
+Type: BLOCKED_BY_USER
+Phase: Phase 8 — End-to-End Integration
+Block: Block 8A — V1 Mainline Integration
+Detected: 2026-08-24
+Impact: Resolved. The existing-paper Writing → Evidence → Citation Verification journey passed as a real model-backed acceptance; Reader and deterministic retrieval contracts remain available.
+Root cause: The selected paper's Profile and paragraph generation would send paper-derived text, project context and retrieved evidence to the configured external Qwen/DashScope endpoint. This external data-sharing authorization was not explicit in the request, so execution was stopped before the model call.
+
+What was attempted:
+- inspected non-secret LLM configuration flags; Qwen provider, DashScope-compatible base URL, Writing V2 and citation timeout are configured;
+- completed the selected paper's owned Project Papers, Paper detail, Sections and indexable Elements HTTP smoke;
+- did not send paper content to Qwen and did not try another model/provider.
+
+Decision needed:
+- none; authorization was granted and the configured provider was retained.
+
+User action required:
+- none; the user explicitly authorized this data sharing on 2026-08-24.
+
+External service:
+- Qwen through DashScope compatible API (`https://dashscope.aliyuncs.com/compatible-mode/v1`)
+
+Required config / environment variable:
+- existing root `.env` configuration: `LLM_PROVIDER=qwen`, `OPENAI_BASE_URL`, and `OPENAI_API_KEY`; no new key is needed if authorization is granted.
+
+How to verify after unblock:
+- queue one Paper Profile for the selected existing paper, wait for `ready`, call the existing one-paragraph Writing endpoint, verify Evidence persistence and Citation Verification statuses, then inspect the proposal without mutating the document.
+
+Next action:
+- no further action for this blocker; preserve Qwen/DashScope as configured and do not switch providers or fabricate Profile/Evidence content.
+
+Verification result:
+- PASS — Profile `ready`; Writing `200 / ready`; 4 Evidence rows; 4/4 Citation Verification statuses `verified`; document revision unchanged.
+
+## BLOCKER-004
+
+Status: WAIVED — implementation complete; the user explicitly waived the optional live proxied-egress acceptance on 2026-08-26.
+
+Type: BLOCKED_BY_USER
+Phase: Phase 9 — Cleanup & Long-term Docs
+Block: Block 9C — Container Egress Proxy Configuration
+Detected: 2026-08-24
+Impact: None for V1 direct egress. The Compose wiring and direct fallback are complete; only the optional Mac-host proxy path remains unverified.
+Root cause: The user's Mac proxy is healthy locally (`curl -x http://127.0.0.1:7892 https://api.crossref.org/v1/works?rows=1` returned HTTP 200), but PaperAI runs in a separate Ubuntu VM. Inside that VM, `host.docker.internal` resolves to the VM's Docker host rather than the user's Mac; the worker received `Connection refused`. After setting the Mac LAN address `192.168.101.105`, the worker received a TCP timeout, confirming the remote VM cannot route to that Mac address (network isolation or firewall).
+
+What was completed:
+- added optional proxy variables for backend and worker;
+- added `host.docker.internal:host-gateway` mappings;
+- documented direct fallback, security boundary and verification commands;
+- Compose mapping and unset-proxy fallback checks passed.
+- verified the user's Mac proxy itself with a real Crossref HTTP 200 response;
+- verified the remote worker reads the configured proxy address;
+- attempted one bounded worker TCP/Crossref smoke through `host.docker.internal:7892` and then `192.168.101.105:7892`; the first was refused and the second timed out.
+
+User action required:
+- none; the user chose the direct-egress path and no proxy setup is required for V1.
+
+How to verify if this optional enhancement is reopened later:
+- run the proxy smoke commands in `docs/SMOKE_TESTS.md`;
+- verify backend and worker receive the proxy address without printing credentials;
+- first confirm worker TCP connectivity to the proxy address/tunnel, then run one bounded arXiv/Crossref request through the Worker path.
+
+No API key, billing, provider switch or repository secret is required.
+
+## E2E-ENV-001
+
+Status: RESOLVED — Chromium and its user-space runtime libraries are available; the canonical V1 E2E smoke passed on 2026-08-26.
+
+Type: TEST
+Phase: Phase 9 — Cleanup & Long-term Docs
+Block: Phase 9 final regression / Final V1 Acceptance Board
+Detected: 2026-08-26
+Impact: Resolved. The browser-backed canonical V1 Playwright smoke passed and the Final V1 Acceptance Board is closed.
+Root cause: The Playwright package is installed, but its Chromium binary is absent. A bounded `npx playwright install chromium` attempt was interrupted by the CDN closing the connection near completion.
+
+What was completed:
+- downloaded the official Chromium headless shell with a bounded resumable transfer;
+- loaded the required Ubuntu runtime libraries from user-space temporary directories because sudo was unavailable;
+- restarted the frontend container to clear a stale Vite error overlay;
+- ran `LD_LIBRARY_PATH=/tmp/pw-libs/usr/lib/x86_64-linux-gnu:/tmp/pw-libs/lib/x86_64-linux-gnu PAPERAI_E2E=true npm run test:e2e` → `1 passed`.
+
+User action required:
+- none.
+
+Next action:
+- none; preserve the browser setup for future acceptance runs.
+
 # 23. Handoff Summary
 
 每次 Codex 会话结束前必须更新。
@@ -2761,15 +3050,32 @@ Next action:
 ```markdown
 ## Latest Handoff
 
-Date: 2026-08-24
-Phase: Phase 8 — End-to-End Integration
-Status: IN_PROGRESS
-Current Implementation Block: Block 8A — V1 Mainline Integration
-Current Block Status: NOT_STARTED
-Last completed Block Commit: this Block 7B completion commit (see the commit containing this record)
-Last commit: this Block 7B completion commit (see the commit containing this record)
+Date: 2026-08-29
+Phase: Phase 9 — Cleanup & Long-term Docs
+Status: DONE
+Current Implementation Block: Phase 9 final regression / Final V1 Acceptance Board
+Current Block Status: DONE
+Last completed Block Commit: d94fdb686759e697b246e04f90fe41aacd4680f2 (Block 9C implementation); 38f72f9 (Block 9B docs)
+Last commit: this post-V1 paper-processing retry commit (see the commit containing this record)
 
 ### What was completed
+
+- Post-V1 paper-processing retry: failed imports now remain visible in the Library and can explicitly reuse their persisted PDF; already-readable papers can retry only failed/interrupted image and table enhancement without rebuilding the text index. Both paths preserve user ownership and run through the existing Worker/queue contracts.
+- Retry acceptance: rebuilt backend/worker images; focused backend regressions `11 passed`, full backend `286 passed`, and undefined-name check passed; full frontend `51 passed`; typecheck, ESLint and production build passed; no migration or external-provider validation was required. API.md and the API Change Log include the additive list field and retry route.
+- Post-V1 compact project-layout refinement: removed the redundant Writing page hero and outer workspace frame, reduced the global Project sidebar from 236px to 180px, reduced the Writing document/Agent rails to 176px/320px, expanded the editor paper to 860px, and made the workspace fill the viewport below the compact Project header.
+- Post-V1 project UI density refinement: removed repeated English eyebrow labels from Overview, Discover and Papers; compacted Project header navigation, page padding, headings, overview entry cards, paper-table rows, Writing toolbar and Agent context/composer surfaces while preserving readable 16px manuscript text and coarse-pointer touch targets.
+- The user-directed compact dimensions were synchronized into `06_FRONTEND_DESIGN_SYSTEM_AND_PAGES.md`; no Reader, Tiptap, WritingDocument, Evidence, citation or API contract was changed.
+- Compact-layout acceptance: full frontend `51 passed`; typecheck, ESLint and production build passed. The existing Vite chunk-size warning remains informational. Impeccable detector reported only two known false positives for neutral 1px Writing column separators.
+- Post-V1 project lifecycle maintenance: the existing owned `DELETE /api/v1/projects/{project_id}` contract is now exposed from Projects Home with a separate card action, explicit irreversible-impact confirmation, duplicate-submit protection, success removal and failure preservation. Original Library papers remain untouched because deletion removes Project-scoped associations and dependent records only.
+- Post-V1 Discover defect fix: Paper detail Drawer visibility now uses `activePaper` as its single source of truth. Closing from the Drawer X, mask or Escape clears that source instead of mutating an unused parallel flag; duplicate close emission was removed. Component/store regressions cover the close request and state transition.
+- Post-V1 performance diagnosis: backend/worker/database/Redis remained healthy with low CPU and memory use; the perceived UI delay was traced primarily to the frontend running the Vite development target with bind-mounted source, polling and automated probe noise. The frontend was rebuilt and recreated from the default production Compose target and now runs Nginx without source mounts.
+- Post-V1 maintenance acceptance: frontend `51 passed`, ESLint passed, production build passed, project backend contracts `32 passed`, canonical production Playwright flow `1 passed`; production `/projects` HTML warm response measured about `0.5 ms` versus about `9.8 ms` from the previous development server on the same host. No schema migration or API change was required.
+- Phase 9 Block 9C implementation: optional `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` injection is wired into backend and worker Compose services, with `host.docker.internal:host-gateway` support and direct access as the default.
+- Phase 9 Block 9C documentation: `.env.example`, `ARCHITECTURE.md` and `SMOKE_TESTS.md` document host-loopback limitations, security boundaries and exact local verification steps; no credentials are committed.
+- Phase 9 Block 9C configuration checks: explicit proxy mapping and unset-proxy direct fallback passed; the user's Mac proxy returned Crossref HTTP 200 locally, but the remote worker received `Connection refused` through `host.docker.internal:7892` and a TCP timeout through Mac LAN address `192.168.101.105:7892`. The user explicitly waived this optional proxy acceptance on 2026-08-26; the local runtime was restored to direct mode and Worker → Crossref returned HTTP 200.
+- Phase 9 Block 9A acceptance: removed the unreachable legacy Project Workspace and universal Project Chat views plus their unreferenced Research Map, Reading/Experiment/Evidence/Activity UI components; legacy project chat now redirects to canonical Project Overview, Reader project comparison targets canonical Project Papers, and route/frontend/backend regressions passed.
+- Phase 9 Block 9B acceptance: synchronized `ARCHITECTURE.md`, `API.md`, `TODO_OR_RISKS.md` and `SMOKE_TESTS.md` with the current code and accepted Provider decisions; removed resolved documentation/workspace/provider risks, added the V1 mainline smoke, and confirmed archived docs are explicitly historical.
+- Phase 9 final acceptance: aligned the existing Playwright smoke with the current login route/placeholder contract; Chromium headless shell and user-space libraries were installed, and the canonical V1 route smoke passed.
 
 - Completed Phase 2 Block 2A typed search DTOs, provider protocol, deterministic normalization, deduplication and full-abstract preservation.
 - Semantic Scholar is the primary search provider using anonymous access first; API key support remains optional.
@@ -2804,14 +3110,26 @@ Last commit: this Block 7B completion commit (see the commit containing this rec
 - Block 7A acceptance passed: 34 frontend tests, frontend typecheck, lint, production build, and diff check; existing chunk-size warning only.
 - Completed Phase 7 Block 7B: typed rewrite/generate proposal interaction, user-confirmed replace/copy actions, stale selection protection, structured Citation Node insertion, citation status and Evidence detail UI, and bounded loading/error/concurrency states.
 - Block 7B and Phase 7 acceptance passed: 42 frontend tests, frontend typecheck/lint/build, 24 WritingDocument/revision/export backend tests, 11 Citation Verification tests, and diff check; existing chunk-size warning only.
+- Phase 8 Block 8A implementation: Discover import returns immediately after queueing; the existing Worker owns the bounded arXiv download and parser pipeline, while the frontend keeps `ready` visibly in progress until terminal `completed` confirms Project Papers attachment.
+- Phase 8 Block 8A integration smoke: canonical V1 route traversal was added to the Playwright smoke; real Crossref fallback search and favorite succeeded after bounded Semantic Scholar anonymous 429 handling.
+- Phase 8 Block 8A implementation hardening: approved arXiv download has configurable 45-second read and 300-second whole-transfer deadlines plus cancellation-safe cleanup; deterministic timeout/cancellation tests pass.
+- Phase 8 Block 8A integration hardening: duplicate imports with an existing `task_id` but no response `paper_id` continue polling the owned task-status endpoint; a focused store contract covers this path.
+- Phase 8 Block 8A regression acceptance: full frontend `45 passed`, typecheck/lint/production build, full backend `283 passed`, undefined-variable Ruff check, backend/worker image builds, prior Alembic head/schema compatibility, health/root smoke and diff check passed.
+- Phase 8 Block 8A real-paper Reader smoke: the selected existing paper passed owned Project Papers, Paper detail, Sections and indexable Elements HTTP checks.
+- Phase 8 Block 8A real-paper model acceptance: after explicit user authorization, Qwen generated a `ready` Paper Profile; Writing returned `200 / ready`, persisted 4 Evidence rows, produced 4/4 `verified` citation mappings, and preserved the WritingDocument revision.
+- Phase 8 Block 8A regression fix: structured image retrieval tolerates the current Image model's missing `bbox` attribute; real import also fixed two undefined media-indexing locals, and the full backend suite remains green at 283 tests.
+- Phase 8 Block 8A real approved import: arXiv `1706.03762` downloaded in 122.52 seconds, parsed into paper `76e78683-4afb-4015-997c-90b2b2f74b1c`, attached to Project Papers, exposed valid Reader assets, generated a ready Profile, and returned five real retrieval chunks.
 
 ### What is currently in progress
 
-- Current Block: Phase 8 / Block 8A — V1 Mainline Integration; not started.
-- Development and acceptance checks already run: Phase 6 Blocks 6A/6B and all Phase 7 Writing Frontend Blocks are complete.
-- External dependency blockers: none. Semantic Scholar anonymous HTTP 429 remains a handled provider state; its key is optional.
-- User action required: none.
-- Real-provider validation pending: none for Phase 6; configured Qwen returned valid rewrite and one-paragraph Evidence-key structured proposals.
+- None. Phase 9 final regression and the Final V1 Acceptance Board are complete.
+- The requested post-V1 paper-processing retry maintenance is complete; an optional live smoke may be run later against a disposable failed task.
+- The requested post-V1 Project deletion UI and production-frontend performance correction are complete; no follow-up implementation is pending.
+- Development and acceptance checks already run: Phase 6 Blocks 6A/6B, all Phase 7 Writing Frontend Blocks, and the non-import portions of Phase 8 are complete.
+- External acceptance blockers: none. No API key, billing, provider switch or repository secret is needed.
+- User action required: none. The optional Mac-host proxy path is not required.
+- Real-provider validation: direct Worker → Crossref returned HTTP 200; the approved real arXiv import and Qwen/DashScope acceptance remain passed from Phase 8.
+- Block note: Phase 9 and V1 readiness are complete; no new implementation Phase is opened.
 
 ### Do not redo
 
@@ -2830,21 +3148,20 @@ Last commit: this Block 7B completion commit (see the commit containing this rec
 
 ### Next exact action
 
-1. Read only the Phase 8 headings listed in `EXECUTION_INDEX.md`: Phase 8 plan, completed-block summaries, Literature Discovery and Writing acceptance sections, `SMOKE_TESTS.md`, and relevant regression docs.
-2. Inspect the actual Project → Discover → Import → Reader and Writing → Evidence → Citation Verification routes before changing code.
-3. Implement only Block 8A mainline integration, then run the complete integration acceptance and create one meaningful commit.
+1. No further V1 implementation Block is pending.
+2. If a disposable failed import/media task becomes available, optionally exercise each retry action once; do not use a real user paper for destructive failure simulation.
+3. Preserve the explicit proxy waiver, direct-egress default, completed Phase 8, Block 9A, Block 9B and final E2E records.
+4. Do not request a Semantic Scholar key or switch providers unless the provider decision is explicitly reopened.
 
 ### Read first next session
 
 - `AGENTS.md`
 - `docs/spec-v2/EXECUTION_INDEX.md`
-- Progress: current Phase 8 / Block 8A, Current Blockers and this Handoff
-- `07_CODEX_IMPLEMENTATION_PLAN.md`: Phase 8 only
-- `04_LITERATURE_DISCOVERY.md`: Definition of Done / acceptance sections only
-- `05_WRITING_WORKSPACE.md`: acceptance / Definition of Done sections only
-- `SMOKE_TESTS.md`
-- Relevant `QA_WORKFLOW.md`, `HYBRID_RETRIEVAL.md`, and export regression docs
-- Existing Project, Discover, import, Reader, Writing, Evidence and Citation Verification routes; do not reread or redo completed Phase 7 frontend work
+- Progress: completed Phase 9, Final V1 Acceptance Board and this Handoff
+- `07_CODEX_IMPLEMENTATION_PLAN.md`: Phase 9 only
+- `01_CODEBASE_MIGRATION_MAP.md`: HIDE / REMOVE-LATER candidates only if continuing broader Phase 9 cleanup
+- `ARCHITECTURE.md`, `API.md`, `TODO_OR_RISKS.md`, `SMOKE_TESTS.md`: current final-doc and proxy sections only
+- `docker-compose.yml`, `.env.example`, direct-egress runtime and Compose config output
 ```
 
 这是下一会话最重要的接续区。

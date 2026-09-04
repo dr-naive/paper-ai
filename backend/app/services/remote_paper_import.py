@@ -1,6 +1,7 @@
 """Safe remote-paper intake for allowlisted scholarly sources."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -43,8 +44,14 @@ async def download_arxiv_pdf(
     storage_path: str,
     max_size: int,
     timeout_seconds: float = 45.0,
+    total_timeout_seconds: float = 300.0,
 ) -> RemotePaperDownload:
-    """Download one arXiv PDF with strict identifier, host, type, and size checks."""
+    """Download one arXiv PDF with strict checks and a total transfer deadline.
+
+    ``httpx`` read timeouts are inactivity limits.  A slow stream can therefore
+    keep a request alive indefinitely when it keeps yielding small chunks.  The
+    explicit ``wait_for`` deadline bounds the complete transfer as well.
+    """
     normalized = normalize_arxiv_id(arxiv_id)
     url = f"https://export.arxiv.org/pdf/{normalized}"
     os.makedirs(storage_path, exist_ok=True)
@@ -53,7 +60,14 @@ async def download_arxiv_pdf(
     digest = hashlib.sha256()
     total = 0
     prefix = b""
-    try:
+
+    def cleanup_files() -> None:
+        for path in (partial_path, final_path):
+            if os.path.exists(path):
+                os.remove(path)
+
+    async def stream_download() -> None:
+        nonlocal total, prefix
         async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
             async with client.stream("GET", url, headers={"User-Agent": "PaperAI/1.0 scholarly-import"}) as response:
                 response.raise_for_status()
@@ -72,12 +86,23 @@ async def download_arxiv_pdf(
                             prefix += chunk[: 5 - len(prefix)]
                         digest.update(chunk)
                         target.write(chunk)
+
+    try:
+        await asyncio.wait_for(stream_download(), timeout=total_timeout_seconds)
+    except asyncio.TimeoutError as exc:
+        cleanup_files()
+        raise RemotePaperImportError("arXiv PDF 下载超过总时限") from exc
+    except BaseException:
+        # asyncio.CancelledError inherits directly from BaseException on
+        # Python 3.10; cleanup must also happen when the request is cancelled.
+        cleanup_files()
+        raise
+
+    try:
         if prefix != b"%PDF-":
             raise RemotePaperImportError("远程响应不是有效 PDF")
         os.replace(partial_path, final_path)
         return RemotePaperDownload(normalized, url, final_path, total, digest.hexdigest())
-    except Exception:
-        for path in (partial_path, final_path):
-            if os.path.exists(path):
-                os.remove(path)
+    except BaseException:
+        cleanup_files()
         raise

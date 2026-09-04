@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     SEARCH_MAX_ROUNDS: int = 3
     SEARCH_MAX_QUERIES_PER_ROUND: int = 3
     SEARCH_RESULT_LIMIT: int = 10
+    REMOTE_IMPORT_READ_TIMEOUT_SECONDS: float = 45.0
+    REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS: float = 300.0
     VISION_MODEL: str = "qwen-vl-max"
     VISION_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -112,6 +114,12 @@ class Settings(BaseSettings):
             raise ValueError("SEARCH_MAX_QUERIES_PER_ROUND 必须在 1 到 3 之间")
         if not 1 <= self.SEARCH_RESULT_LIMIT <= 10:
             raise ValueError("SEARCH_RESULT_LIMIT 必须在 1 到 10 之间")
+        if not 1 <= self.REMOTE_IMPORT_READ_TIMEOUT_SECONDS <= 120:
+            raise ValueError("REMOTE_IMPORT_READ_TIMEOUT_SECONDS 必须在 1 到 120 秒之间")
+        if not self.REMOTE_IMPORT_READ_TIMEOUT_SECONDS <= self.REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS <= 900:
+            raise ValueError(
+                "REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS 必须不小于读取超时且不超过 900 秒"
+            )
         if self.REDIS_ANSWER_TASK_TTL_SECONDS < 60:
             raise ValueError("REDIS_ANSWER_TASK_TTL_SECONDS 不能小于 60")
         if self.REDIS_UPLOAD_TASK_TTL_SECONDS < 60:

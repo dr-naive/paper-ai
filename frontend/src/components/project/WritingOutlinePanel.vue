@@ -69,19 +69,21 @@ const formatTime = (value: string) => new Date(value).toLocaleDateString('zh-CN'
 </script>
 
 <style scoped>
-.outline-panel { min-width: 0; padding: 14px 12px; overflow: auto; border-right: 1px solid var(--pa-border); background: var(--pa-surface-soft); }
-.outline-panel.collapsed { padding: 10px 4px; }
+.outline-panel { min-width: 0; padding: 10px 8px; overflow: auto; border-right: 1px solid var(--pa-border); background: var(--pa-surface-soft); font-size: 12px; }
+.outline-panel.collapsed { padding: 6px 0; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.outline-toggle { display: flex; align-items: center; gap: 6px; min-width: 44px; min-height: 44px; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }
+.outline-toggle { position: relative; display: flex; align-items: center; gap: 4px; min-width: 40px; min-height: 36px; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }
+.outline-toggle::before { position: absolute; inset: -4px; content: ''; }
 .outline-toggle:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
 .collapsed .panel-heading { justify-content: center; }
 .collapsed .outline-toggle { justify-content: center; }
 .document-item,.outline-item { width: 100%; border: 0; border-radius: 6px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }
-.document-item { display: flex; flex-direction: column; gap: 3px; min-height: 44px; margin-top: 8px; padding: 8px; }
+.document-item { display: flex; flex-direction: column; gap: 2px; min-height: 40px; margin-top: 5px; padding: 6px; }
 .document-item.active,.outline-item.active { background: var(--pa-primary-soft); color: var(--pa-primary-hover); }
 .document-item small,.panel-empty { color: var(--pa-muted); font-size: 11px; }
-.outline-section { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--pa-border); }
-.outline-item { display: block; min-height: 36px; margin-top: 2px; padding-block: 8px; font-size: 12px; }
+.outline-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--pa-border); }
+.outline-item { display: block; min-height: 32px; margin-top: 1px; padding-block: 6px; font-size: 11px; }
 .document-item:focus-visible,.outline-item:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
 .panel-empty { margin-top: 10px; line-height: 1.5; }
+@media (pointer: coarse) { .outline-toggle { min-width: 44px; min-height: 44px; } }
 </style>

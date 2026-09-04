@@ -5,7 +5,6 @@
       <main class="project-page project-overview">
         <header class="overview-heading">
           <div>
-            <p class="page-kicker">Project overview</p>
             <h1>{{ project.title }}</h1>
             <p class="overview-topic">{{ project.research_topic }}</p>
           </div>
@@ -141,26 +140,25 @@ onMounted(loadProject)
 </script>
 
 <style scoped>
-.project-page { max-width: 1180px; margin: 0 auto; padding: 42px 32px 72px; }
-.overview-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
-.page-kicker { margin: 0 0 8px; color: var(--pa-primary-hover); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.overview-heading h1 { margin: 0; color: var(--pa-ink); font-size: clamp(28px, 3vw, 40px); letter-spacing: -0.03em; line-height: 1.2; text-wrap: balance; }
-.overview-topic { max-width: 70ch; margin: 10px 0 0; color: var(--pa-text); font-size: 16px; line-height: 1.55; }
-.overview-context { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 2fr) minmax(130px, 0.7fr); gap: 1px; margin-bottom: 30px; overflow: hidden; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-border); }
-.overview-context > div { min-width: 0; padding: 18px 20px; background: var(--pa-surface); }
+.project-page { max-width: 1280px; margin: 0 auto; padding: 24px 24px 48px; }
+.overview-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.overview-heading h1 { margin: 0; color: var(--pa-ink); font-size: 24px; letter-spacing: -0.02em; line-height: 1.25; text-wrap: balance; }
+.overview-topic { max-width: 70ch; margin: 5px 0 0; color: var(--pa-text); font-size: 13px; line-height: 1.5; }
+.overview-context { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 2fr) minmax(130px, 0.7fr); gap: 1px; margin-bottom: 18px; overflow: hidden; border: 1px solid var(--pa-border); border-radius: 7px; background: var(--pa-border); }
+.overview-context > div { min-width: 0; padding: 12px 14px; background: var(--pa-surface); }
 .context-label { color: var(--pa-muted); font-size: 11px; font-weight: 650; }
-.overview-context p { margin: 8px 0 0; color: var(--pa-text); font-size: 14px; line-height: 1.55; }
-.entry-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.entry-card { display: flex; min-height: 250px; flex-direction: column; padding: 22px; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); color: inherit; text-decoration: none; transition: border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
+.overview-context p { margin: 5px 0 0; color: var(--pa-text); font-size: 13px; line-height: 1.5; }
+.entry-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.entry-card { display: flex; min-height: 176px; flex-direction: column; padding: 16px; border: 1px solid var(--pa-border); border-radius: 7px; background: var(--pa-surface); color: inherit; text-decoration: none; transition: border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
 .entry-card:hover { border-color: var(--pa-primary); box-shadow: var(--pa-shadow-sm); transform: translateY(-2px); }
 .entry-card:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 3px; }
 .entry-card--primary { border-color: oklch(0.72 0.08 45); background: var(--pa-primary-soft); }
 .entry-card__index { color: var(--pa-primary); font-size: 12px; font-weight: 700; }
-.entry-card h2 { margin: 42px 0 8px; font-size: 20px; line-height: 1.3; text-wrap: balance; }
-.entry-card p { margin: 0; color: var(--pa-muted); font-size: 14px; line-height: 1.6; }
-.entry-card__action { margin-top: auto; padding-top: 22px; color: var(--pa-primary-hover); font-size: 13px; font-weight: 650; }
+.entry-card h2 { margin: 20px 0 5px; font-size: 16px; line-height: 1.3; text-wrap: balance; }
+.entry-card p { margin: 0; color: var(--pa-muted); font-size: 12px; line-height: 1.5; }
+.entry-card__action { margin-top: auto; padding-top: 14px; color: var(--pa-primary-hover); font-size: 12px; font-weight: 650; }
 .project-loading, .project-error { padding: 100px 32px; color: var(--pa-muted); text-align: center; }
 @media (max-width: 880px) { .entry-grid { grid-template-columns: 1fr; } .entry-card { min-height: 180px; } .entry-card h2 { margin-top: 24px; } }
-@media (max-width: 680px) { .project-page { padding: 30px 16px 56px; } .overview-heading { align-items: stretch; flex-direction: column; } .overview-context { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .project-page { padding: 18px 14px 36px; } .overview-heading { align-items: stretch; flex-direction: column; } .overview-context { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .entry-card { transition: none; } }
 </style>

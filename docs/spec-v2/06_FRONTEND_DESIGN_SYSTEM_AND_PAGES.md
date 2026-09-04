@@ -82,19 +82,19 @@ PaperAI
 Desktop 默认：
 
 ```text
-232px
+180px
 ```
 
 允许范围：
 
 ```text
-220–240px
+176–188px
 ```
 
 折叠后：
 
 ```text
-64–72px
+56–64px
 ```
 
 ---
@@ -377,9 +377,9 @@ line-height: 1.7–1.85
 页面水平 padding：
 
 ```text
-32px desktop
-24px medium
-16px narrow
+24px desktop
+16px medium
+12–14px narrow
 ```
 
 卡片内部：
@@ -1201,7 +1201,7 @@ Writing 页面顶部 Project header 可以压缩高度。
 默认：
 
 ```text
-220px
+176px
 ```
 
 内容：
@@ -1233,9 +1233,9 @@ min-width: 0
 内部正文：
 
 ```text
-max-width: 800px
+max-width: 860px
 margin: auto
-padding: 48px 48px 120px
+padding: 28–56px 28–56px 96px
 ```
 
 ---
@@ -1251,7 +1251,7 @@ top: 0
 高度：
 
 ```text
-44–48px
+40–44px
 ```
 
 内容 compact。
@@ -1263,7 +1263,7 @@ top: 0
 默认：
 
 ```text
-360px
+320px
 ```
 
 结构：

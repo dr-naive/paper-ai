@@ -1,4 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.rag.hybrid_retrieval import (
     EvidenceReranker,
@@ -9,6 +12,7 @@ from app.rag.hybrid_retrieval import (
     rewrite_standalone_question,
     split_comparison_question,
 )
+from app.rag.hybrid_retrieval import HybridPaperRetriever
 
 
 def test_history_rewrites_referential_question():
@@ -131,3 +135,25 @@ def test_same_page_chunks_with_long_identical_prefix_are_deduplicated():
         top_k=5,
     )
     assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_structured_image_documents_allow_images_without_bbox():
+    """Image rows have no bbox column; retrieval must keep the optional locator empty."""
+    table_result = SimpleNamespace(all=lambda: [])
+    image = SimpleNamespace(
+        id="image-1",
+        analysis_result={"description": "图像展示检测结果"},
+        image_index=1,
+        page_number=2,
+        section_id=None,
+        is_filtered=False,
+    )
+    image_result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [image]))
+    db = SimpleNamespace(execute=AsyncMock(side_effect=[table_result, image_result]))
+
+    table_rows, image_documents = await HybridPaperRetriever(db)._structured_documents("paper-1")
+
+    assert table_rows == []
+    assert image_documents[0]["image_id"] == "image-1"
+    assert image_documents[0]["bbox"] == []

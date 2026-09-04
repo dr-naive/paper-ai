@@ -4,12 +4,12 @@
       <slot name="leading" />
     </div>
 
-    <button class="product-header__brand" type="button" @click="router.push('/home')" aria-label="返回 PaperAI 首页">
+    <button v-if="showBrand" class="product-header__brand" type="button" @click="router.push('/home')" aria-label="返回 PaperAI 首页">
       <BrandMark :size="28" />
     </button>
 
     <template v-if="backTo || context || $slots.navigation">
-      <span class="product-header__divider" aria-hidden="true"></span>
+      <span v-if="showBrand" class="product-header__divider" aria-hidden="true"></span>
       <button
         v-if="backTo"
         class="product-header__back"
@@ -48,10 +48,12 @@ withDefaults(defineProps<{
   edge?: boolean
   backTo?: string
   backLabel?: string
+  showBrand?: boolean
 }>(), {
   edge: false,
   backTo: '',
   backLabel: '上一页',
+  showBrand: true,
 })
 const router = useRouter()
 </script>
@@ -60,8 +62,8 @@ const router = useRouter()
 .product-header {
   display: flex;
   align-items: center;
-  min-height: 60px;
-  padding: 10px max(24px, calc((100vw - 1440px) / 2));
+  min-height: 52px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--pa-border);
   background: var(--pa-surface);
   color: var(--pa-ink);
@@ -84,7 +86,7 @@ const router = useRouter()
 
 .product-header__back {
   display: inline-flex;
-  min-height: 36px;
+  min-height: 32px;
   padding: 0 8px;
   flex: none;
   align-items: center;
@@ -93,7 +95,7 @@ const router = useRouter()
   border-radius: 5px;
   background: transparent;
   color: var(--pa-muted);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   transition: color 180ms ease-out, background-color 180ms ease-out;
 }
@@ -132,14 +134,14 @@ const router = useRouter()
 .product-header__divider {
   width: 1px;
   height: 24px;
-  margin: 0 12px;
+  margin: 0 8px;
   background: var(--pa-border);
 }
 
 .product-header__sub-divider {
   width: 1px;
   height: 18px;
-  margin: 0 12px;
+  margin: 0 8px;
   flex: none;
   background: var(--pa-border);
 }
@@ -147,7 +149,7 @@ const router = useRouter()
 .product-header__context {
   flex-shrink: 0;
   color: var(--pa-ink);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -165,17 +167,17 @@ const router = useRouter()
 .product-header__back + .product-header__main,
 .product-header__context + .product-header__main,
 .product-header__navigation + .product-header__main {
-  margin-left: 24px;
+  margin-left: 12px;
 }
 
 .product-header__actions {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  margin-left: 16px;
+  margin-left: 12px;
 }
 @media (max-width: 760px) {
-  .product-header { min-height: 60px; padding-inline: 14px; flex-wrap: wrap; }
+  .product-header { min-height: 52px; padding-inline: 10px; flex-wrap: wrap; }
   .product-header--edge { padding-left: 4px; }
   .product-header__leading { margin-right: 8px; }
   .product-header__brand :deep(.brand-mark__name) { display: none; }

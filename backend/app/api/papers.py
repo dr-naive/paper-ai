@@ -2,7 +2,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header, Query, BackgroundTasks
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from typing import Optional, List, Dict, Any
 import os
 import uuid
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 from app.database import get_db, AsyncSessionLocal
 from app.models.paper import (
     DocumentElement,
+    Image as ImageModel,
     Paper,
     Section,
     Table as TableModel,
@@ -32,7 +33,7 @@ from app.config import settings
 from app.job_queue import enqueue_job
 from app.redis_client import get_async_redis
 from app.parsers.multimedia_extractor import MultimediaExtractor
-from app.utils.task_manager import create_task, update_task, get_task
+from app.utils.task_manager import TaskStatus, create_task, get_task, list_tasks, update_task
 from app.utils.background_tasks import spawn_background_task
 from app.services.paper_files import (
     extract_pdf_page_contents as _extract_pdf_page_contents,
@@ -176,6 +177,23 @@ async def get_papers(
     
     result = await db.execute(query)
     papers = result.scalars().all()
+    paper_ids = {str(p.id) for p in papers}
+    import_tasks = []
+    for task in list_tasks({TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.FAILED}):
+        if task.user_id != user_id or task.paper_id in paper_ids:
+            continue
+        details = dict(task.details or {})
+        counts = dict(details.get("counts") or {})
+        file_path = os.path.join(settings.FILE_STORAGE_PATH, f"{task.paper_id}.pdf")
+        import_tasks.append({
+            "task_id": task.task_id,
+            "paper_id": task.paper_id,
+            "filename": counts.get("original_filename") or f"{task.paper_id}.pdf",
+            "status": task.status.value,
+            "message": task.message or "等待处理",
+            "retry_available": task.status == TaskStatus.FAILED and os.path.exists(file_path),
+            "updated_at": task.updated_at.isoformat(),
+        })
     
     return {
         "items": [
@@ -194,7 +212,8 @@ async def get_papers(
             }
             for p in papers
         ],
-        "total": len(papers)
+        "total": len(papers),
+        "import_tasks": import_tasks,
     }
 
 
@@ -529,6 +548,7 @@ async def _process_paper_async(
     initial_timings: Optional[Dict[str, float]] = None,
     pipeline_started_at: Optional[float] = None,
     initial_counts: Optional[Dict[str, Any]] = None,
+    media_only: bool = False,
 ):
     """异步处理论文的核心逻辑"""
     task_id = f"task_{paper_id}"
@@ -556,73 +576,127 @@ async def _process_paper_async(
         )
 
     try:
-        if raw_text is None:
-            update_task(task_id, status="processing", progress=5, message="正在提取 PDF 文字...")
-            text_extraction_started_at = time.perf_counter()
-            text_result = await paper_upload_service.extract_text(file_path)
-            raw_text = text_result.raw_text
-            counts["text_extraction_method"] = text_result.extraction_method
-            finish_stage("initial_text_extraction", text_extraction_started_at)
-            logger.info(
-                "📝 后台文本提取完成，方式: %s，长度: %s",
-                text_result.extraction_method,
-                len(raw_text),
+        if media_only:
+            async with AsyncSessionLocal() as db:
+                paper = await db.scalar(
+                    select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id)
+                )
+                if paper is None:
+                    raise RuntimeError("媒体重试目标论文不存在")
+                file_path = str(paper.pdf_path or file_path)
+                raw_text = str(paper.full_text or "")
+                section_rows = (
+                    await db.execute(
+                        select(Section)
+                        .where(Section.paper_id == paper_id)
+                        .order_by(Section.order_index)
+                    )
+                ).scalars().all()
+                sections = [
+                    {
+                        "title": section.section_title,
+                        "content": section.content or "",
+                        "key_points": section.key_points or [],
+                        "start_page": section.start_page or 1,
+                    }
+                    for section in section_rows
+                ]
+                table_ids = select(TableModel.id).where(TableModel.paper_id == paper_id)
+                await db.execute(delete(TableCell).where(TableCell.table_id.in_(table_ids)))
+                await db.execute(delete(TableStructure).where(TableStructure.paper_id == paper_id))
+                await db.execute(delete(TableModel).where(TableModel.paper_id == paper_id))
+                await db.execute(delete(ImageModel).where(ImageModel.paper_id == paper_id))
+                for section in section_rows:
+                    section.tables = []
+                    section.figures = []
+                    section.formulas = []
+                await db.commit()
+            if not file_path or not os.path.exists(file_path):
+                raise RuntimeError("原始 PDF 不存在，无法重试图表增强")
+            if not await get_knowledge_base().delete_paper_media(paper_id):
+                raise RuntimeError("旧图表知识库清理失败")
+            previous_task = get_task(task_id)
+            previous_details = dict(previous_task.details or {}) if previous_task else {}
+            counts.update(dict(previous_details.get("counts") or {}))
+            ready_seconds = float(previous_details.get("ready_seconds") or 0)
+            core_ready = True
+            ready_details = dict(previous_details)
+            ready_details["media_status"] = "processing"
+            ready_details.pop("media_error", None)
+            update_task(
+                task_id,
+                status="ready",
+                progress=100,
+                message="论文已可用，正在重新增强图表",
+                details=ready_details,
             )
+            logger.info("重新执行论文图表增强 paper_id=%s", paper_id)
+        else:
+            if raw_text is None:
+                update_task(task_id, status="processing", progress=5, message="正在提取 PDF 文字...")
+                text_extraction_started_at = time.perf_counter()
+                text_result = await paper_upload_service.extract_text(file_path)
+                raw_text = text_result.raw_text
+                counts["text_extraction_method"] = text_result.extraction_method
+                finish_stage("initial_text_extraction", text_extraction_started_at)
+                logger.info(
+                    "📝 后台文本提取完成，方式: %s，长度: %s",
+                    text_result.extraction_method,
+                    len(raw_text),
+                )
 
-        update_task(task_id, status="processing", progress=10, message="正在解析论文结构...")
-        
-        # 解析论文结构
-        parse_started_at = time.perf_counter()
-        structure = await paper_core_processing_service.extract_structure(
-            paper_id=paper_id,
-            file_path=file_path,
-            raw_text=raw_text,
-        )
-        finish_stage("structure_parsing", parse_started_at)
+            update_task(task_id, status="processing", progress=10, message="正在解析论文结构...")
+            parse_started_at = time.perf_counter()
+            structure = await paper_core_processing_service.extract_structure(
+                paper_id=paper_id,
+                file_path=file_path,
+                raw_text=raw_text,
+            )
+            finish_stage("structure_parsing", parse_started_at)
 
-        sections = structure.sections
-        page_contents = structure.page_contents
+            sections = structure.sections
+            extractor = MultimediaExtractor(pdf_path=file_path)
+            logger.info(f"标准化后解析到 {len(sections)} 个有效章节")
+
+            update_task(task_id, progress=45, message="正在保存正文和章节...")
+            core_persistence_started_at = time.perf_counter()
+            await paper_core_processing_service.persist_core(
+                paper_id=paper_id,
+                user_id=user_id,
+                file_path=file_path,
+                raw_text=raw_text,
+                structure=structure,
+            )
+            finish_stage("core_database_persistence", core_persistence_started_at)
+
+            update_task(task_id, progress=70, message="正在构建正文知识库...")
+            core_vector_started_at = time.perf_counter()
+            counts["text_vector_chunks"] = await paper_core_processing_service.build_text_index(
+                paper_id=paper_id,
+                raw_text=raw_text,
+                file_path=file_path,
+                structure=structure,
+            )
+            finish_stage("core_vector_indexing", core_vector_started_at)
+
+            ready_seconds = time.perf_counter() - started_at
+            ready_details = _build_timing_details(timings, ready_seconds, counts)
+            ready_details["ready_seconds"] = round(ready_seconds, 3)
+            ready_details["media_status"] = "processing"
+            update_task(
+                task_id,
+                status="ready",
+                progress=100,
+                message="论文已可用，图表继续后台增强",
+                details=ready_details,
+            )
+            core_ready = True
+
         extractor = MultimediaExtractor(pdf_path=file_path)
-        logger.info(f"标准化后解析到 {len(sections)} 个有效章节")
-
-        update_task(task_id, progress=45, message="正在保存正文和章节...")
-        core_persistence_started_at = time.perf_counter()
-        await paper_core_processing_service.persist_core(
-            paper_id=paper_id,
-            user_id=user_id,
-            file_path=file_path,
-            raw_text=raw_text,
-            structure=structure,
-        )
-        finish_stage("core_database_persistence", core_persistence_started_at)
-
-        update_task(task_id, progress=70, message="正在构建正文知识库...")
-        core_vector_started_at = time.perf_counter()
-        counts["text_vector_chunks"] = await paper_core_processing_service.build_text_index(
-            paper_id=paper_id,
-            raw_text=raw_text,
-            file_path=file_path,
-            structure=structure,
-        )
-        finish_stage("core_vector_indexing", core_vector_started_at)
-
-        ready_seconds = time.perf_counter() - started_at
-        ready_details = _build_timing_details(timings, ready_seconds, counts)
-        ready_details["ready_seconds"] = round(ready_seconds, 3)
-        ready_details["media_status"] = "processing"
-        update_task(
-            task_id,
-            status="ready",
-            progress=100,
-            message="论文已可用，图表继续后台增强",
-            details=ready_details,
-        )
-        core_ready = True
 
         # 媒体增强使用独立事务；失败不会回滚已经可用的正文论文。
         async with AsyncSessionLocal() as db:
             update_task(task_id, message="论文已可用，正在增强表格和图片...")
-            import os
             paper_storage_dir = f"data/papers/{paper_id}"
             images_dir = os.path.join(paper_storage_dir, "images")
             tables_dir = os.path.join(paper_storage_dir, "tables")
@@ -765,7 +839,6 @@ async def _process_paper_async(
             counts["images_analyzed"] = len(all_images_info)
 
             # 保存图片到数据库（新增）
-            from app.models.paper import Image as ImageModel
             saved_images = []
             for image_info in all_images_info:
                 try:
@@ -1087,6 +1160,7 @@ async def _process_paper_async(
             update_task(task_id, message="论文已可用，正在追加图表知识库...")
 
             media_chunks = []
+            text_chunk_count = int(counts.get("text_vector_chunks") or 0)
             vector_started_at = time.perf_counter()
 
             for table_info in all_tables_text:
@@ -1097,7 +1171,7 @@ async def _process_paper_async(
                     "page": table_info.get("page", 1),
                     "table_number": table_info.get("table_number"),
                     "caption": table_info.get("caption", ""),
-                    "index": len(text_chunks) + len(media_chunks)
+                    "index": text_chunk_count + len(media_chunks)
                 }
                 media_chunks.append(table_chunk)
                 structure = table_info.get("structure") or {}
@@ -1112,7 +1186,7 @@ async def _process_paper_async(
                         "row_index": record.get("row_index"),
                         "caption": table_info.get("caption", ""),
                         "fields": record.get("fields", []),
-                        "index": len(text_chunks) + len(media_chunks),
+                        "index": text_chunk_count + len(media_chunks),
                     })
             
             for image_info in all_images_info:
@@ -1123,12 +1197,14 @@ async def _process_paper_async(
                     "page": image_info.get("page", 1),
                     "image_type": image_info.get("image_type", "other"),
                     "image_path": image_info.get("image_path", ""),
-                    "index": len(text_chunks) + len(media_chunks)
+                    "index": text_chunk_count + len(media_chunks)
                 }
                 media_chunks.append(image_chunk)
             
             logger.info(f"媒体分块完成：共 {len(media_chunks)} 个片段")
-            if media_chunks and not await kb.add_paper_chunks(paper_id, media_chunks):
+            if media_chunks and not await get_knowledge_base().add_paper_chunks(
+                paper_id, media_chunks
+            ):
                 raise RuntimeError("图表知识库追加失败")
             finish_stage("media_vector_indexing", vector_started_at)
             counts["media_vector_chunks"] = len(media_chunks)
@@ -1171,6 +1247,7 @@ async def _schedule_process_paper(
     initial_timings: Optional[Dict[str, float]] = None,
     pipeline_started_at: Optional[float] = None,
     initial_counts: Optional[Dict[str, Any]] = None,
+    media_only: bool = False,
 ):
     """安排论文处理任务在后台执行"""
     await _process_paper_async(
@@ -1181,6 +1258,7 @@ async def _schedule_process_paper(
         initial_timings,
         pipeline_started_at,
         initial_counts,
+        media_only,
     )
 
 
@@ -1376,6 +1454,105 @@ def recover_incomplete_paper_tasks() -> int:
         )
         scheduled += 1
     return scheduled
+
+
+@router.post("/tasks/{task_id}/retry", status_code=202)
+async def retry_paper_task(
+    task_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retry a failed core import or only the failed media enhancement stage."""
+    user_id = await get_current_user_id(authorization, db)
+    task = get_task(task_id)
+    if task is None or task.user_id != user_id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    paper = await db.scalar(
+        select(Paper).where(Paper.id == task.paper_id, Paper.user_id == user_id)
+    )
+    details = dict(task.details or {})
+    media_status = str(details.get("media_status") or "")
+    retry_count = int(details.get("manual_retry_count") or 0) + 1
+    details["manual_retry_count"] = retry_count
+    details["last_manual_retry_at"] = datetime.utcnow().isoformat()
+
+    if paper is not None:
+        if media_status not in {"failed", "interrupted", "not_started"}:
+            raise HTTPException(status_code=409, detail="当前图表状态不需要重试")
+        file_path = str(paper.pdf_path or "")
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=409, detail="原始 PDF 不存在，无法重试图表增强")
+        details["media_status"] = "processing"
+        details.pop("media_error", None)
+        update_task(
+            task_id,
+            status="ready",
+            progress=100,
+            message="论文已可用，图表增强重试已排队",
+            details=details,
+        )
+        payload = {
+            "paper_id": task.paper_id,
+            "file_path": file_path,
+            "user_id": user_id,
+            "initial_counts": dict(details.get("counts") or {}),
+            "media_only": True,
+        }
+        job_type = "paper_media_enhance"
+        response_message = "图表增强重试已排队"
+    else:
+        if task.status != TaskStatus.FAILED:
+            raise HTTPException(status_code=409, detail="当前导入任务仍在处理中")
+        file_path = os.path.join(settings.FILE_STORAGE_PATH, f"{task.paper_id}.pdf")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=409, detail="原始 PDF 不存在，请重新上传")
+        await get_knowledge_base().delete_paper(task.paper_id)
+        details["media_status"] = "not_started"
+        details.pop("media_error", None)
+        update_task(
+            task_id,
+            status="pending",
+            progress=0,
+            message="导入重试已排队",
+            details=details,
+        )
+        payload = {
+            "paper_id": task.paper_id,
+            "file_path": file_path,
+            "user_id": user_id,
+            "raw_text": None,
+            "initial_counts": dict(details.get("counts") or {}),
+        }
+        job_type = "paper_process"
+        response_message = "导入重试已排队"
+
+    try:
+        await enqueue_job(
+            job_type,
+            payload,
+            job_id=f"{task_id}:manual:{retry_count}:{uuid.uuid4().hex[:8]}",
+        )
+    except Exception as exc:
+        logger.exception("论文任务重试入队失败 task_id=%s", task_id)
+        if paper is not None:
+            details["media_status"] = media_status or "failed"
+        update_task(
+            task_id,
+            status=task.status,
+            progress=task.progress,
+            message="重试任务入队失败，请稍后再试",
+            details=details,
+        )
+        raise HTTPException(status_code=503, detail="论文处理 Worker 暂时不可用") from exc
+
+    return {
+        "task_id": task_id,
+        "paper_id": task.paper_id,
+        "retry_type": "media" if paper is not None else "import",
+        "status": "queued",
+        "message": response_message,
+    }
 
 
 @router.get("/tasks/{task_id}")

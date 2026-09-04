@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
 from app.api import discovery as discovery_api
+from app.harness.tools import literature_research
 from app.models.project import ResearchProject
 from app.research.discovery.favorites import (
     FavoriteSourceError,
@@ -223,3 +225,49 @@ async def test_import_endpoint_preserves_existing_duplicate_import_state(monkeyp
 
     assert response.status == "processing"
     assert response.task_id == "task_2401.12345"
+
+
+@pytest.mark.asyncio
+async def test_arxiv_import_tool_queues_download_without_blocking_http_request(monkeypatch):
+    project = _project("one")
+
+    class Result:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class ToolDB(FakeDB):
+        async def get(self, model, item_id):
+            if model is ResearchProject and item_id == project.id:
+                return project
+            return None
+
+        async def execute(self, _query):
+            return Result()
+
+    enqueue = AsyncMock()
+    monkeypatch.setattr(literature_research, "enqueue_job", enqueue)
+    monkeypatch.setattr(
+        literature_research,
+        "create_task",
+        lambda paper_id, user_id: SimpleNamespace(
+            task_id=f"task_{paper_id}", paper_id=paper_id, user_id=user_id
+        ),
+    )
+    tool = next(
+        item for item in literature_research.make_project_tools(
+            ToolDB(), project.id, project.user_id
+        )
+        if item.name == "project_import_arxiv_paper"
+    )
+
+    message = await tool.ainvoke({"arxiv_id": "2401.12345", "role": "related"})
+
+    assert "正在后台安全下载" in message
+    enqueue.assert_awaited_once()
+    job_type, payload = enqueue.await_args.args
+    assert job_type == "arxiv_import"
+    assert payload["arxiv_id"] == "2401.12345"
+    assert "file_path" not in payload

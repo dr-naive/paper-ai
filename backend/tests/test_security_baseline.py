@@ -50,6 +50,25 @@ def test_default_admin_password_comes_from_environment():
     assert configured.DEFAULT_ADMIN_PASSWORD == "test-admin-password"
 
 
+def test_remote_import_timeouts_are_bounded_and_total_allows_slow_valid_streams():
+    configured = Settings(
+        DEBUG=True,
+        DEFAULT_ADMIN_PASSWORD="test-admin-password",
+        _env_file=None,
+    )
+    assert configured.REMOTE_IMPORT_READ_TIMEOUT_SECONDS == 45
+    assert configured.REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS == 300
+
+    with pytest.raises(ValidationError):
+        Settings(
+            DEBUG=True,
+            DEFAULT_ADMIN_PASSWORD="test-admin-password",
+            REMOTE_IMPORT_READ_TIMEOUT_SECONDS=60,
+            REMOTE_IMPORT_TOTAL_TIMEOUT_SECONDS=30,
+            _env_file=None,
+        )
+
+
 def test_permission_update_only_accepts_known_roles():
     with pytest.raises(ValidationError):
         UserPermissionUpdate(role="owner")

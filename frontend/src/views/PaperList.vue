@@ -102,7 +102,32 @@
               </div>
             </div>
 
-            <div v-if="filteredPapers.length" class="paper-list">
+            <div v-if="filteredPapers.length || importTasks.length" class="paper-list">
+              <article
+                v-for="task in importTasks"
+                :key="task.task_id"
+                class="paper-row import-task-row"
+              >
+                <div class="paper-document import-document" aria-hidden="true">!</div>
+                <div class="paper-content">
+                  <div class="paper-title-line">
+                    <h3>{{ task.filename }}</h3>
+                    <a-tag size="small" :color="task.status === 'failed' ? 'red' : 'orange'">
+                      {{ task.status === 'failed' ? '导入失败' : '正在导入' }}
+                    </a-tag>
+                  </div>
+                  <p class="import-task-message">{{ task.message }}</p>
+                </div>
+                <div class="paper-actions">
+                  <a-button
+                    v-if="task.status === 'failed'"
+                    size="small"
+                    :loading="retryingTasks[task.task_id]"
+                    :disabled="!task.retry_available"
+                    @click="retryImport(task)"
+                  >{{ task.retry_available ? '重试导入' : '请重新上传' }}</a-button>
+                </div>
+              </article>
               <article
                 v-for="paper in filteredPapers"
                 :key="paper.id"
@@ -142,6 +167,12 @@
                   <p v-if="paper.abstract" class="paper-abstract">{{ paper.abstract }}</p>
                 </div>
                 <div class="paper-actions">
+                  <a-button
+                    v-if="['failed', 'interrupted', 'not_started'].includes(paper.media_status)"
+                    size="small"
+                    :loading="retryingTasks[`task_${paper.id}`]"
+                    @click.stop="retryMediaEnhancement(paper)"
+                  >重试图表增强</a-button>
                   <a-button type="primary" size="small" @click.stop="openPaper(paper)">打开论文</a-button>
                   <a-dropdown trigger="click" position="br">
                     <button
@@ -204,8 +235,10 @@ import {
   getRecentMessages,
   getTaskStatus,
   updateReadingStatus,
+  retryPaperTask,
   uploadPaper
 } from '@/api/paper'
+import type { PaperImportTask } from '@/api/paper'
 import dayjs from 'dayjs'
 import ProductHeader from '@/components/ProductHeader.vue'
 import { removeCachedPdf } from '@/utils/pdfCache'
@@ -214,6 +247,8 @@ import { IconDelete, IconStar } from '@arco-design/web-vue/es/icon'
 const loading = ref(false)
 const router = useRouter()
 const papers = ref<any[]>([])
+const importTasks = ref<PaperImportTask[]>([])
+const retryingTasks = ref<Record<string, boolean>>({})
 const recentMessages = ref<any[]>([])
 const searchText = ref('')
 const statusFilter = ref('all')
@@ -334,10 +369,11 @@ const clearFilters = () => {
 }
 
 const syncMediaPolling = () => {
-  const hasProcessingMedia = papers.value.some(paper => paper.media_status === 'processing')
-  if (hasProcessingMedia && !mediaPollInterval) {
+  const hasProcessingWork = papers.value.some(paper => paper.media_status === 'processing')
+    || importTasks.value.some(task => task.status === 'pending' || task.status === 'processing')
+  if (hasProcessingWork && !mediaPollInterval) {
     mediaPollInterval = window.setInterval(() => loadPapers(true), 5000)
-  } else if (!hasProcessingMedia && mediaPollInterval) {
+  } else if (!hasProcessingWork && mediaPollInterval) {
     clearInterval(mediaPollInterval)
     mediaPollInterval = null
   }
@@ -348,6 +384,7 @@ const loadPapers = async (silent = false) => {
   try { 
     const response = await getPaperList({ limit: 100 })
     papers.value = response.items || response.papers || []
+    importTasks.value = response.import_tasks || []
     syncMediaPolling()
   } catch (error) { 
     console.error('加载论文列表失败', error)
@@ -372,6 +409,23 @@ const mediaStatusColor = (status: string) => ({
   failed: 'red',
   not_started: 'gray'
 }[status] || 'gray')
+
+const retryTask = async (taskId: string, successMessage: string) => {
+  retryingTasks.value = { ...retryingTasks.value, [taskId]: true }
+  try {
+    const result = await retryPaperTask(taskId)
+    Message.success(result.message || successMessage)
+    await loadPapers(true)
+  } catch (error: any) {
+    const detail = error?.response?.data?.detail
+    Message.error(typeof detail === 'string' ? detail : '重试失败，请稍后再试')
+  } finally {
+    retryingTasks.value = { ...retryingTasks.value, [taskId]: false }
+  }
+}
+
+const retryImport = (task: PaperImportTask) => retryTask(task.task_id, '导入重试已排队')
+const retryMediaEnhancement = (paper: any) => retryTask(`task_${paper.id}`, '图表增强重试已排队')
 
 
 const customUpload = (options: RequestOption): UploadRequest => {
@@ -774,6 +828,10 @@ onMounted(() => {
 .paper-row:last-child {
   border-bottom: 0;
 }
+
+.import-task-row { background: oklch(0.985 0.012 28); }
+.import-document { color: var(--pa-danger); background: oklch(0.95 0.025 28); font-size: 18px; font-weight: 700; }
+.import-task-message { margin: 5px 0 0; color: var(--pa-danger); font-size: 12px; line-height: 1.45; }
 
 .paper-document,
 .empty-document {

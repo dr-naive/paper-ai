@@ -5,7 +5,6 @@
       <main class="project-page papers-page">
         <header class="page-heading">
           <div>
-            <p class="page-kicker">Project papers</p>
             <h1>项目论文</h1>
             <p>只显示已经加入当前项目的论文，阅读入口保持与独立 Reader 一致。</p>
           </div>
@@ -134,18 +133,17 @@ onMounted(loadPage)
 </script>
 
 <style scoped>
-.project-page { max-width: 1240px; margin: 0 auto; padding: 42px 32px 72px; }
-.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
-.page-kicker { margin: 0 0 8px; color: var(--pa-primary-hover); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.page-heading h1 { margin: 0; color: var(--pa-ink); font-size: clamp(28px, 3vw, 40px); letter-spacing: -0.03em; line-height: 1.2; text-wrap: balance; }
-.page-heading p:not(.page-kicker) { margin: 10px 0 0; color: var(--pa-muted); font-size: 15px; line-height: 1.55; }
+.project-page { max-width: 1320px; margin: 0 auto; padding: 24px 24px 48px; }
+.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.page-heading h1 { margin: 0; color: var(--pa-ink); font-size: 24px; letter-spacing: -0.02em; line-height: 1.25; text-wrap: balance; }
+.page-heading p { margin: 5px 0 0; color: var(--pa-muted); font-size: 13px; line-height: 1.5; }
 .papers-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .papers-toolbar :deep(.arco-input-wrapper) { max-width: 320px; }
 .papers-count { margin-left: auto; color: var(--pa-muted); font-size: 12px; }
 .paper-table-wrap { overflow-x: auto; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); }
 .paper-table { width: 100%; min-width: 760px; border-collapse: collapse; color: var(--pa-text); font-size: 13px; }
-.paper-table th { padding: 13px 16px; border-bottom: 1px solid var(--pa-border); background: var(--pa-surface-soft); color: var(--pa-muted); font-size: 11px; font-weight: 650; text-align: left; }
-.paper-table td { padding: 16px; border-bottom: 1px solid var(--pa-border); vertical-align: middle; }
+.paper-table th { padding: 9px 12px; border-bottom: 1px solid var(--pa-border); background: var(--pa-surface-soft); color: var(--pa-muted); font-size: 11px; font-weight: 650; text-align: left; }
+.paper-table td { padding: 11px 12px; border-bottom: 1px solid var(--pa-border); vertical-align: middle; }
 .paper-table tbody tr:last-child td { border-bottom: 0; }
 .paper-table tbody tr:hover { background: oklch(0.985 0.008 55); }
 .paper-title { min-width: 280px; }
@@ -161,5 +159,5 @@ onMounted(loadPage)
 .papers-empty h2 { margin: 0; font-size: 20px; }
 .papers-empty p { margin: 10px 0 22px; color: var(--pa-muted); font-size: 14px; }
 .project-loading, .project-error { padding: 100px 32px; color: var(--pa-muted); text-align: center; }
-@media (max-width: 680px) { .project-page { padding: 30px 16px 56px; } .page-heading { align-items: flex-start; flex-direction: column; } .page-heading :deep(.arco-btn) { width: 100%; } .papers-toolbar { align-items: stretch; flex-wrap: wrap; } .papers-toolbar :deep(.arco-input-wrapper) { max-width: none; flex: 1 1 100%; } .papers-count { margin-left: 0; } }
+@media (max-width: 680px) { .project-page { padding: 18px 14px 36px; } .page-heading { align-items: flex-start; flex-direction: column; } .page-heading :deep(.arco-btn) { width: 100%; } .papers-toolbar { align-items: stretch; flex-wrap: wrap; } .papers-toolbar :deep(.arco-input-wrapper) { max-width: none; flex: 1 1 100%; } .papers-count { margin-left: 0; } }
 </style>

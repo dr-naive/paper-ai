@@ -8,6 +8,7 @@ import {
   searchLiterature,
   type PaperSearchResult,
 } from '@/api/discovery'
+import { getTaskStatus } from '@/api/paper'
 import { useDiscoverStore } from './discover'
 
 vi.mock('@/api/discovery', async () => {
@@ -22,11 +23,17 @@ vi.mock('@/api/discovery', async () => {
   }
 })
 
+vi.mock('@/api/paper', async () => {
+  const actual = await vi.importActual<typeof import('@/api/paper')>('@/api/paper')
+  return { ...actual, getTaskStatus: vi.fn() }
+})
+
 const mockedSearch = vi.mocked(searchLiterature)
 const mockedListFavorites = vi.mocked(listDiscoveryFavorites)
 const mockedSaveFavorite = vi.mocked(saveDiscoveryFavorite)
 const mockedRemoveFavorite = vi.mocked(removeDiscoveryFavorite)
 const mockedImport = vi.mocked(importDiscoveryPaper)
+const mockedTaskStatus = vi.mocked(getTaskStatus)
 
 const result = (overrides: Partial<PaperSearchResult> = {}): PaperSearchResult => ({
   result_id: 'result-1',
@@ -60,6 +67,7 @@ describe('discover store', () => {
     mockedSaveFavorite.mockReset()
     mockedRemoveFavorite.mockReset()
     mockedImport.mockReset()
+    mockedTaskStatus.mockReset()
   })
 
   it('seeds a clarifying session from the project profile', () => {
@@ -154,7 +162,7 @@ describe('discover store', () => {
   it('keeps import progress explicit and does not invent a completed state', async () => {
     const paper = result()
     mockedSearch.mockResolvedValue({ execution_id: 'execution-1', provider: 'arxiv', result_count: 1, search_rounds: 1, warnings: [], papers: [paper] })
-    mockedImport.mockResolvedValue({ source: 'arxiv', source_paper_id: paper.source_paper_id, status: 'processing', message: '正在导入，task_id=task-1', task_id: 'task-1', paper_id: null })
+    mockedImport.mockResolvedValue({ source: 'arxiv', source_paper_id: paper.source_paper_id, status: 'processing', message: '正在导入，task_id=task-1', task_id: null, paper_id: null })
     const store = useDiscoverStore()
     store.reset('project-1')
     store.submitRequirement('检索可复现的检索研究')
@@ -166,6 +174,76 @@ describe('discover store', () => {
     expect(store.importMessages['result-1']).toContain('正在导入')
     await expect(store.importPaper(store.results[0])).resolves.toBe(false)
     expect(mockedImport).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes paper details by clearing the active paper source of truth', () => {
+    const store = useDiscoverStore()
+    const paper = result()
+    store.reset('project-1')
+
+    store.openPaperDetails(paper)
+    expect(store.activePaper?.result_id).toBe(paper.result_id)
+
+    store.closePaperDetails()
+    expect(store.activePaper).toBeNull()
+  })
+
+  it('monitors an existing duplicate task even when the import response omits paper id', async () => {
+    const paper = result()
+    mockedSearch.mockResolvedValue({ execution_id: 'execution-1', provider: 'arxiv', result_count: 1, search_rounds: 1, warnings: [], papers: [paper] })
+    mockedImport.mockResolvedValue({ source: 'arxiv', source_paper_id: paper.source_paper_id, status: 'processing', message: '该论文正在导入，task_id=task-existing', task_id: 'task-existing', paper_id: null })
+    mockedTaskStatus.mockResolvedValue({
+      task_id: 'task-existing', paper_id: 'paper-existing', status: 'completed', progress: 100,
+      message: '处理完成', created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:01Z',
+    })
+    const store = useDiscoverStore()
+    store.reset('project-1')
+    store.submitRequirement('检索可复现的检索研究')
+    await store.submitSearch()
+
+    await expect(store.importPaper(store.results[0])).resolves.toBe(true)
+    await vi.waitFor(() => expect(store.importStates['result-1']).toBe('imported'))
+    expect(mockedTaskStatus).toHaveBeenCalledWith('task-existing')
+    expect(store.importMessages['result-1']).toBe('处理完成')
+  })
+
+  it('promotes an accepted import only after the owned task reaches completed', async () => {
+    const paper = result()
+    mockedSearch.mockResolvedValue({ execution_id: 'execution-1', provider: 'arxiv', result_count: 1, search_rounds: 1, warnings: [], papers: [paper] })
+    mockedImport.mockResolvedValue({ source: 'arxiv', source_paper_id: paper.source_paper_id, status: 'processing', message: '正在导入，task_id=task-1', task_id: 'task-1', paper_id: 'paper-1' })
+    mockedTaskStatus.mockResolvedValue({
+      task_id: 'task-1', paper_id: 'paper-1', status: 'completed', progress: 100,
+      message: '处理完成', created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:01Z',
+    })
+    const store = useDiscoverStore()
+    store.reset('project-1')
+    store.submitRequirement('检索可复现的检索研究')
+    await store.submitSearch()
+
+    await expect(store.importPaper(store.results[0])).resolves.toBe(true)
+    await vi.waitFor(() => expect(store.importStates['result-1']).toBe('imported'))
+    expect(mockedTaskStatus).toHaveBeenCalledWith('task-1')
+    expect(store.importMessages['result-1']).toBe('处理完成')
+  })
+
+  it('keeps a core-ready remote paper importing until project attachment completes', async () => {
+    const paper = result()
+    mockedSearch.mockResolvedValue({ execution_id: 'execution-1', provider: 'arxiv', result_count: 1, search_rounds: 1, warnings: [], papers: [paper] })
+    mockedImport.mockResolvedValue({ source: 'arxiv', source_paper_id: paper.source_paper_id, status: 'processing', message: '正在导入，task_id=task-1', task_id: 'task-1', paper_id: 'paper-1' })
+    mockedTaskStatus.mockResolvedValue({
+      task_id: 'task-1', paper_id: 'paper-1', status: 'ready', progress: 100,
+      message: '论文已可用，图表继续后台增强', created_at: '2026-08-24T00:00:00Z', updated_at: '2026-08-24T00:00:01Z',
+    })
+    const store = useDiscoverStore()
+    store.reset('project-1')
+    store.submitRequirement('检索可复现的检索研究')
+    await store.submitSearch()
+
+    await expect(store.importPaper(store.results[0])).resolves.toBe(true)
+    await vi.waitFor(() => expect(mockedTaskStatus).toHaveBeenCalledWith('task-1'))
+    expect(store.importStates['result-1']).toBe('importing')
+    expect(store.importMessages['result-1']).toContain('图表继续后台增强')
+    store.reset('project-2')
   })
 
   it('resolves a favorite id before unfavoriting a result returned by search', async () => {

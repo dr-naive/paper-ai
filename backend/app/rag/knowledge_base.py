@@ -629,6 +629,24 @@ class PaperKnowledgeBase:
             logger.error(f"❌ 删除失败：{e}")
             return False
 
+    async def delete_paper_media(self, paper_id: str) -> bool:
+        """Delete only derived table/image chunks before an idempotent media retry."""
+        try:
+            all_docs = self.vectorstore._collection.get(
+                where={
+                    "$and": [
+                        {"paper_id": str(paper_id)},
+                        {"chunk_type": {"$in": ["table", "table_row", "image"]}},
+                    ]
+                }
+            )
+            if all_docs and all_docs["ids"]:
+                self.vectorstore._collection.delete(ids=all_docs["ids"])
+            return True
+        except Exception as e:
+            logger.error("❌ 删除论文图表片段失败：%s", e)
+            return False
+
 _knowledge_base: Optional[PaperKnowledgeBase] = None
 def get_knowledge_base() -> PaperKnowledgeBase:
     global _knowledge_base

@@ -849,7 +849,7 @@ const saveAnswerAsNote = async (qa: any) => {
   } catch (error: any) { Message.error(error?.response?.data?.detail || '保存笔记失败') }
 }
 
-const compareInProject = () => router.push({ name: 'ProjectWorkspace', params: { id: projectId.value }, query: { area: 'reading' } })
+const compareInProject = () => router.push({ name: 'ProjectPapers', params: { projectId: projectId.value } })
 
 const toggleCitationGroup = (qaId: string | number) => {
   const next = new Set(expandedCitationGroups.value)

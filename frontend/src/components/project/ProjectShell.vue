@@ -65,9 +65,9 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
   position: sticky;
   top: 0;
   display: flex;
-  width: 236px;
+  width: 180px;
   height: 100vh;
-  flex: 0 0 236px;
+  flex: 0 0 180px;
   flex-direction: column;
   border-right: 1px solid var(--pa-border);
   background: var(--pa-surface);
@@ -75,9 +75,9 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 
 .sidebar-brand {
   display: flex;
-  min-height: 68px;
+  min-height: 52px;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--pa-border);
 }
 
@@ -92,18 +92,18 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 .global-nav {
   display: grid;
   gap: 4px;
-  padding: 20px 12px 10px;
+  padding: 12px 8px 8px;
 }
 
 .global-nav__item {
   display: flex;
-  min-height: 40px;
+  min-height: 36px;
   align-items: center;
-  gap: 11px;
-  padding: 0 12px;
+  gap: 8px;
+  padding: 0 10px;
   border-radius: 7px;
   color: var(--pa-muted);
-  font-size: 13px;
+  font-size: 12px;
   text-decoration: none;
   transition: color 180ms ease-out, background-color 180ms ease-out;
 }
@@ -111,7 +111,7 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 .global-nav__item > span:first-child {
   width: 18px;
   color: currentColor;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
   text-align: center;
 }
@@ -129,11 +129,11 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 .recent-projects {
   display: grid;
   gap: 3px;
-  padding: 16px 12px 0;
+  padding: 12px 8px 0;
 }
 
 .sidebar-label {
-  margin: 0 12px 7px;
+  margin: 0 10px 5px;
   color: var(--pa-muted);
   font-size: 11px;
   font-weight: 650;
@@ -144,7 +144,7 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
   min-width: 0;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   overflow: hidden;
   border-radius: 6px;
   color: var(--pa-text);
@@ -169,7 +169,7 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 
 .sidebar-footer {
   margin-top: auto;
-  padding: 14px 20px 18px;
+  padding: 10px 14px 12px;
   border-top: 1px solid var(--pa-border);
 }
 
@@ -188,10 +188,10 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
   flex: 1;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1024px) {
   .global-sidebar {
-    width: 70px;
-    flex-basis: 70px;
+    width: 60px;
+    flex-basis: 60px;
   }
 
   .sidebar-brand {

@@ -1,34 +1,35 @@
 # Architecture
 
-> STATUS: PARTIALLY OUTDATED DURING V1 MIGRATION
-> Current implementation target: `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
-> 本文档描述 **当前 `agent-rearchitecture-v1` 分支已经存在的主要架构事实**，并标明 V1 重构期间的稳定边界。
-> V1 的目标架构和施工顺序分别以：
+> STATUS: CURRENT IMPLEMENTATION
+> 本文档描述 `agent-rearchitecture-v1` 分支当前已经落地并通过回归验证的主要架构事实。
+> `docs/spec-v2/` 仍是 V1 的产品/施工合同；实施状态以
+> `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` 为准。
+>
+> 本文不把未实现的未来 endpoint、UI 或 Agent 能力写成当前事实。
+> 历史方案和已移除的原型只在 `docs/archive/` 中保留。
 >
 > - `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
 > - `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`
 >
-> 为准。
->
-> 本文不能用来推断“计划中的功能已经实现”。当 V1 Phase 9 完成后，应再次按最终代码同步本文。
+> 用于解释设计边界与施工顺序，不替代本文件对当前代码的描述。
 
 ---
 
 ## 1. 系统定位
 
-PaperAI 当前已经从单纯的 PDF 阅读 + RAG 应用演化为：
+PaperAI 当前由以下稳定能力组成：
 
 ```text
-独立论文阅读系统
+独立论文阅读、PDF 解析与 RAG
 +
-Project / Research Workspace 原型
+Project → Discover → Papers → Writing 工作流
 +
 Agent Runtime / Execution 基础
 +
-WritingDocument / Citation 基础
+WritingDocument / Citation / Export 基础
 ```
 
-V1 产品正在收敛为：
+Project 面向用户的 V1 产品面固定为：
 
 ```text
 Project
@@ -38,7 +39,8 @@ Project
 └── Writing
 ```
 
-现有 Research Map、Reading Plan、Evidence Matrix、Experiment Design、Agent Activity 等原型不代表 V1 继续扩展这些产品方向。
+Research Map、Reading Plan、Evidence Matrix、Experiment Design、Agent Activity 和通用 Project Chat
+不作为 V1 的一级导航或主流程；仍存在的兼容代码不改变这一产品边界。
 
 ---
 
@@ -104,6 +106,17 @@ redis
 - `/app/data` / persistent volume：上传 PDF、解析产物和相关文件数据
 - vector storage：现有 RAG / Hybrid Retrieval 使用的向量索引
 
+### 外部网络与可选代理
+
+`backend` 和 `worker` 访问学术 Provider、模型服务及批准的远程 PDF。两者都支持
+通过 Compose 注入可选的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`；未设置
+`PAPERAI_HTTP_PROXY` 或 `PAPERAI_HTTPS_PROXY` 时保持直连。Linux Docker 使用宿主机
+代理时，应在宿主机代理中允许 Docker 网桥访问，并在 `.env` 使用
+`http://host.docker.internal:<port>`，而不是容器内无效的 `127.0.0.1:<port>`。
+
+代理只改变容器的出站网络路径，不改变 Provider 决策、导入安全校验或超时边界。
+代理凭证只能保存在本地 `.env` / Secret 管理中，不得提交到仓库。
+
 不要使用 `docker compose down -v`，除非明确要删除持久化数据。
 
 ---
@@ -126,7 +139,8 @@ Retrieval / Domain Services
 Infrastructure / Database / External Provider
 ```
 
-现有代码还没有完全按该目标拆干净，因此迁移期间会存在部分跨层历史代码。
+部分历史模块仍保留跨层实现，但新的 V1 用例通过对应 Application Service、Workflow 和 Provider
+边界进入；这属于已知长期技术债，不是额外的产品入口。
 
 ---
 
@@ -149,14 +163,10 @@ backend/app/api/
 - application-service invocation
 - HTTP error mapping
 
-已有 API 包括认证、论文、聊天、Project / execution / research-related endpoints 等。
-
-V1 迁移方向：
-
-- 不继续把复杂业务 orchestration 堆进单个 `projects.py`
-- Literature Discovery 建立独立 use case / endpoint
-- Writing Agent 建立独立 use case / endpoint
-- `docs/API.md` 只记录真实已经实现并测试的接口
+当前 API 包括认证、论文/Reader、Project、Discovery、Writing/Citation、Execution/SSE
+以及受 feature flag 保护的 Research Notes/Evidence 接口。HTTP 层负责校验、鉴权、序列化、
+SSE 和错误映射；业务编排位于 Application Service / Workflow。
+稳定接口清单见 `docs/API.md`。
 
 ---
 
@@ -175,7 +185,7 @@ execution_service.py
 writing_service.py
 ```
 
-Application Service 的目标职责：
+Application Service 的实际职责：
 
 - 用例入口
 - transaction boundary
@@ -183,7 +193,9 @@ Application Service 的目标职责：
 - 调用 workflow / repositories / services
 - 返回稳定 DTO
 
-当前 `writing_service.py` 仍主要是早期写作辅助能力，V1 会把它逐步扩展为 context-aware writing use case，而不是重新创建第二套 Writing backend。
+当前 `writing_service.py` 承担 selection rewrite proposal 和 evidence-backed paragraph proposal；
+它复用既有 WritingDocument、Evidence、Citation Verification 和 revision/export 基础，
+没有建立第二套 Writing backend。
 
 ---
 
@@ -217,15 +229,9 @@ harness/
 - tool dispatch
 - execution / checkpoint / streaming 等相关职责
 
-V1 将保留通用 Runtime 核心，但迁出：
-
-- Project Context assembly
-- Literature Discovery workflow
-- Writing workflow
-- Evidence retrieval
-- Citation Verification
-
-`lead_agent.py` 不应继续变成所有科研业务的 God Object。
+V1 用例通过独立的 Context、Discovery、Writing 和 Citation application/workflow 边界接入通用
+Runtime；`lead_agent.py` 仍保留通用 tool-calling、checkpoint 和 streaming 职责。
+其职责过宽是已记录的长期风险，不通过新增用户界面来扩大。
 
 ### Tool Runtime
 
@@ -283,7 +289,7 @@ PDF upload / approved remote import
 → Reader / RAG available
 ```
 
-V1 新增的 Project Paper Profile 应在：
+Project Paper Profile 的当前生命周期是在：
 
 ```text
 parse / index ready
@@ -330,25 +336,20 @@ backend/app/harness/tools/external_literature.py
 backend/app/harness/tools/literature_research.py
 ```
 
-已经具备 arXiv / Semantic Scholar 相关能力。
-
-当前问题：
-
-- Provider 访问、搜索策略、workflow 职责还没有彻底分离
-- arXiv 搜索能力较基础
-- V1 尚未冻结 Primary Academic Search Provider
-- 搜索结果 schema 需要统一
-
-V1 目标：
+当前 Provider 边界和决策为：
 
 ```text
-Academic Search Provider
-→ Normalized Paper
-→ Literature Discovery Workflow
-→ bounded Agent result-quality decisions
+Semantic Scholar Academic Graph (unauthenticated-first)
+→ normalized discovery papers
+→ bounded Search Workflow
+Crossref REST → metadata enrichment / fallback metadata
+arXiv → preprint search metadata and approved PDF import source
 ```
 
-Search Provider 与 PDF Remote Import 是不同架构层。
+`SEMANTIC_SCHOLAR_API_KEY` 仅是可选的限流增强，不是 V1 启动条件。401/403/429/超时由
+Provider 层做有界错误映射；不会因为缺少 key 无限重试或静默切换未批准的 Provider。
+Search Provider 与 PDF Remote Import 是不同架构层，结果统一为结构化 normalized paper，
+不会把搜索结果拼成前端需要解析的 prose。
 
 ---
 
@@ -397,9 +398,8 @@ Discover 的 Favorite 不是 ProjectPaper。
 
 ## 14. Project Context
 
-当前系统已有 memory / research / evidence 相关基础，但 V1 不再把 Project Context 理解为一个大字符串。
-
-目标语义：
+当前系统已有 memory / research / evidence 相关基础，Project Context 由以下类型化对象组成，
+不作为一个大字符串发送：
 
 ```text
 Project Context
@@ -476,7 +476,7 @@ ProjectPaper.analysis_card
 
 V1 不重建编辑器。
 
-目标 Writing 主链：
+当前 Writing 主链：
 
 ```text
 Editor selection/current section
@@ -582,15 +582,10 @@ Papers
 Writing
 ```
 
-不再继续扩大一个万能 `ProjectWorkspace.vue`。
-
-迁移目标：
-
-- `ProjectWorkspace.vue` 退化为 shell 或最终拆除
-- Project route 拆成清晰子页面
-- `ProjectChat.vue` 不再作为 Project 主入口
-- `PaperReader.vue` 冻结为成熟资产
-- `WritingDocumentEditor.vue` 保留 editor core，重构三栏 layout 与右侧 Agent
+不再存在一个承担全部研究功能的 `ProjectWorkspace.vue` 主入口；该旧 view 与旧 Project Chat
+view 已删除。当前 canonical Project routes 是 Overview、Discover、Papers、Writing；旧
+`/project/:id` 和 `/project/:id/chat` 仅作兼容重定向到 Overview。`PaperReader.vue` 继续作为
+受保护的独立 Reader 资产，`WritingDocumentEditor.vue` 保留 Tiptap/revision/export 核心。
 
 ---
 
@@ -608,16 +603,17 @@ Project Papers 只需要能稳定进入现有 Reader。
 
 ---
 
-## 21. Literature Discovery Target Flow
+## 21. Literature Discovery Flow
 
-V1 目标：
+当前 V1 主链：
 
 ```text
 Requirement Chat
 → SearchIntent
 → user-editable structured filters
 → Search Planner
-→ Academic Search Provider
+→ Semantic Scholar（未认证优先）
+→ Crossref metadata enrichment / bounded fallback
 → Normalize
 → Deduplicate
 → relevance / coverage check
@@ -638,15 +634,14 @@ Download
 Import
 ```
 
-完整实现见：
-
-`docs/spec-v2/04_LITERATURE_DISCOVERY.md`
+结果返回结构化对象；摘要保留 Provider 返回的完整内容。Favorite、Download、Import 是独立
+动作，只有合法 arXiv 标识和 approved locator 才能进入现有安全导入/解析队列。
 
 ---
 
-## 22. Writing Target Flow
+## 22. Writing Flow
 
-V1 目标：
+当前 V1 主链：
 
 ```text
 Instruction
@@ -664,11 +659,9 @@ Instruction
 
 > 当前 Project 已正式导入并可检索的论文。
 
-Writing 不在 V1 自动联网搜索新论文。
-
-完整实现见：
-
-`docs/spec-v2/05_WRITING_WORKSPACE.md`
+Writing 不自动联网搜索新论文；只允许当前 Project 中已正式导入、可检索并满足
+Paper Profile / Evidence 条件的论文。生成和重写都先返回 proposal，用户显式 Replace 或
+Copy 后才会创建新 revision。
 
 ---
 
@@ -741,9 +734,9 @@ docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
 
 ---
 
-## 26. V1 迁移期间的关键保护项
+## 26. Compatibility 保护项
 
-不得无明确迁移计划破坏：
+不得无兼容方案破坏：
 
 - PDF ingestion
 - Paper IDs / file paths
@@ -767,29 +760,12 @@ docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
 
 `docs/TODO_OR_RISKS.md`
 
-当前重点包括：
+当前仍需持续监控的风险包括：
 
 - Lead Agent God Object
 - literature research Tool / Workflow 混合
-- ProjectWorkspace 产品过载
-- Academic Search Provider 选型
 - Context 退化为大 Prompt
 - Citation semantic verification
 - Writing / Reader regression
-- 文档权威冲突
-
----
-
-## 28. 施工完成后的同步要求
-
-Phase 9 时必须重新核对：
-
-- 实际目录结构
-- 实际 API
-- actual provider
-- actual Context implementation
-- actual Writing workflow
-- actual citation verifier
-- actual routes / stores
-
-然后删除本文中的“V1 目标 / 迁移方向”措辞，使 `ARCHITECTURE.md` 只描述已经存在的稳定系统。
+- remote import boundary
+- lead_agent / literature workflow 职责过宽
