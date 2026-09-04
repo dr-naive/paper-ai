@@ -140,7 +140,7 @@ async def _search_arxiv_impl(query: str, max_results: int = 5) -> str:
                 "arxiv_id": arxiv_id,
                 "title": title,
                 "authors": authors,
-                "abstract": summary[:500],  # 截断防过长
+                "abstract": summary,
                 "published": published,
                 "pdf_url": pdf_url,
                 "arxiv_url": f"https://arxiv.org/abs/{arxiv_id}",
@@ -232,7 +232,7 @@ async def _search_semantic_scholar_impl(
             "authors": authors,
             "year": paper.get("year"),
             "citation_count": paper.get("citationCount", 0),
-            "abstract": (paper.get("abstract") or "")[:500],
+            "abstract": paper.get("abstract") or "",
             "s2_paper_id": paper.get("paperId", ""),
         })
 

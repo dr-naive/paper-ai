@@ -72,6 +72,7 @@ from app.api.projects import router as projects_router
 from app.api.executions import router as executions_router
 from app.api.research_items import evidence_router, router as research_items_router
 from app.api.documents import router as documents_router
+from app.api.discovery import router as discovery_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
 from app.models.user import User
@@ -104,6 +105,7 @@ app.include_router(executions_router)
 app.include_router(research_items_router)
 app.include_router(evidence_router)
 app.include_router(documents_router)
+app.include_router(discovery_router)
 
 
 @app.get("/")

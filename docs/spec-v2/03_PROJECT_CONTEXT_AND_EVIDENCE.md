@@ -1,9 +1,9 @@
 # PaperAI V1 Project Context and Evidence Specification
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
-> 本文定义 PaperAI V1 的 Project Context、Memory、Paper Profile、Evidence、Retrieval 与 Citation Verification 的具体实现规则。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
+> 本文定义 PaperAI V1 的 Project Context、Memory、Paper Profile、Evidence、Retrieval 与 Citation Verification 的具体实现规则。
 > 产品范围见 `00_PRODUCT_SCOPE.md`，总体分层见 `02_TARGET_ARCHITECTURE.md`。
 
 ---

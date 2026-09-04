@@ -1,9 +1,9 @@
 # PaperAI V1 Writing Workspace Specification
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
-> 本文定义 PaperAI V1 Writing Workspace 的页面结构、编辑器行为、Writing Agent、选区改写、段落生成、Citation Node、Citation Verification、持久化与导出规则。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
+> 本文定义 PaperAI V1 Writing Workspace 的页面结构、编辑器行为、Writing Agent、选区改写、段落生成、Citation Node、Citation Verification、持久化与导出规则。
 > 产品范围见 `00_PRODUCT_SCOPE.md`，Context / Evidence 规则见 `03_PROJECT_CONTEXT_AND_EVIDENCE.md`。
 
 ---

@@ -227,7 +227,7 @@ import { getPaperList } from '@/api/paper'
 
 const route = useRoute()
 const router = useRouter()
-const projectId = computed(() => String(route.params.id || ''))
+const projectId = computed(() => String(route.params.projectId || route.params.id || ''))
 const executionStorageKey = computed(() => `paperai:reading-execution:${projectId.value}`)
 const projectStore = useProjectStore()
 const workspaceStore = useWorkspaceStore()
@@ -248,7 +248,12 @@ const applyRequestedArea = () => {
     return
   }
   const area = String(route.query.area || '') as keyof typeof AREA_TAB
-  if (AREA_TAB[area]) activeTab.value = AREA_TAB[area]
+  if (AREA_TAB[area]) {
+    activeTab.value = AREA_TAB[area]
+    return
+  }
+  const routePanel = String(route.meta.projectPanel || '')
+  if (routePanel) activeTab.value = routePanel
 }
 const FUNCTION_NAVIGATION = {
   topic: [
@@ -832,7 +837,7 @@ watch(projectId, () => {
   loadAll()
   restoreExecution()
 })
-watch(() => [route.query.area, route.query.panel], applyRequestedArea)
+watch(() => [route.query.area, route.query.panel, route.meta.projectPanel], applyRequestedArea)
 </script>
 
 <style scoped>

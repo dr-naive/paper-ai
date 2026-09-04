@@ -1,9 +1,9 @@
 # PaperAI V1 Frontend Design System and Pages Specification
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 前端开发者  
-> 本文定义 PaperAI V1 的全局前端信息架构、页面布局、组件层次、交互状态、视觉规则、响应式与前端实现边界。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 前端开发者
+> 本文定义 PaperAI V1 的全局前端信息架构、页面布局、组件层次、交互状态、视觉规则、响应式与前端实现边界。
 > 本文的目标是：**Codex 负责实现，不负责重新做产品设计。**
 
 ---

@@ -1,11 +1,11 @@
 # PaperAI V1 Codebase Migration Map
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
 > 本文只回答一个问题：**当前代码库中的关键模块，在 PaperAI V1 中应该如何处理。**
 >
-> 本文不是产品需求文档，不重复 `00_PRODUCT_SCOPE.md` 的产品定义；  
+> 本文不是产品需求文档，不重复 `00_PRODUCT_SCOPE.md` 的产品定义；
 > 本文也不是最终架构文档，不在此重新发明 Runtime、Context、Tool 或数据库模型。
 
 ---

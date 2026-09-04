@@ -1,9 +1,9 @@
 # PaperAI V1 Product Scope
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
-> 本文只定义 **PaperAI V1 做什么、不做什么、用户如何使用**。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
+> 本文只定义 **PaperAI V1 做什么、不做什么、用户如何使用**。
 > 本文不定义数据库表、类名、Tool 实现或具体迁移步骤；这些由后续施工规格定义。
 
 ---

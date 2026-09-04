@@ -4,13 +4,12 @@
 
 ## 推荐维护方式
 
-1. 所有 V1 开发先遵循根目录 `AGENTS.md` 的文档读取顺序。
-2. 当前产品与施工规范以 `docs/spec-v2/` 为准。
-3. 当前实施进度与跨会话交接以 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` 为准。
-4. 本文件只记录日常开发、启动、调试和环境操作约定，不承担产品或架构权威。
-5. 涉及接口时同步检查并更新 `docs/API.md`。
-6. 涉及用户流程时运行 `docs/SMOKE_TESTS.md` 中相关场景。
-7. 遇到长期风险查看 `docs/TODO_OR_RISKS.md`。
+1. V1 开发首先遵循根目录 `AGENTS.md`。
+2. 每个 Codex 会话读取 `docs/spec-v2/EXECUTION_INDEX.md`，只加载当前 Block 所需规范。
+3. 当前施工状态查看 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`。
+4. 涉及接口时同步检查并更新 `docs/API.md`。
+5. 涉及用户流程时在 Block / Phase 验收点运行相关 smoke，而不是每个小改动后全量运行。
+6. 长期风险查看 `docs/TODO_OR_RISKS.md`。
 
 ## 启动约定
 
@@ -88,31 +87,32 @@ postgresql+asyncpg://postgres:postgres@db:5432/paperai
 
 具体清单见 `docs/SMOKE_TESTS.md`。
 
-## 代码修改后的最低检查
+## 代码修改后的检查节奏
 
-前端改动：
+不要每修改一个小文件就执行全量测试。
+
+开发过程中：
+
+- 可按需运行 targeted test / typecheck / API check；
+- 用于快速排错，不要求因此 commit。
+
+完整 Implementation Block 完成后，再集中运行该 Block 相关测试。
+
+Phase 完成后，再执行需要的更广 regression / build / smoke。
+
+常见命令：
+
+前端：
 
 ```bash
 cd frontend
 npm run build
 ```
 
-后端改动：
+后端：
 
 ```bash
 docker compose exec backend pytest -q
 ```
 
-如果当前测试不完整，至少执行：
-
-```bash
-docker compose up -d --build backend
-curl http://localhost:8000/health
-```
-
-然后访问：
-
-```text
-http://localhost:8000/health
-http://localhost:8000/docs
-```
+具体当前 Block 应运行哪些检查，以 `EXECUTION_INDEX.md`、当前 feature spec 和 `08_IMPLEMENTATION_PROGRESS.md` 为准。

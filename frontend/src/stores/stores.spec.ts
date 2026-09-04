@@ -21,6 +21,18 @@ describe('workspace stores', () => {
     store.clear()
     expect(store.paperCount).toBe(0)
   })
+  it('exposes typed project metadata from the current project', () => {
+    const store = useProjectStore()
+    store.setProject({
+      id: 'project-a',
+      research_scope: { field: 'Education', research_subject: 'Students', research_question: '', research_goal: '', keywords: ['AI'], method_direction: '', notes: '' },
+    } as any)
+    expect(store.projectId).toBe('project-a')
+    expect(store.researchScope.field).toBe('Education')
+    expect(store.researchScope.keywords).toEqual(['AI'])
+    store.clear()
+    expect(store.researchScope.keywords).toEqual([])
+  })
   it('owns the persisted authentication session', () => {
     const store = useAuthStore()
     store.setSession({ access_token: 'token', user: { id: 'u1', username: 'reader', email: 'r@example.com', role: 'user', is_active: true, created_at: '' } })

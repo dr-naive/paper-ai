@@ -1,9 +1,9 @@
 # PaperAI V1 Target Architecture
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
-> 本文定义 **PaperAI V1 完成后的目标架构、层级边界、模块职责与允许依赖关系**。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
+> 本文定义 **PaperAI V1 完成后的目标架构、层级边界、模块职责与允许依赖关系**。
 > 本文不重复产品需求，也不逐文件列迁移步骤；迁移处置见 `01_CODEBASE_MIGRATION_MAP.md`。
 
 ---

@@ -11,10 +11,21 @@ export interface ResearchProject {
   status: string // active / paused / completed
   memory: { summary: string; notes: ProjectMemoryNote[] }
   preferences: Record<string, any>
+  research_scope: ProjectResearchScope
   paper_count?: number
   artifact_count?: number
   created_at?: string
   updated_at?: string
+}
+
+export interface ProjectResearchScope {
+  field: string
+  research_subject: string
+  research_question: string
+  research_goal: string
+  keywords: string[]
+  method_direction: string
+  notes: string
 }
 
 export interface ProjectMemoryNote {
@@ -333,6 +344,7 @@ export const createProject = (data: {
   abstract?: string
   phase?: string
   preferences?: Record<string, any>
+  research_scope?: Partial<ProjectResearchScope>
 }) => request.post<ResearchProject>('/api/v1/projects', data)
 
 export const getProject = (projectId: string) =>
@@ -373,6 +385,7 @@ export const updateProject = (projectId: string, data: Partial<{
   phase: string
   status: string
   preferences: Record<string, any>
+  research_scope: Partial<ProjectResearchScope>
 }>) => request.patch<ResearchProject>(`/api/v1/projects/${projectId}`, data)
 
 export const deleteProject = (projectId: string) =>

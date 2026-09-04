@@ -1,171 +1,159 @@
 <template>
-  <div class="project-list-page">
-    <ProductHeader context="论文工作台">
-      <template #actions><a-button size="small" @click="$router.push('/library')">本地论文库</a-button></template>
+  <ProjectShell :recent-projects="projects">
+    <ProductHeader context="项目">
+      <template #actions>
+        <a-button size="small" @click="router.push('/library')">打开论文库</a-button>
+      </template>
     </ProductHeader>
 
-    <main class="project-list-shell">
-      <header class="library-header">
-        <div class="header-left">
-          <h1>论文研究与写作</h1>
-          <p>
-            {{
-              projects.length
-                ? `${projects.length} 个项目，从调研到写作全流程管理。`
-                : '创建一个研究项目，开始文献调研、写作与投稿管理。'
-            }}
-          </p>
+    <main class="projects-page">
+      <header class="projects-heading">
+        <div>
+          <p class="page-kicker">Research projects</p>
+          <h1>我的科研项目</h1>
+          <p class="page-description">把研究主题、项目论文和写作文档放在同一个工作区。</p>
         </div>
         <a-button type="primary" size="large" @click="showCreateModal = true">新建项目</a-button>
       </header>
 
       <a-spin :loading="loading">
-        <div v-if="!loading && projects.length === 0" class="empty-library">
-          <div class="empty-document" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M3 7h18M3 12h18M3 17h12" />
-            </svg>
-          </div>
-          <h2>开启你的第一个研究项目</h2>
-          <p>从文献调研到论文写作，agent 会帮你管理阅读笔记、生成综述、起草章节。</p>
-          <a-button type="primary" @click="showCreateModal = true">新建项目</a-button>
-        </div>
+        <section v-if="!loading && !projects.length" class="projects-empty" aria-live="polite">
+          <div class="empty-mark" aria-hidden="true">＋</div>
+          <h2>从一个研究主题开始</h2>
+          <p>创建项目后，你可以在概览、文献发现、项目论文和写作之间切换。</p>
+          <a-button type="primary" @click="showCreateModal = true">创建第一个项目</a-button>
+        </section>
 
-        <section v-else class="project-grid" aria-label="项目列表">
-          <article
-            v-for="p in projects"
-            :key="p.id"
+        <section v-else-if="!loading" class="project-grid" aria-label="科研项目列表">
+          <RouterLink
+            v-for="project in projects"
+            :key="project.id"
             class="project-card"
-            role="button"
-            tabindex="0"
-            @click="openProject(p)"
-            @keydown.enter="openProject(p)"
-            @keydown.space.prevent="openProject(p)"
+            :to="{ name: 'ProjectOverview', params: { projectId: project.id } }"
           >
-            <div class="project-card-header">
-              <span class="phase-badge" :class="`phase-${p.phase}`">{{ phaseLabel(p.phase) }}</span>
-              <span class="status-label" :class="`status-${p.status}`">{{ statusLabel(p.status) }}</span>
+            <div class="project-card__topline">
+              <span class="project-card__label">研究项目</span>
+              <span v-if="project.updated_at" class="project-card__time">{{ formatTime(project.updated_at) }}</span>
             </div>
-            <h3>{{ p.title }}</h3>
-            <p class="project-topic">{{ p.research_topic }}</p>
-            <p v-if="p.abstract" class="project-abstract">{{ p.abstract }}</p>
-            <div class="project-meta">
-              <span class="meta-item">
-                <span class="meta-num">{{ p.paper_count ?? 0 }}</span> 文档
-              </span>
-              <span class="meta-item">
-                <span class="meta-num">{{ p.artifact_count ?? 0 }}</span> 产物
-              </span>
-              <span v-if="p.updated_at" class="meta-time">{{ formatTime(p.updated_at) }}</span>
+            <h2>{{ project.title }}</h2>
+            <p class="project-card__topic">{{ project.research_topic }}</p>
+            <div class="project-card__meta">
+              <span>{{ project.paper_count ?? 0 }} 篇项目论文</span>
             </div>
-            <div class="project-actions" aria-label="打开项目功能">
-              <button type="button" @click.stop="openProjectArea(p, 'topic')">选题</button>
-              <button type="button" @click.stop="openProjectArea(p, 'reading')">阅读</button>
-              <button type="button" class="primary" @click.stop="openProjectArea(p, 'writing')">开始写作</button>
-            </div>
-          </article>
+            <span class="project-card__open">打开项目 <span aria-hidden="true">→</span></span>
+          </RouterLink>
         </section>
       </a-spin>
     </main>
 
-    <!-- 新建项目 Modal -->
-    <a-modal v-model:visible="showCreateModal" title="新建研究项目" @ok="handleCreate" :ok-loading="creating">
+    <a-modal v-model:visible="showCreateModal" title="新建研究项目" :ok-loading="creating" @ok="handleCreate">
       <a-form :model="createForm" layout="vertical">
-        <a-form-item field="title" label="项目标题" required>
-          <a-input v-model="createForm.title" placeholder="例如:MLLM 伪造检测调研" />
+        <a-form-item field="title" label="项目名称" required>
+          <a-input v-model="createForm.title" placeholder="例如：多模态模型的可靠性研究" />
         </a-form-item>
         <a-form-item field="research_topic" label="研究主题" required>
-          <a-input v-model="createForm.research_topic" placeholder="一句话描述你的研究方向" />
+          <a-input v-model="createForm.research_topic" placeholder="用一句话描述你要研究的问题" />
         </a-form-item>
-        <a-form-item field="abstract" label="项目摘要(可选)">
-          <a-textarea
-            v-model="createForm.abstract"
-            placeholder="研究背景、目标、计划阅读的论文范围等"
-            :auto-size="{ minRows: 3, maxRows: 6 }"
-          />
-        </a-form-item>
+        <details class="optional-fields">
+          <summary>补充研究信息（可选）</summary>
+          <div class="optional-fields__body">
+            <a-form-item field="field" label="所属领域">
+              <a-input v-model="createForm.research_scope.field" placeholder="例如：自然语言处理" />
+            </a-form-item>
+            <a-form-item field="research_question" label="核心问题">
+              <a-textarea v-model="createForm.research_scope.research_question" :auto-size="{ minRows: 2, maxRows: 4 }" />
+            </a-form-item>
+            <a-form-item field="abstract" label="项目说明">
+              <a-textarea v-model="createForm.abstract" :auto-size="{ minRows: 2, maxRows: 4 }" placeholder="研究背景或预期目标" />
+            </a-form-item>
+          </div>
+        </details>
       </a-form>
     </a-modal>
-  </div>
+  </ProjectShell>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import ProductHeader from '@/components/ProductHeader.vue'
-import {
-  listProjects,
-  createProject,
-  PHASE_LABELS,
-  STATUS_LABELS,
-  type ResearchProject,
-} from '@/api/projects'
+import ProjectShell from '@/components/project/ProjectShell.vue'
+import { createProject, listProjects, type ResearchProject } from '@/api/projects'
 
 const router = useRouter()
 const projects = ref<ResearchProject[]>([])
 const loading = ref(false)
-const showCreateModal = ref(false)
 const creating = ref(false)
-const createForm = ref({ title: '', research_topic: '', abstract: '' })
+const showCreateModal = ref(false)
+const createForm = reactive({
+  title: '',
+  research_topic: '',
+  abstract: '',
+  research_scope: {
+    field: '',
+    research_subject: '',
+    research_question: '',
+    research_goal: '',
+    keywords: [] as string[],
+    method_direction: '',
+    notes: '',
+  },
+})
 
-const phaseLabel = (phase: string) => PHASE_LABELS[phase] || phase
-const statusLabel = (status: string) => STATUS_LABELS[status] || status
-
-const formatTime = (iso: string) => {
-  try {
-    const d = new Date(iso)
-    const now = new Date()
-    const diff = (now.getTime() - d.getTime()) / 1000
-    if (diff < 60) return '刚刚'
-    if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-    if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-    if (diff < 604800) return `${Math.floor(diff / 86400)} 天前`
-    return d.toLocaleDateString('zh-CN')
-  } catch {
-    return ''
-  }
+const formatTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000)
+  if (days <= 0) return '今天更新'
+  if (days < 7) return `${days} 天前更新`
+  return date.toLocaleDateString('zh-CN')
 }
 
-const openProject = (p: ResearchProject) => {
-  router.push(`/project/${p.id}`)
-}
-
-const openProjectArea = (p: ResearchProject, area: 'topic' | 'reading' | 'writing') => {
-  router.push({ path: `/project/${p.id}`, query: { area } })
+const resetCreateForm = () => {
+  createForm.title = ''
+  createForm.research_topic = ''
+  createForm.abstract = ''
+  createForm.research_scope.field = ''
+  createForm.research_scope.research_subject = ''
+  createForm.research_scope.research_question = ''
+  createForm.research_scope.research_goal = ''
+  createForm.research_scope.keywords = []
+  createForm.research_scope.method_direction = ''
+  createForm.research_scope.notes = ''
 }
 
 const loadProjects = async () => {
   loading.value = true
   try {
-    const res = await listProjects({ page: 1, page_size: 50 })
-    projects.value = res.items || []
-  } catch (e: any) {
-    Message.error(e?.response?.data?.detail || '加载项目失败')
+    const response = await listProjects({ page: 1, page_size: 50 })
+    projects.value = response.items || []
+  } catch (error: any) {
+    Message.error(error?.response?.data?.detail || '加载项目失败')
   } finally {
     loading.value = false
   }
 }
 
 const handleCreate = async () => {
-  if (!createForm.value.title.trim() || !createForm.value.research_topic.trim()) {
-    Message.warning('项目标题和研究主题必填')
+  if (!createForm.title.trim() || !createForm.research_topic.trim()) {
+    Message.warning('项目名称和研究主题必填')
     return
   }
   creating.value = true
   try {
     const created = await createProject({
-      title: createForm.value.title.trim(),
-      research_topic: createForm.value.research_topic.trim(),
-      abstract: createForm.value.abstract.trim(),
+      title: createForm.title.trim(),
+      research_topic: createForm.research_topic.trim(),
+      abstract: createForm.abstract.trim(),
+      research_scope: createForm.research_scope,
     })
-    Message.success('项目创建成功')
     showCreateModal.value = false
-    createForm.value = { title: '', research_topic: '', abstract: '' }
-    // 直接跳转到新建项目的工作台
-    router.push(`/project/${created.id}`)
-  } catch (e: any) {
-    Message.error(e?.response?.data?.detail || '创建项目失败')
+    resetCreateForm()
+    Message.success('项目创建成功')
+    await router.push({ name: 'ProjectOverview', params: { projectId: created.id } })
+  } catch (error: any) {
+    Message.error(error?.response?.data?.detail || '创建项目失败')
   } finally {
     creating.value = false
   }
@@ -175,169 +163,30 @@ onMounted(loadProjects)
 </script>
 
 <style scoped>
-.project-list-page {
-  min-height: 100vh;
-  background: var(--color-bg-1);
-}
-.project-list-shell {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 32px 24px 64px;
-}
-.library-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 28px;
-}
-.header-left h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
-  font-weight: 600;
-}
-.header-left p {
-  margin: 0;
-  color: var(--color-text-2);
-  font-size: 14px;
-}
-.empty-library {
-  text-align: center;
-  padding: 64px 24px;
-  background: var(--color-bg-2);
-  border-radius: 12px;
-  border: 1px dashed var(--color-border-2);
-}
-.empty-document {
-  display: inline-flex;
-  width: 56px;
-  height: 56px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14px;
-  background: var(--color-fill-2);
-  color: var(--color-text-3);
-  margin-bottom: 16px;
-}
-.empty-library h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-}
-.empty-library p {
-  margin: 0 0 20px;
-  color: var(--color-text-2);
-  font-size: 14px;
-}
-.project-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
-}
-.project-card {
-  background: var(--color-bg-2);
-  border: 1px solid var(--color-border-2);
-  border-radius: 12px;
-  padding: 20px;
-  cursor: pointer;
-  transition: transform 180ms ease-out, border-color 180ms ease-out, box-shadow 180ms ease-out;
-}
-.project-card:hover {
-  border-color: rgb(var(--primary-6));
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
-  transform: translateY(-2px);
-}
-.project-card:focus-visible {
-  outline: 2px solid rgb(var(--primary-6));
-  outline-offset: 2px;
-}
-.project-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-.phase-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  font-size: 12px;
-  border-radius: 10px;
-  font-weight: 500;
-  background: var(--color-fill-2);
-  color: var(--color-text-2);
-}
-.phase-badge.phase-research { background: rgba(168, 127, 226, 0.12); color: #8a5cf6; }
-.phase-badge.phase-reading { background: rgba(32, 145, 255, 0.12); color: #2091ff; }
-.phase-badge.phase-writing { background: rgba(0, 180, 42, 0.12); color: #00b42a; }
-.phase-badge.phase-refinement { background: rgba(255, 156, 0, 0.12); color: #ff9c00; }
-.phase-badge.phase-archived { background: var(--color-fill-3); color: var(--color-text-3); }
-.status-label {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--pa-surface-soft);
-  color: var(--pa-muted);
-  font-size: 12px;
-}
-.status-label.status-active { background: oklch(0.95 0.035 145); color: var(--pa-success); }
-.status-label.status-paused { background: oklch(0.96 0.04 75); color: oklch(0.48 0.12 65); }
-.status-label.status-completed { background: var(--pa-surface-soft); color: var(--pa-muted); }
-.project-card h3 {
-  margin: 0 0 6px;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.project-topic {
-  margin: 0 0 8px;
-  font-size: 13px;
-  color: rgb(var(--primary-6));
-  font-weight: 500;
-}
-.project-abstract {
-  margin: 0 0 12px;
-  font-size: 13px;
-  color: var(--color-text-2);
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.project-meta {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  font-size: 12px;
-  color: var(--color-text-3);
-}
-.meta-item .meta-num {
-  color: var(--color-text-1);
-  font-weight: 600;
-  margin-right: 2px;
-}
-.meta-time {
-  margin-left: auto;
-}
-.project-actions { display: flex; gap: 5px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--pa-border); }
-.project-actions button { min-height: 29px; padding: 0 10px; border: 1px solid var(--pa-border); border-radius: 5px; background: var(--pa-surface); color: var(--pa-text); font: inherit; font-size: 11px; cursor: pointer; }
-.project-actions button:hover { border-color: var(--pa-primary); color: var(--pa-primary); }
-.project-actions button.primary { margin-left: auto; border-color: var(--pa-primary); background: var(--pa-primary); color: white; }
-.project-actions button:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
-
-@media (max-width: 680px) {
-  .project-list-shell { padding: 24px 16px 48px; }
-  .library-header { align-items: stretch; flex-direction: column; }
-  .library-header :deep(.arco-btn) { min-height: 44px; }
-  .project-grid { grid-template-columns: 1fr; }
-  .project-card { padding: 16px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .project-card { transition: none; }
-}
+.projects-page { max-width: 1180px; margin: 0 auto; padding: 42px 32px 72px; }
+.projects-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
+.page-kicker { margin: 0 0 8px; color: var(--pa-primary-hover); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.projects-heading h1 { margin: 0; color: var(--pa-ink); font-size: clamp(26px, 3vw, 36px); letter-spacing: -0.025em; line-height: 1.2; text-wrap: balance; }
+.page-description { max-width: 48ch; margin: 10px 0 0; color: var(--pa-muted); font-size: 14px; line-height: 1.6; }
+.projects-empty { padding: 72px 24px; border: 1px dashed var(--pa-border); border-radius: 12px; background: var(--pa-surface); text-align: center; }
+.empty-mark { display: grid; width: 48px; height: 48px; margin: 0 auto 18px; place-items: center; border-radius: 50%; background: var(--pa-primary-soft); color: var(--pa-primary); font-size: 28px; font-weight: 300; }
+.projects-empty h2 { margin: 0; font-size: 20px; line-height: 1.3; }
+.projects-empty p { max-width: 48ch; margin: 10px auto 22px; color: var(--pa-muted); font-size: 14px; line-height: 1.6; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.project-card { display: flex; min-height: 214px; flex-direction: column; padding: 20px; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); color: inherit; text-decoration: none; transition: border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
+.project-card:hover { border-color: var(--pa-primary); box-shadow: var(--pa-shadow-sm); transform: translateY(-2px); }
+.project-card:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 3px; }
+.project-card__topline, .project-card__meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.project-card__label, .project-card__time, .project-card__meta { color: var(--pa-muted); font-size: 12px; }
+.project-card__label { color: var(--pa-primary-hover); font-weight: 650; }
+.project-card h2 { display: -webkit-box; margin: 22px 0 8px; overflow: hidden; font-size: 18px; line-height: 1.35; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.project-card__topic { display: -webkit-box; margin: 0; overflow: hidden; color: var(--pa-text); font-size: 14px; line-height: 1.55; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.project-card__meta { justify-content: flex-start; margin-top: auto; padding-top: 18px; }
+.project-card__open { margin-top: 14px; color: var(--pa-primary-hover); font-size: 13px; font-weight: 650; }
+.optional-fields { margin-top: 10px; border-top: 1px solid var(--pa-border); }
+.optional-fields summary { padding: 14px 0 4px; color: var(--pa-muted); cursor: pointer; font-size: 13px; }
+.optional-fields summary:hover { color: var(--pa-primary-hover); }
+.optional-fields__body { padding-top: 12px; }
+@media (max-width: 680px) { .projects-page { padding: 30px 16px 56px; } .projects-heading { align-items: stretch; flex-direction: column; } .projects-heading :deep(.arco-btn) { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .project-card { transition: none; } }
 </style>

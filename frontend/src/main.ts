@@ -5,6 +5,7 @@ import {
   ConfigProvider,
   Doption,
   Dropdown,
+  Drawer,
   Form,
   FormItem,
   Input,
@@ -21,11 +22,13 @@ import {
   Tabs,
   Tag,
   Textarea,
+  Tooltip,
   Upload
 } from '@arco-design/web-vue'
 import '@arco-design/web-vue/es/avatar/style/css.js'
 import '@arco-design/web-vue/es/button/style/css.js'
 import '@arco-design/web-vue/es/dropdown/style/css.js'
+import '@arco-design/web-vue/es/drawer/style/css.js'
 import '@arco-design/web-vue/es/form/style/css.js'
 import '@arco-design/web-vue/es/input/style/css.js'
 import '@arco-design/web-vue/es/modal/style/css.js'
@@ -37,6 +40,7 @@ import '@arco-design/web-vue/es/switch/style/css.js'
 import '@arco-design/web-vue/es/tabs/style/css.js'
 import '@arco-design/web-vue/es/tag/style/css.js'
 import '@arco-design/web-vue/es/textarea/style/css.js'
+import '@arco-design/web-vue/es/tooltip/style/css.js'
 import '@arco-design/web-vue/es/upload/style/css.js'
 import router from './router'
 import App from './App.vue'
@@ -49,6 +53,7 @@ const arcoComponents: Array<[string, Component]> = [
   ['AConfigProvider', ConfigProvider],
   ['ADoption', Doption],
   ['ADropdown', Dropdown],
+  ['ADrawer', Drawer],
   ['AForm', Form],
   ['AFormItem', FormItem],
   ['AInput', Input],
@@ -65,6 +70,7 @@ const arcoComponents: Array<[string, Component]> = [
   ['ATabs', Tabs],
   ['ATag', Tag],
   ['ATextarea', Textarea],
+  ['ATooltip', Tooltip],
   ['AUpload', Upload]
 ]
 

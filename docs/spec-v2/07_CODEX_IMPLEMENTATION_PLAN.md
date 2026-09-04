@@ -1,9 +1,9 @@
 # PaperAI V1 Codex Implementation Plan
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
-> 本文是 PaperAI V1 的**唯一实施顺序文档**。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
+> 本文是 PaperAI V1 的**唯一实施顺序文档**。
 > 其他 `spec-v2` 文档定义产品、架构与专项规则；本文只回答：**Codex 应该按什么顺序修改代码、每个阶段允许改什么、什么时候算完成。**
 
 ---
@@ -52,21 +52,25 @@ Only then enter next Phase
 
 ---
 
-# 1. 权威文档读取顺序
+# 1. Codex 会话读取顺序
 
-每次 Codex 新会话开始，必须读取：
+不要在每个 Codex 会话开始时全文读取全部 `spec-v2` 文档。
+
+每个正常实施会话固定读取：
 
 ```text
 1. AGENTS.md
-2. docs/spec-v2/00_PRODUCT_SCOPE.md
-3. docs/spec-v2/01_CODEBASE_MIGRATION_MAP.md
-4. docs/spec-v2/02_TARGET_ARCHITECTURE.md
-5. 当前 Phase 对应专项 spec
-6. docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md
-7. docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+2. docs/spec-v2/EXECUTION_INDEX.md
+3. docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+   - Overall Status
+   - Current Implementation Block
+   - Current Blockers
+   - Latest Handoff
+4. EXECUTION_INDEX 为当前 Block 指定的 spec headings
+5. 当前 Block 直接相关代码和测试
 ```
 
-如涉及现有专项能力，再读取：
+只有当前 Block 确实需要时，才读取：
 
 - `docs/ARCHITECTURE.md`
 - `docs/API.md`
@@ -77,7 +81,7 @@ Only then enter next Phase
 
 `docs/archive/*` 只作历史参考，不得覆盖 `spec-v2`。
 
----
+不要递归读取一份文档里提到的所有其它文档。
 
 # 2. 禁止跨阶段实现
 
@@ -1592,7 +1596,52 @@ ENABLE_NEW_AGENT_V2_EXPERIMENTAL_BETA_FINAL
 
 ---
 
-# 23. Performance Gate
+# 23. External Dependency Gate
+
+当实现依赖外部服务时，先判断是否需要用户控制的外部配置。
+
+外部依赖包括但不限于：
+
+- Academic Search Provider
+- LLM / Embedding Provider
+- third-party storage / conversion / enrichment service
+
+Codex 可以自行完成：
+
+- 阅读官方 API 文档；
+- 在规范限定范围内比较少量候选 Provider；
+- 设计 Provider interface；
+- 实现 adapter；
+- 使用 mock HTTP response 编写 unit / contract test；
+- 实现 401 / 403 / 429 / timeout 的确定性错误处理。
+
+如果需要注册第三方账号、接受第三方条款、API Key、CAPTCHA、billing / quota、第三方控制台配置、用户授权或 secret，则不得不断尝试其它 Provider 或非官方 workaround。
+
+必须：
+
+1. 完成不依赖该凭证的代码；
+2. 在 `08_IMPLEMENTATION_PROGRESS.md` 记录 `BLOCKED_BY_USER`；
+3. 写清 provider、原因、用户需要执行的动作、环境变量、配置位置和后续验证方式；
+4. 停止该依赖的真实集成验证；
+5. 等待用户完成操作。
+
+如果代码已完成但只缺真实外部验证，可记录：
+
+```text
+IMPLEMENTATION_COMPLETE_EXTERNAL_VALIDATION_BLOCKED
+```
+
+但相关 Phase 在真实 Provider 验证通过前不得标记完全 `DONE`。
+
+Mock 可以满足 unit / contract tests，但不能满足：
+
+- real-provider integration acceptance
+- end-to-end acceptance
+- production readiness
+
+---
+
+# 24. Performance Gate
 
 Discover：
 
@@ -1608,7 +1657,7 @@ Writing：
 
 ---
 
-# 24. Security Gate
+# 25. Security Gate
 
 任何新 Remote Import：
 
@@ -1626,7 +1675,7 @@ Writing：
 
 ---
 
-# 25. Reader Regression Gate
+# 26. Reader Regression Gate
 
 Phase 1、4、8 都必须验证：
 
@@ -1639,7 +1688,7 @@ V1 不允许以新 Agent 为代价破坏阅读。
 
 ---
 
-# 26. Export Regression Gate
+# 27. Export Regression Gate
 
 Phase 6、7、8：
 
@@ -1652,7 +1701,7 @@ Writing 重构不能让导出失效。
 
 ---
 
-# 27. Recommended Phase Order Summary
+# 28. Recommended Phase Order Summary
 
 ```text
 Phase 0
@@ -1688,7 +1737,7 @@ Cleanup / Long-term Docs
 
 ---
 
-# 28. Why This Order
+# 29. Why This Order
 
 ## Discover before Context
 
@@ -1717,7 +1766,7 @@ Writing UI 的 citation status 依赖真实 verifier contract。
 
 ---
 
-# 29. Codex Session Size
+# 30. Codex Session Size
 
 不建议一个 Codex 会话跑完整 V1。
 
@@ -1758,23 +1807,31 @@ Implementation complete
 不要因为会话即将结束就为一个未完成的 Block 强行提交半成品；应在 Progress 的 Handoff 中记录精确未完成状态。
 
 
-# 30. Context Window Discipline
+# 31. Context Window Discipline
 
-Codex 不需要每次读取所有 docs 全文。
+完整长规范是 reference，不是每会话的固定输入。
 
-固定：
+正常会话：
 
-- Product Scope
-- Migration Map
-- 当前 feature spec
-- Progress
-- 相关代码
+```text
+AGENTS.md
+→ EXECUTION_INDEX.md
+→ Progress 的 current status / blocker / handoff
+→ 当前 Block 指定 spec headings
+→ 相关代码 / tests
+```
 
-避免被历史 archive 污染。
+不要每次全文重新读取：
 
----
+```text
+00 + 01 + 02 + 03 + 04 + 05 + 06 + 07 + 08
+```
 
-# 31. Commit Message
+只有第一次进入某个 feature family、发生重大 spec/code 冲突，或 Handoff 无法提供足够上下文时，才扩大读取范围。
+
+下一会话读取范围应优先由 `Latest Handoff` 进一步缩小。
+
+# 32. Commit Message
 
 推荐：
 
@@ -1795,7 +1852,7 @@ agent final
 
 ---
 
-# 32. Progress Must Reference Commits
+# 33. Progress Must Reference Commits
 
 每个 Phase 结束：
 
@@ -1808,7 +1865,7 @@ End commit:
 
 ---
 
-# 33. Bug During Phase
+# 34. Bug During Phase
 
 如果发现与当前 Phase 无关 bug：
 
@@ -1819,7 +1876,7 @@ End commit:
 
 ---
 
-# 34. Existing Test Preservation
+# 35. Existing Test Preservation
 
 任何删旧代码前先找：
 
@@ -1834,7 +1891,7 @@ docs references
 
 ---
 
-# 35. Definition of Done — Whole V1
+# 36. Definition of Done — Whole V1
 
 整个 V1 只有以下全部成立才完成：
 
@@ -1871,7 +1928,7 @@ docs references
 
 ---
 
-# 36. Codex Phase Start Template
+# 37. Codex Phase Start Template
 
 复制到 `08_IMPLEMENTATION_PROGRESS.md`：
 
@@ -1916,7 +1973,7 @@ Start commit: `<sha>`
 
 ---
 
-# 37. Codex Phase Completion Template
+# 38. Codex Phase Completion Template
 
 ```markdown
 ### Implementation Result
@@ -1964,7 +2021,7 @@ READY / NOT READY
 
 ---
 
-# 38. Final Instruction to Codex
+# 39. Final Instruction to Codex
 
 PaperAI V1 的施工原则是：
 

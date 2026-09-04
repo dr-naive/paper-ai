@@ -39,3 +39,4 @@ export default request
 
 export * as paper from './paper'
 export * as projects from './projects'
+export * as discovery from './discovery'

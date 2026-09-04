@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     LLM_TIMEOUT_SECONDS: float = 180.0
     LLM_MAX_RETRIES: int = 2
+    ACADEMIC_SEARCH_PRIMARY_PROVIDER: str = "semantic_scholar"
+    SEMANTIC_SCHOLAR_API_KEY: Optional[str] = None
+    CROSSREF_MAILTO: Optional[str] = None
+    SEARCH_TIMEOUT_SECONDS: float = 15.0
+    SEARCH_MAX_RETRIES: int = 1
+    SEARCH_MAX_ROUNDS: int = 3
+    SEARCH_MAX_QUERIES_PER_ROUND: int = 3
+    SEARCH_RESULT_LIMIT: int = 10
     VISION_MODEL: str = "qwen-vl-max"
     VISION_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -89,6 +97,18 @@ class Settings(BaseSettings):
             raise ValueError("LLM_TIMEOUT_SECONDS 必须大于 0")
         if not 0 <= self.LLM_MAX_RETRIES <= 5:
             raise ValueError("LLM_MAX_RETRIES 必须在 0 到 5 之间")
+        if self.ACADEMIC_SEARCH_PRIMARY_PROVIDER != "semantic_scholar":
+            raise ValueError("当前 V1 仅支持 semantic_scholar 作为主学术搜索 Provider")
+        if self.SEARCH_TIMEOUT_SECONDS <= 0:
+            raise ValueError("SEARCH_TIMEOUT_SECONDS 必须大于 0")
+        if not 0 <= self.SEARCH_MAX_RETRIES <= 3:
+            raise ValueError("SEARCH_MAX_RETRIES 必须在 0 到 3 之间")
+        if not 1 <= self.SEARCH_MAX_ROUNDS <= 3:
+            raise ValueError("SEARCH_MAX_ROUNDS 必须在 1 到 3 之间")
+        if not 1 <= self.SEARCH_MAX_QUERIES_PER_ROUND <= 3:
+            raise ValueError("SEARCH_MAX_QUERIES_PER_ROUND 必须在 1 到 3 之间")
+        if not 1 <= self.SEARCH_RESULT_LIMIT <= 10:
+            raise ValueError("SEARCH_RESULT_LIMIT 必须在 1 到 10 之间")
         if self.REDIS_ANSWER_TASK_TTL_SECONDS < 60:
             raise ValueError("REDIS_ANSWER_TASK_TTL_SECONDS 不能小于 60")
         if self.REDIS_UPLOAD_TASK_TTL_SECONDS < 60:

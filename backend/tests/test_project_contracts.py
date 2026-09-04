@@ -1,3 +1,7 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
+
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -5,13 +9,17 @@ from pydantic import ValidationError
 from app.api.projects import (
     ArtifactCreate,
     MemoryNoteCreate,
+    ProjectCreate,
     ProjectPaperCardUpdate,
     ProjectPaperReadingPlan,
+    ProjectUpdate,
     ReadingExecutionStart,
     _artifact_integrity_locked,
     _validate_artifact_create_integrity,
     _build_workflow_status,
 )
+from app.application.project_service import ProjectNotFoundError, ProjectService, project_dict
+from app.models.project import ResearchProject
 from app.models.project import WritingArtifact
 from app.harness.tools.literature_research import (
     ProjectAppendMemoryInput,
@@ -32,6 +40,123 @@ from app.harness.tools.literature_research import (
     ProjectBuildReferenceListInput,
     ProjectImportArxivPaperInput,
 )
+
+
+def test_project_metadata_contract_requires_name_and_topic_and_normalizes_scope():
+    project = ProjectCreate(
+        title="  Literature review  ",
+        research_topic="  AI-assisted learning  ",
+        research_scope={
+            "field": "  Education  ",
+            "keywords": ["AI", " AI ", "", "self-regulated learning"],
+        },
+    )
+
+    assert project.title == "Literature review"
+    assert project.research_topic == "AI-assisted learning"
+    assert project.research_scope is not None
+    assert project.research_scope.field == "Education"
+    assert project.research_scope.keywords == ["AI", "self-regulated learning"]
+
+    with pytest.raises(ValidationError):
+        ProjectCreate(title="   ", research_topic="valid")
+    with pytest.raises(ValidationError):
+        ProjectCreate(title="valid", research_topic="   ")
+
+
+def test_project_scope_update_is_partial_and_response_shape_is_stable():
+    update = ProjectUpdate(research_scope={"research_goal": "  Compare outcomes  "})
+    payload = update.model_dump(exclude_unset=True)
+    assert payload["research_scope"] == {"research_goal": "Compare outcomes"}
+
+    project = ResearchProject(
+        id="project-1",
+        user_id="user-1",
+        title="Project",
+        research_topic="Topic",
+        abstract="",
+        phase="research",
+        status="active",
+        memory={"summary": "", "notes": []},
+        preferences={"citation_style": "apa", "research_scope": {"field": "Education"}},
+    )
+    serialized = project_dict(project, paper_count=2)
+    assert serialized["research_scope"]["field"] == "Education"
+    assert serialized["research_scope"]["keywords"] == []
+    assert serialized["preferences"]["citation_style"] == "apa"
+    assert serialized["paper_count"] == 2
+
+
+def test_project_service_hides_foreign_project_existence():
+    own_project = SimpleNamespace(id="project-1", user_id="user-1")
+    db = SimpleNamespace(get=AsyncMock(return_value=own_project))
+    service = ProjectService(db)
+    assert asyncio.run(service.get_owned_project("project-1", "user-1")) is own_project
+
+    db.get = AsyncMock(return_value=SimpleNamespace(id="project-1", user_id="other-user"))
+    with pytest.raises(ProjectNotFoundError):
+        asyncio.run(service.get_owned_project("project-1", "user-1"))
+
+    db.get = AsyncMock(return_value=None)
+    with pytest.raises(ProjectNotFoundError):
+        asyncio.run(service.get_owned_project("missing", "user-1"))
+
+
+def test_project_service_creates_typed_scope_in_existing_preferences_storage():
+    async def refresh(project):
+        project.id = "project-1"
+
+    db = SimpleNamespace(add=Mock(), commit=AsyncMock(), refresh=AsyncMock(side_effect=refresh))
+    result = asyncio.run(
+        ProjectService(db).create_project(
+            user_id="user-1",
+            title="Project",
+            research_topic="Topic",
+            abstract="",
+            phase="research",
+            status="active",
+            preferences={"citation_style": "apa"},
+            research_scope={"field": " Education ", "keywords": ["AI", "AI"]},
+        )
+    )
+
+    stored = db.add.call_args.args[0]
+    assert stored.preferences["citation_style"] == "apa"
+    assert stored.preferences["research_scope"]["field"] == "Education"
+    assert result["research_scope"]["keywords"] == ["AI"]
+    db.commit.assert_awaited_once()
+
+
+def test_project_paper_list_is_scoped_to_owned_project():
+    project = SimpleNamespace(id="project-1", user_id="user-1")
+    project_paper = SimpleNamespace(
+        to_dict=lambda: {"id": "membership-1", "project_id": "project-1", "paper_id": "paper-1"}
+    )
+    paper = SimpleNamespace(
+        id="paper-1",
+        title="Paper",
+        authors="Author",
+        abstract="Abstract",
+        keywords=["AI"],
+        publication_year=2026,
+        venue="Venue",
+        doi=None,
+        reading_progress=0,
+    )
+    db = SimpleNamespace(
+        get=AsyncMock(return_value=project),
+        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [(project_paper, paper)])),
+    )
+
+    result = asyncio.run(
+        ProjectService(db).list_project_papers(
+            project_id="project-1",
+            user_id="user-1",
+            role=None,
+        )
+    )
+    assert result["total"] == 1
+    assert result["items"][0]["paper"]["title"] == "Paper"
 
 
 def test_rest_paper_card_preserves_structured_evidence():

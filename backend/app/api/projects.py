@@ -35,15 +35,19 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id
 from app.database import get_db
+from app.application.project_service import (
+    PaperNotFoundError,
+    ProjectNotFoundError,
+    ProjectService,
+)
 from app.job_queue import enqueue_job
 from app.redis_client import get_json, set_json
-from app.models.paper import Paper
 from app.models.project import (
     ARTIFACT_STATUS_DRAFT,
     PAPER_ROLE_BACKGROUND,
@@ -228,21 +232,65 @@ async def _get_owned_project(
     db: AsyncSession, project_id: str, user_id: str
 ) -> ResearchProject:
     """加载项目并校验所有权,不存在或不属于该用户统一返回 404(避免泄漏存在性)。"""
-    project = await db.get(ResearchProject, project_id)
-    if project is None or project.user_id != user_id:
+    try:
+        return await ProjectService(db).get_owned_project(project_id, user_id)
+    except ProjectNotFoundError:
         raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
-    return project
 
 
 # =====================================================================
 # Pydantic 请求/响应模型
 # =====================================================================
+class ProjectScope(BaseModel):
+    field: str = Field("", max_length=200)
+    research_subject: str = Field("", max_length=500)
+    research_question: str = Field("", max_length=2000)
+    research_goal: str = Field("", max_length=2000)
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    method_direction: str = Field("", max_length=1000)
+    notes: str = Field("", max_length=4000)
+
+    @field_validator(
+        "field",
+        "research_subject",
+        "research_question",
+        "research_goal",
+        "method_direction",
+        "notes",
+    )
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("keywords")
+    @classmethod
+    def normalize_keywords(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            keyword = value.strip()
+            if not keyword or keyword in normalized:
+                continue
+            if len(keyword) > 100:
+                raise ValueError("keyword 长度不能超过 100")
+            normalized.append(keyword)
+        return normalized
+
+
 class ProjectCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=300)
     research_topic: str = Field(..., min_length=1, max_length=300)
     abstract: str = ""
     phase: str = PROJECT_PHASE_RESEARCH
     preferences: dict[str, Any] = Field(default_factory=dict)
+    research_scope: ProjectScope | None = None
+
+    @field_validator("title", "research_topic")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("项目名称和研究主题不能为空")
+        return normalized
 
 
 class ProjectUpdate(BaseModel):
@@ -252,6 +300,41 @@ class ProjectUpdate(BaseModel):
     phase: Optional[str] = None
     status: Optional[str] = None
     preferences: Optional[dict[str, Any]] = None
+    research_scope: Optional[ProjectScope] = None
+
+    @field_validator("title", "research_topic")
+    @classmethod
+    def normalize_optional_required_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("项目名称和研究主题不能为空")
+        return normalized
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    user_id: str
+    title: str
+    research_topic: str
+    abstract: str
+    phase: str
+    status: str
+    memory: dict[str, Any]
+    preferences: dict[str, Any]
+    research_scope: ProjectScope
+    paper_count: int | None = None
+    artifact_count: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ProjectListResponse(BaseModel):
+    items: list[ProjectResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 class ExternalPaperSearch(BaseModel):
@@ -271,7 +354,7 @@ class ProjectPaperAdd(BaseModel):
     role: str = PAPER_ROLE_RELATED
     tags: list[str] = Field(default_factory=list)
     notes: str = ""
-    reading_priority: int = 3
+    reading_priority: int = Field(3, ge=1, le=5)
 
 
 class ProjectPaperReadingPlan(BaseModel):
@@ -352,7 +435,7 @@ class ReadingExecutionStart(BaseModel):
 # =====================================================================
 # 项目 CRUD
 # =====================================================================
-@router.get("")
+@router.get("", response_model=ProjectListResponse)
 async def list_projects(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -363,58 +446,19 @@ async def list_projects(
 ):
     """列出当前用户的研究项目(分页 + 状态/关键字筛选)。"""
     user_id = await get_current_user_id(authorization, db)
-    stmt = select(ResearchProject).where(ResearchProject.user_id == user_id)
     if status:
         if status not in _VALID_STATUSES:
             raise HTTPException(status_code=400, detail=f"非法 status: {status}")
-        stmt = stmt.where(ResearchProject.status == status)
-    if q:
-        like = f"%{q}%"
-        stmt = stmt.where(
-            (ResearchProject.title.ilike(like))
-            | (ResearchProject.research_topic.ilike(like))
-        )
-    # 总数
-    count_stmt = select(func.count()).select_from(stmt.subquery())
-    total = (await db.execute(count_stmt)).scalar() or 0
-    # 分页(按 updated_at 倒序,最近编辑的在前)
-    stmt = stmt.order_by(ResearchProject.updated_at.desc()).offset(
-        (page - 1) * page_size
-    ).limit(page_size)
-    projects = (await db.execute(stmt)).scalars().all()
-
-    # 附带文档数与产物数(用子查询避免 N+1)
-    paper_counts: dict[str, int] = {}
-    artifact_counts: dict[str, int] = {}
-    if projects:
-        pids = [p.id for p in projects]
-        paper_rows = (
-            await db.execute(
-                select(ProjectPaper.project_id, func.count(ProjectPaper.id))
-                .where(ProjectPaper.project_id.in_(pids))
-                .group_by(ProjectPaper.project_id)
-            )
-        ).all()
-        paper_counts = {r[0]: r[1] for r in paper_rows}
-        artifact_rows = (
-            await db.execute(
-                select(WritingArtifact.project_id, func.count(WritingArtifact.id))
-                .where(WritingArtifact.project_id.in_(pids))
-                .group_by(WritingArtifact.project_id)
-            )
-        ).all()
-        artifact_counts = {r[0]: r[1] for r in artifact_rows}
-
-    items = []
-    for p in projects:
-        d = p.to_dict()
-        d["paper_count"] = paper_counts.get(p.id, 0)
-        d["artifact_count"] = artifact_counts.get(p.id, 0)
-        items.append(d)
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return await ProjectService(db).list_projects(
+        user_id=user_id,
+        page=page,
+        page_size=page_size,
+        status=status,
+        query=q,
+    )
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, response_model=ProjectResponse)
 async def create_project(
     body: ProjectCreate,
     authorization: str = Header(None),
@@ -424,24 +468,21 @@ async def create_project(
     user_id = await get_current_user_id(authorization, db)
     if body.phase not in _VALID_PHASES:
         raise HTTPException(status_code=400, detail=f"非法 phase: {body.phase}")
-    project = ResearchProject(
+    result = await ProjectService(db).create_project(
         user_id=user_id,
-        title=body.title.strip(),
-        research_topic=body.research_topic.strip(),
+        title=body.title,
+        research_topic=body.research_topic,
         abstract=body.abstract or "",
         phase=body.phase,
         status=PROJECT_STATUS_ACTIVE,
-        memory={"summary": "", "notes": []},
         preferences=body.preferences or {},
+        research_scope=body.research_scope.model_dump() if body.research_scope else None,
     )
-    db.add(project)
-    await db.commit()
-    await db.refresh(project)
-    logger.info("用户 %s 创建项目 %s topic=%s", user_id, project.id, project.research_topic[:50])
-    return project.to_dict()
+    logger.info("用户 %s 创建项目 %s topic=%s", user_id, result["id"], result["research_topic"][:50])
+    return result
 
 
-@router.get("/{project_id}")
+@router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: str,
     authorization: str = Header(None),
@@ -449,24 +490,13 @@ async def get_project(
 ):
     """项目详情(含文档数/产物数统计)。"""
     user_id = await get_current_user_id(authorization, db)
-    project = await _get_owned_project(db, project_id, user_id)
-    result = project.to_dict()
-    # 文档数 + 产物数
-    result["paper_count"] = (
-        await db.execute(
-            select(func.count()).select_from(ProjectPaper).where(
-                ProjectPaper.project_id == project_id
-            )
+    try:
+        return await ProjectService(db).get_project_detail(
+            project_id=project_id,
+            user_id=user_id,
         )
-    ).scalar() or 0
-    result["artifact_count"] = (
-        await db.execute(
-            select(func.count()).select_from(WritingArtifact).where(
-                WritingArtifact.project_id == project_id
-            )
-        )
-    ).scalar() or 0
-    return result
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
 
 
 @router.get("/{project_id}/workflow-status")
@@ -522,7 +552,7 @@ async def import_external_paper(
     return {"message": str(message), "arxiv_id": body.arxiv_id}
 
 
-@router.patch("/{project_id}")
+@router.patch("/{project_id}", response_model=ProjectResponse)
 async def update_project(
     project_id: str,
     body: ProjectUpdate,
@@ -531,30 +561,23 @@ async def update_project(
 ):
     """更新项目可变字段(部分更新)。"""
     user_id = await get_current_user_id(authorization, db)
-    project = await _get_owned_project(db, project_id, user_id)
-    if body.title is not None:
-        if not body.title.strip():
-            raise HTTPException(status_code=400, detail="title 不能为空")
-        project.title = body.title.strip()
-    if body.research_topic is not None:
-        if not body.research_topic.strip():
-            raise HTTPException(status_code=400, detail="research_topic 不能为空")
-        project.research_topic = body.research_topic.strip()
-    if body.abstract is not None:
-        project.abstract = body.abstract
     if body.phase is not None:
         if body.phase not in _VALID_PHASES:
             raise HTTPException(status_code=400, detail=f"非法 phase: {body.phase}")
-        project.phase = body.phase
     if body.status is not None:
         if body.status not in _VALID_STATUSES:
             raise HTTPException(status_code=400, detail=f"非法 status: {body.status}")
-        project.status = body.status
-    if body.preferences is not None:
-        project.preferences = body.preferences
-    await db.commit()
-    await db.refresh(project)
-    return project.to_dict()
+    changes = body.model_dump(exclude_unset=True, exclude_none=True)
+    research_scope = changes.pop("research_scope", None)
+    try:
+        return await ProjectService(db).update_project(
+            project_id=project_id,
+            user_id=user_id,
+            changes=changes,
+            research_scope=research_scope,
+        )
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
 
 
 @router.delete("/{project_id}", status_code=204)
@@ -565,9 +588,10 @@ async def delete_project(
 ):
     """级联删除项目(关联的 ProjectPaper / WritingArtifact / ChatSession 一并清理)。"""
     user_id = await get_current_user_id(authorization, db)
-    project = await _get_owned_project(db, project_id, user_id)
-    await db.delete(project)
-    await db.commit()
+    try:
+        await ProjectService(db).delete_project(project_id=project_id, user_id=user_id)
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
     logger.info("用户 %s 删除项目 %s", user_id, project_id)
     return None
 
@@ -584,34 +608,17 @@ async def list_project_papers(
 ):
     """列出项目文档库(含论文元信息)。"""
     user_id = await get_current_user_id(authorization, db)
-    await _get_owned_project(db, project_id, user_id)
-    stmt = (
-        select(ProjectPaper, Paper)
-        .join(Paper, Paper.id == ProjectPaper.paper_id)
-        .where(ProjectPaper.project_id == project_id)
-        .order_by(ProjectPaper.reading_priority.desc(), ProjectPaper.added_at.desc())
-    )
     if role:
         if role not in _VALID_PAPER_ROLES:
             raise HTTPException(status_code=400, detail=f"非法 role: {role}")
-        stmt = stmt.where(ProjectPaper.role == role)
-    rows = (await db.execute(stmt)).all()
-    items = []
-    for pp, paper in rows:
-        d = pp.to_dict()
-        d["paper"] = {
-            "id": paper.id,
-            "title": paper.title,
-            "authors": paper.authors,
-            "abstract": (paper.abstract or "")[:300],
-            "keywords": paper.keywords or [],
-            "publication_year": paper.publication_year,
-            "venue": paper.venue,
-            "doi": paper.doi,
-            "reading_progress": paper.reading_progress,
-        }
-        items.append(d)
-    return {"items": items, "total": len(items)}
+    try:
+        return await ProjectService(db).list_project_papers(
+            project_id=project_id,
+            user_id=user_id,
+            role=role,
+        )
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
 
 
 @router.post("/{project_id}/papers", status_code=201)
@@ -623,44 +630,24 @@ async def add_project_paper(
 ):
     """加入论文到项目(幂等:已存在则更新 role/tags/notes/priority)。"""
     user_id = await get_current_user_id(authorization, db)
-    await _get_owned_project(db, project_id, user_id)
     if body.role not in _VALID_PAPER_ROLES:
         raise HTTPException(status_code=400, detail=f"非法 role: {body.role}")
     if not body.paper_id:
         raise HTTPException(status_code=400, detail="paper_id 必填")
-    # 校验论文存在且属于当前用户
-    paper = await db.get(Paper, body.paper_id)
-    if paper is None or paper.user_id != user_id:
-        raise HTTPException(status_code=404, detail="论文不存在或无访问权限")
-    # 查是否已存在
-    existing = (
-        await db.execute(
-            select(ProjectPaper).where(
-                ProjectPaper.project_id == project_id,
-                ProjectPaper.paper_id == body.paper_id,
-            )
+    try:
+        return await ProjectService(db).add_project_paper(
+            project_id=project_id,
+            user_id=user_id,
+            paper_id=body.paper_id,
+            role=body.role,
+            tags=body.tags,
+            notes=body.notes,
+            reading_priority=body.reading_priority,
         )
-    ).scalars().first()
-    if existing:
-        existing.role = body.role
-        existing.tags = body.tags
-        existing.notes = body.notes
-        existing.reading_priority = body.reading_priority
-        await db.commit()
-        await db.refresh(existing)
-        return {**existing.to_dict(), "_action": "updated"}
-    pp = ProjectPaper(
-        project_id=project_id,
-        paper_id=body.paper_id,
-        role=body.role,
-        tags=body.tags,
-        notes=body.notes,
-        reading_priority=body.reading_priority,
-    )
-    db.add(pp)
-    await db.commit()
-    await db.refresh(pp)
-    return {**pp.to_dict(), "_action": "created"}
+    except ProjectNotFoundError:
+        raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
+    except PaperNotFoundError:
+        raise HTTPException(status_code=404, detail="论文不存在或无访问权限")
 
 
 @router.patch("/{project_id}/papers/{paper_id}")

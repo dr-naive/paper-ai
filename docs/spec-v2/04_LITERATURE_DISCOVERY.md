@@ -1,9 +1,9 @@
 # PaperAI V1 Literature Discovery Specification
 
-> 文档状态：ACTIVE / AUTHORITATIVE  
-> 版本：v2.0-draft  
-> 适用对象：Codex、AI Coding Agent、PaperAI 开发者  
-> 本文定义 PaperAI V1 的 Literature Discovery 产品流程、后端 Workflow、Academic Search Provider、API Contract、前端状态与卡片交互。  
+> 文档状态：ACTIVE / AUTHORITATIVE
+> 版本：v2.0-draft
+> 适用对象：Codex、AI Coding Agent、PaperAI 开发者
+> 本文定义 PaperAI V1 的 Literature Discovery 产品流程、后端 Workflow、Academic Search Provider、API Contract、前端状态与卡片交互。
 > 产品范围见 `00_PRODUCT_SCOPE.md`，总体架构见 `02_TARGET_ARCHITECTURE.md`。
 
 ---
@@ -483,14 +483,20 @@ Workflow 必须按 capability 映射，而不是假设所有 Provider 一样。
 
 第一版不要接太多数据源。
 
-建议产品策略：
+V1 产品策略固定为：
 
 ```text
-1 个主搜索 Provider
-+
-现有 arXiv 能力保留
-+
-必要时 1 个 metadata/citation enrichment Provider
+Primary literature discovery:
+Semantic Scholar Academic Graph API, unauthenticated-first
+
+Supplement / metadata enrichment:
+Crossref REST API
+
+Preprint / downloadable full-text source:
+arXiv
+
+Optional future enhancement:
+SEMANTIC_SCHOLAR_API_KEY
 ```
 
 实现时应优先评估：
@@ -514,6 +520,18 @@ Workflow 必须按 capability 映射，而不是假设所有 Provider 一样。
 8. 个人项目可维护性
 
 最终主 Provider 选择需在实施 Phase 之前写进 `08_IMPLEMENTATION_PROGRESS.md` 的 Architecture Decision。
+
+Provider exploration must be bounded.
+
+For V1 selection:
+
+1. compare only the candidates already justified by this spec / current code;
+2. record one Primary Provider decision;
+3. do not repeatedly switch providers only because a credential is missing;
+4. if a selected endpoint requires user-controlled credentials or account setup, execute the External Dependency Gate in `AGENTS.md` for that endpoint;
+5. continue credential-independent adapter / contract-test work where possible;
+6. accept the credential-free public path through a real-provider smoke when it is the selected V1 path;
+7. do not treat an optional Semantic Scholar API key as a Literature Discovery blocker or repeatedly switch providers because it is unavailable.
 
 ---
 
@@ -1353,6 +1371,14 @@ V1 不做也可以。
 
 # 64. Testing - Provider
 
+Test layers:
+
+- unit / contract tests may mock provider HTTP responses;
+- rate-limit / malformed / timeout cases should normally be deterministic mocked tests;
+- at least one real-provider smoke test is required before provider integration acceptance;
+- an optional missing Semantic Scholar key is not a reason to mark the public-path smoke as blocked or to fabricate a successful response;
+- if the selected endpoint genuinely requires a missing credential, record `BLOCKED_BY_USER` for that endpoint only.
+
 必须测试：
 
 - filter mapping
@@ -1494,13 +1520,48 @@ V1 可评估升级为：
 ```text
 ACADEMIC_SEARCH_PRIMARY_PROVIDER
 SEMANTIC_SCHOLAR_API_KEY
-OPENALEX_MAILTO
+CROSSREF_MAILTO
 SEARCH_MAX_ROUNDS
 SEARCH_MAX_QUERIES_PER_ROUND
 SEARCH_RESULT_LIMIT
 ```
 
 不要散落在 workflow 代码。
+
+---
+
+## External Credential Boundary
+
+The implementation must distinguish:
+
+```text
+code/config support
+vs
+real provider availability
+```
+
+If a required credential is not configured:
+
+```text
+adapter implementation
++ mocked unit/contract tests
+= allowed
+
+real integration accepted
+= not allowed
+```
+
+For the V1 public Semantic Scholar path, the API key is optional. Anonymous 429 responses remain typed, bounded provider states; they do not turn the whole Literature Discovery phase into `BLOCKED_BY_USER`.
+
+Codex must record any genuinely required missing credential in `08_IMPLEMENTATION_PROGRESS.md` and ask the user for the exact required action instead of repeatedly trying unrelated providers.
+
+A Provider Block may be described as:
+
+```text
+IMPLEMENTATION_COMPLETE_EXTERNAL_VALIDATION_BLOCKED
+```
+
+but Literature Discovery V1 is not fully complete until the chosen real provider has passed a real integration smoke test.
 
 ---
 

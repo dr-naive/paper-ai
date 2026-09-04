@@ -2,7 +2,7 @@ import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import { pinia } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 
-const routes: RouteRecordRaw[] = [
+export const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/home' },
   { path: '/home', name: 'Home', component: () => import('@/views/Home.vue') },
   { path: '/guide', name: 'Guide', component: () => import('@/views/Guide.vue') },
@@ -12,8 +12,26 @@ const routes: RouteRecordRaw[] = [
   { path: '/library', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
   { path: '/paper/:id', name: 'PaperReader', component: () => import('@/views/PaperReader.vue') },
   { path: '/projects', name: 'ResearchProjects', component: () => import('@/views/ResearchProjectList.vue') },
-  { path: '/project/:id', name: 'ProjectWorkspace', component: () => import('@/views/ProjectWorkspace.vue') },
+  {
+    path: '/project/:id',
+    name: 'LegacyProjectWorkspace',
+    redirect: to => ({
+      name: 'ProjectOverview',
+      params: { projectId: to.params.id },
+      query: to.query,
+      hash: to.hash,
+    }),
+  },
   { path: '/project/:id/chat', name: 'ProjectChat', component: () => import('@/views/ProjectChat.vue') },
+  {
+    path: '/projects/:projectId',
+    name: 'ProjectRoot',
+    redirect: to => ({ name: 'ProjectOverview', params: { projectId: to.params.projectId } }),
+  },
+  { path: '/projects/:projectId/overview', name: 'ProjectOverview', component: () => import('@/views/ProjectOverview.vue') },
+  { path: '/projects/:projectId/discover', name: 'ProjectDiscover', component: () => import('@/views/LiteratureDiscover.vue') },
+  { path: '/projects/:projectId/papers', name: 'ProjectPapers', component: () => import('@/views/ProjectPapers.vue') },
+  { path: '/projects/:projectId/writing', name: 'ProjectWriting', component: () => import('@/views/ProjectWriting.vue') },
   {
     path: '/admin',
     name: 'AdminDashboard',

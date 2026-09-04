@@ -17,22 +17,42 @@ The product goal is not to expose an Agent platform. Agent behavior is an intern
 
 ## Source of truth
 
-Before editing, read documents in this order:
+Do **not** read every long specification in full at the start of every Codex session.
+
+For every normal implementation session, read in this order:
 
 1. `AGENTS.md`
-2. `docs/spec-v2/00_PRODUCT_SCOPE.md`
-3. `docs/spec-v2/01_CODEBASE_MIGRATION_MAP.md`
-4. `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
-5. The relevant feature specification under `docs/spec-v2/`
-6. `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`
-7. `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`
-8. Relevant long-term maintenance documents such as `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/HYBRID_RETRIEVAL.md`, `docs/WORKER_ARCHITECTURE.md`, `docs/QA_WORKFLOW.md`, and `docs/TODO_OR_RISKS.md`
+2. `docs/spec-v2/EXECUTION_INDEX.md`
+3. `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`
+   - `Overall Status`
+   - current Phase / Implementation Block
+   - `Current Blockers`
+   - `Latest Handoff`
+4. Only the current Block-specific specification sections listed by `EXECUTION_INDEX.md`
+5. Only source files and tests directly related to the current Block
 
-Documents under `docs/archive/` are historical context only.
+Read other long documents only when the current Block actually needs them.
 
-They MUST NOT override `docs/spec-v2/`.
+If documents conflict, use this authority order:
 
-Do not rely on a referenced document path unless it actually exists in the current branch.
+1. `AGENTS.md`
+2. `docs/spec-v2/EXECUTION_INDEX.md`
+3. `docs/spec-v2/00_PRODUCT_SCOPE.md`
+4. Relevant feature specification under `docs/spec-v2/`
+5. `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
+6. `docs/spec-v2/01_CODEBASE_MIGRATION_MAP.md`
+7. `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`
+8. `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` for implementation state
+9. Relevant long-term maintenance documents under `docs/`
+10. `docs/archive/` for historical context only
+
+`08_IMPLEMENTATION_PROGRESS.md` is authoritative for **what has actually been completed**, not for product design.
+
+Documents under `docs/archive/` are historical context only and MUST NOT override current specifications.
+
+Do not recursively read every document referenced by another document unless `EXECUTION_INDEX.md` explicitly requires it.
+
+Do not rely on a referenced path unless it actually exists in the current branch.
 
 ## V1 product boundary
 
@@ -283,6 +303,76 @@ For remote full-text import:
 - do not bypass paywalls or publisher access controls,
 - do not accept arbitrary user-supplied download URLs as trusted import sources.
 
+## External Dependency Gate
+
+External services include, for example:
+
+- Academic Search Providers
+- LLM providers
+- Embedding providers
+- third-party storage, conversion, or enrichment services
+
+Before implementing against a new external service:
+
+1. inspect existing project configuration and `.env.example`;
+2. determine whether the service works without credentials;
+3. determine whether an API key, account, paid quota, approval, console setup, or user authorization is required;
+4. record the provider decision and required configuration in `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`.
+
+Codex may independently:
+
+- read official API documentation;
+- compare only a small bounded set of providers already justified by the current spec;
+- design provider interfaces;
+- implement adapters;
+- implement deterministic 401 / 403 / 429 / timeout handling;
+- write unit and contract tests with mocked HTTP responses.
+
+Codex must **not**:
+
+- repeatedly switch providers merely because credentials are missing;
+- invent credentials;
+- repeatedly retry 401 / 403 / 429 responses;
+- use unofficial workarounds to avoid normal provider requirements;
+- weaken architecture or security to avoid asking the user for configuration;
+- spend multiple implementation iterations trying arbitrary alternative services.
+
+If implementation requires user-controlled action such as:
+
+- registering an account;
+- accepting third-party terms;
+- obtaining an API key;
+- entering a CAPTCHA;
+- enabling billing or quota;
+- configuring a third-party console;
+- supplying a secret;
+- granting external authorization;
+
+then:
+
+1. complete all code work that does not require the missing credential;
+2. stop real-provider validation for that dependency;
+3. record `BLOCKED_BY_USER` in `08_IMPLEMENTATION_PROGRESS.md`;
+4. record provider/service, reason, exact user action, environment/config variable, configuration location, and verification method;
+5. ask the user for that action;
+6. do not try unrelated replacement providers unless the user or an authoritative specification explicitly reopens the provider decision.
+
+Mocked external responses are allowed for unit tests, contract tests, and deterministic provider-error tests.
+
+Mocks cannot satisfy:
+
+- real-provider integration acceptance;
+- end-to-end acceptance;
+- production-readiness acceptance.
+
+When code is complete but real validation is waiting on user configuration, record:
+
+```text
+IMPLEMENTATION_COMPLETE_EXTERNAL_VALIDATION_BLOCKED
+```
+
+The relevant Phase must not be marked fully `DONE` until required real-provider validation succeeds.
+
 ## Required implementation flow
 
 All V1 implementation follows `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`.
@@ -296,12 +386,13 @@ Before a Phase starts:
 
 During implementation:
 
-1. make the smallest phase-scoped change,
-2. preserve reusable foundations,
-3. add or update tests with the implementation,
-4. keep API contracts typed,
-5. update `docs/API.md` for real API changes only,
-6. record spec deviations instead of silently changing product behavior.
+1. work on one coherent Implementation Block at a time,
+2. batch related edits until that Block is functionally complete,
+3. preserve reusable foundations,
+4. add or update tests with the Block,
+5. keep API contracts typed,
+6. update `docs/API.md` for real API changes only,
+7. record spec deviations instead of silently changing product behavior.
 
 Before a Phase is marked complete:
 

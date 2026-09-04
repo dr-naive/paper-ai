@@ -1,7 +1,8 @@
 # Architecture
 
-> 状态：ACTIVE — V1 MIGRATION  
-> 本文档描述 **当前 `agent-rearchitecture-v1` 分支已经存在的主要架构事实**，并标明 V1 重构期间的稳定边界。  
+> STATUS: PARTIALLY OUTDATED DURING V1 MIGRATION
+> Current implementation target: `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
+> 本文档描述 **当前 `agent-rearchitecture-v1` 分支已经存在的主要架构事实**，并标明 V1 重构期间的稳定边界。
 > V1 的目标架构和施工顺序分别以：
 >
 > - `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
