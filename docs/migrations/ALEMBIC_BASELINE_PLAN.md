@@ -1,11 +1,16 @@
 # Alembic Baseline Plan
 
-> Status: Implemented and verified on 2026-08-17
+> Status: IMPLEMENTED / HISTORICAL IMPLEMENTATION RECORD
 >
-> Prepared: 2026-08-17
+> Implemented and verified: 2026-08-17
 >
-> Source of truth: WIP baseline commit `745d592` on `agent-rearchitecture-v1`
-> Governing specification: `docs/PROJECT_AGENT_IMPLEMENTATION_SPEC.md`
+> Baseline commit: `745d592` on `agent-rearchitecture-v1`
+>
+> This document records the completed Alembic baseline migration work.
+> Its original governing specification has since been archived.
+>
+> Current V1 implementation authority: `docs/spec-v2/`
+> Current database operating rules: `docs/database/MIGRATION_GUIDE.md`
 
 ## 1. Scope and stop boundary
 

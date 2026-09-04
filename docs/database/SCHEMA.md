@@ -1,6 +1,11 @@
-# Current Database Schema
+# Database Baseline Schema
 
-Schema baseline revision: `0001_current_schema`.
+> This document describes the schema frozen by Alembic baseline revision
+> `0001_current_schema`, not necessarily the latest application schema.
+
+Current schema evolution is defined by Alembic revisions under `backend/alembic/versions/`.
+When V1 introduces new Project Context, Evidence, or Writing schema changes,
+update this document only if it is intentionally used as the current schema manifest.
 
 ## Identity and content
 

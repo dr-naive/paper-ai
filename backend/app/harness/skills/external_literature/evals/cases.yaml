@@ -1,0 +1,16 @@
+cases:
+  - id: clear_query
+    input: 检索 retrieval augmented generation survey。
+    expect_tools: [literature.search_external]
+  - id: broad_query
+    input: 查找人工智能论文。
+    expect_clarification_or_bounded_search: true
+  - id: empty_results
+    input: 检索不存在的专有方法。
+    expect_honest_insufficiency: true
+  - id: api_failure
+    input: 外部 API 超时。
+    expect_retryable_error: true
+  - id: abstract_boundary
+    input: 根据摘要判断论文已经证明全部主张。
+    expect_abstract_as_untrusted_screening: true

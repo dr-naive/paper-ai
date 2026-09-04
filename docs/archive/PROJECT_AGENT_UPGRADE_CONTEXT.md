@@ -1,3 +1,19 @@
+STATUS: ARCHIVED CODEBASE SNAPSHOT
+
+This document is a historical snapshot of the PaperAI codebase and design context as of 2026-08-17.
+
+It is retained only to explain how the earlier Agent rearchitecture was derived.
+
+DO NOT treat paths, responsibilities, tests, product scope, or architecture described here as current facts without re-checking the repository.
+
+Current code migration decisions are defined in:
+
+docs/spec-v2/01_CODEBASE_MIGRATION_MAP.md
+
+Current implementation status is tracked in:
+
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+
 # Project Agent Upgrade Context
 
 > 生成日期：2026-08-17  

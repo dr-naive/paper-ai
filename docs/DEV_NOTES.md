@@ -4,10 +4,13 @@
 
 ## 推荐维护方式
 
-1. 先读 `README.md`、`docs/ARCHITECTURE.md` 和本文件。
-2. 涉及接口时同步检查 `docs/API.md`。
-3. 涉及用户流程时改完跑 `docs/SMOKE_TESTS.md` 中相关场景。
-4. 遇到已知坑先看 `docs/TODO_OR_RISKS.md`。
+1. 所有 V1 开发先遵循根目录 `AGENTS.md` 的文档读取顺序。
+2. 当前产品与施工规范以 `docs/spec-v2/` 为准。
+3. 当前实施进度与跨会话交接以 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` 为准。
+4. 本文件只记录日常开发、启动、调试和环境操作约定，不承担产品或架构权威。
+5. 涉及接口时同步检查并更新 `docs/API.md`。
+6. 涉及用户流程时运行 `docs/SMOKE_TESTS.md` 中相关场景。
+7. 遇到长期风险查看 `docs/TODO_OR_RISKS.md`。
 
 ## 启动约定
 

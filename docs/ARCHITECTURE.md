@@ -1,162 +1,794 @@
 # Architecture
 
-本文档描述 PaperAI 当前代码结构，作为后续迭代前的快速上下文。
+> 状态：ACTIVE — V1 MIGRATION  
+> 本文档描述 **当前 `agent-rearchitecture-v1` 分支已经存在的主要架构事实**，并标明 V1 重构期间的稳定边界。  
+> V1 的目标架构和施工顺序分别以：
+>
+> - `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
+> - `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`
+>
+> 为准。
+>
+> 本文不能用来推断“计划中的功能已经实现”。当 V1 Phase 9 完成后，应再次按最终代码同步本文。
 
-## 系统边界
+---
 
-PaperAI 是前后端分离应用：
+## 1. 系统定位
 
-- 前端位于 `frontend/`，负责登录注册、论文列表、PDF 阅读、论文问答和摘要/解读展示。
-- 后端位于 `backend/app/`，提供认证、论文管理、聊天会话、PDF 解析、RAG 检索和 LLM 调用。
-- 运行环境统一由 Docker Compose 管理，数据库使用 PostgreSQL，并使用 Redis。
+PaperAI 当前已经从单纯的 PDF 阅读 + RAG 应用演化为：
 
-## 后端入口
+```text
+独立论文阅读系统
++
+Project / Research Workspace 原型
++
+Agent Runtime / Execution 基础
++
+WritingDocument / Citation 基础
+```
 
-入口文件：`backend/app/main.py`
+V1 产品正在收敛为：
 
-启动流程：
+```text
+Project
+├── Overview
+├── Discover
+├── Papers
+└── Writing
+```
 
-1. 创建 FastAPI 应用。
-2. 配置 CORS。
-3. lifespan 启动阶段调用 `init_db()` 初始化数据库表。
-4. 挂载 API router。
+现有 Research Map、Reading Plan、Evidence Matrix、Experiment Design、Agent Activity 等原型不代表 V1 继续扩展这些产品方向。
 
-已挂载 router：
+---
 
-- `app.api.auth.router`，前缀 `/api/auth`
-- `app.api.papers.router`，前缀 `/api/v1/papers`
-- `app.api.chat.router`，前缀 `/api/v1/chat`
-- `app.api.paper_analysis.router`，前缀 `/api/v1/papers`（问答、解读、摘要）
+## 2. 顶层结构
 
-## 后端模块
+```text
+paper-ai/
+├── backend/
+│   └── app/
+│       ├── agent/
+│       ├── api/
+│       ├── application/
+│       ├── harness/
+│       ├── infrastructure/
+│       ├── llm/
+│       ├── models/
+│       ├── parsers/
+│       ├── rag/
+│       ├── services/
+│       ├── utils/
+│       ├── config.py
+│       ├── database.py
+│       ├── job_queue.py
+│       ├── redis_client.py
+│       ├── worker.py
+│       └── main.py
+│
+├── frontend/
+│   └── src/
+│       ├── api/
+│       ├── components/
+│       ├── router/
+│       ├── stores/
+│       ├── utils/
+│       ├── views/
+│       ├── App.vue
+│       └── main.ts
+│
+├── docs/
+└── deploy/
+```
 
-`backend/app/api/`
+---
 
-- `auth.py`：注册、登录、JWT 签发、当前用户读取。
-- `papers.py`：论文上传、列表、详情、PDF 文件、章节、任务状态、删除。
-- `chat.py`：对话会话、会话消息、流式问答、摘要缓存、解读缓存。
-- `paper_analysis.py`：论文问答（agent 路径 + 旧 workflow fallback）、解读、结构化摘要。
+## 3. 运行环境
 
-`backend/app/models/`
+PaperAI 主要通过 Docker Compose 管理运行环境。
 
-- `user.py`：用户表。
-- `paper.py`：论文、章节、问答、表格、图片；遗留的笔记/文件夹模型未挂载为业务 API。
-- `chat.py`：聊天会话、聊天消息、摘要缓存、解读缓存。
+核心运行组件包括：
 
-`backend/app/harness/`（Agent 运行时层，与 API 网关解耦）
+```text
+frontend
+backend
+worker
+postgres
+redis
+```
 
-- `agents/lead_agent.py`：主 Agent，ReAct loop + 意图分析 + 多意图分解 + 流式输出。
-- `agents/interpret_agent.py`：解读 Agent，调用 search_paper_content tool 并生成带 [Sx] 引用的结构化解读。
-- `agents/critique_subagent.py`：批判性分析子 Agent（审稿意见、创新性评估）。
-- `skills/registry.py`：Skill 注册与 tool 加载。
-- `tools/paper_internal.py`：论文内部检索 tool（元数据、正文、表格）。
-- `tools/external_literature.py`：外部文献检索 tool（arXiv API、Semantic Scholar API）。
-- `tools/reading_assistant.py`：阅读辅助 tool（阅读进度、术语定义）。
+数据责任：
 
-`backend/app/agent/`（离线处理 pipeline + 旧 QA fallback）
+- PostgreSQL：durable relational state
+- Redis：queue / live execution state / temporary runtime coordination
+- `/app/data` / persistent volume：上传 PDF、解析产物和相关文件数据
+- vector storage：现有 RAG / Hybrid Retrieval 使用的向量索引
 
-- `paper_parser/graph.py`：论文元信息抽取、章节解析、解析结果整理。
-- `qa_agent/enhanced_graph.py`：追问生成（`generate_follow_up_questions`）和旧 QA fallback 入口（`run_enhanced_qa_agent`）。工具函数已迁移至 `utils/qa_helpers.py`。
-- `qa_agent/workflow.py`：确定性 QA workflow（`UnifiedQAWorkflow`），作为 agent 路径的 fallback。
-- `summarizer/graph.py`：结构化摘要 Agent，抽取概览、方法、实验、贡献。
-- `state.py`：Agent 状态类型（`QAAgentState`、`PaperParserState`、`SummarizerState`）。
+不要使用 `docker compose down -v`，除非明确要删除持久化数据。
 
-`backend/app/utils/`
+---
 
-- `qa_helpers.py`：QA 工具函数（意图检测、引用构建、置信度计算），供 harness 和 api 层共用。
-- `background_tasks.py`、`task_manager.py`：后台任务管理。
+## 4. Backend 分层
 
-`backend/app/rag/knowledge_base.py`
+当前后端已经不是纯 API + RAG 结构。
 
-- `SmartChunker`：论文文本智能分块。
-- `DashScopeEmbeddings`：Embedding 适配。
-- `PaperKnowledgeBase`：论文知识库管理、检索、向量存储。
+V1 使用以下逻辑边界理解现有代码：
 
-`backend/app/parsers/`
+```text
+API
+  ↓
+Application Service
+  ↓
+Workflow / Agent Runtime
+  ↓
+Retrieval / Domain Services
+  ↓
+Infrastructure / Database / External Provider
+```
 
-- `multimedia_extractor.py`：从 PDF 抽取图片、表格等多媒体信息。
-- `image_filter.py`：过滤非核心论文图片。
-- `image_analyzer.py`：图片语义分析。
-- `table_analyzer.py`：表格语义分析。
+现有代码还没有完全按该目标拆干净，因此迁移期间会存在部分跨层历史代码。
 
-`backend/app/llm/client.py`
+---
 
-- 统一封装 LLM 调用。配置来自 `backend/app/config.py` 和 `.env`。
+## 5. API Layer
 
-## 前端结构
+目录：
 
-入口：
+```text
+backend/app/api/
+```
 
-- `frontend/src/main.ts`
-- `frontend/src/App.vue`
-- `frontend/src/router/index.ts`
+职责应限制为：
 
-页面：
+- HTTP request / response
+- authentication
+- authorization
+- validation
+- serialization
+- SSE transport
+- application-service invocation
+- HTTP error mapping
 
-- `Home.vue`：首页。
-- `Login.vue`：登录。
-- `Register.vue`：注册。
-- `PaperList.vue`：论文列表和上传。
-- `PaperReader.vue`：论文阅读。
-- `PaperQA.vue`：论文问答。
+已有 API 包括认证、论文、聊天、Project / execution / research-related endpoints 等。
 
-组件：
+V1 迁移方向：
 
-- `PdfViewer.vue`：PDF 阅读组件。
+- 不继续把复杂业务 orchestration 堆进单个 `projects.py`
+- Literature Discovery 建立独立 use case / endpoint
+- Writing Agent 建立独立 use case / endpoint
+- `docs/API.md` 只记录真实已经实现并测试的接口
 
-API 客户端：
+---
 
-- `frontend/src/api/index.ts`：Axios 实例、token 注入、401 处理。
-- `frontend/src/api/auth.ts`：认证 API 调用。
-- `frontend/src/api/paper.ts`：论文、任务、聊天、摘要、解读 API 调用。
+## 6. Application Layer
 
-## 核心业务流程
+目录：
 
-### 登录
+```text
+backend/app/application/
+```
 
-1. 前端调用 `/api/auth/login`。
-2. 后端校验用户名和密码。
-3. 后端签发 JWT。
-4. 前端将 `access_token` 保存到 `localStorage`。
-5. Axios request interceptor 自动附加 `Authorization: Bearer <token>`。
+当前已至少存在：
 
-### 上传论文
+```text
+execution_service.py
+writing_service.py
+```
 
-1. 前端 `uploadPaper(file)` 调用 `/api/v1/papers/upload`。
-2. 后端保存 PDF 文件。
-3. 后端创建论文记录和后台任务。
-4. 后台流程解析文本、章节、图表、多媒体内容。
-5. 解析结果写入数据库。
-6. 文本内容进入知识库，供问答和检索使用。
-7. 前端轮询 `/api/v1/papers/tasks/{task_id}` 获取任务状态。
+Application Service 的目标职责：
 
-### 论文问答
+- 用例入口
+- transaction boundary
+- ownership / permission coordination
+- 调用 workflow / repositories / services
+- 返回稳定 DTO
 
-1. 前端调用 `/api/v1/papers/{paper_id}/qa` 或会话内 `/api/v1/chat/sessions/{session_id}/ask`。
-2. 后端校验用户和论文权限。
-3. 后端通过知识库检索相关 chunks。
-4. 后端调用 enhanced QA Agent 生成答案。
-5. 会话路径会额外保存消息历史。
+当前 `writing_service.py` 仍主要是早期写作辅助能力，V1 会把它逐步扩展为 context-aware writing use case，而不是重新创建第二套 Writing backend。
 
-### 摘要和解读
+---
 
-1. 摘要路径通过 summarizer Agent 生成结构化内容。
-2. 解读路径根据 interpret type 生成指定角度内容。
-3. `chat.py` 中存在摘要和解读缓存模型，避免重复生成。
+## 7. Agent Runtime / Harness
 
-## 数据与文件位置
+目录：
 
-- PostgreSQL：`postgres_data` Docker volume
-- 上传 PDF、向量库和任务状态：`paperai_data` Docker volume，容器内位于 `/app/data`
-- 服务日志：通过 `docker compose logs` 查看
+```text
+backend/app/harness/
+```
 
-## 启动与部署
+当前包含 Agent、Runtime、Tool、Skill 等基础。
 
-项目统一由 Docker Compose 管理：
+关键方向：
 
-- backend
-- frontend
-- postgres
-- redis
+```text
+harness/
+├── agents/
+├── runtime/
+├── tools/
+└── skills/
+```
 
-启动和更新使用 `docker compose up -d --build`。停止服务使用 `docker compose down`，不要附加 `-v`，否则会删除数据卷。
+### `lead_agent.py`
+
+当前 Lead Agent 已经承担：
+
+- model tool-calling / ReAct loop
+- 意图与上下文处理
+- iteration budget
+- tool dispatch
+- execution / checkpoint / streaming 等相关职责
+
+V1 将保留通用 Runtime 核心，但迁出：
+
+- Project Context assembly
+- Literature Discovery workflow
+- Writing workflow
+- Evidence retrieval
+- Citation Verification
+
+`lead_agent.py` 不应继续变成所有科研业务的 God Object。
+
+### Tool Runtime
+
+现有 Tool Runtime 是 V1 复用资产。
+
+Tool 继续要求：
+
+- atomic
+- typed
+- permission classified
+- timeout bounded
+- ownership checked
+- auditable
+
+### Skill Runtime
+
+继续作为内部工程能力。
+
+Skill 不作为 V1 用户产品界面。
+
+---
+
+## 8. Legacy `backend/app/agent/`
+
+目录：
+
+```text
+backend/app/agent/
+```
+
+主要承载：
+
+- PDF parsing pipeline
+- summarizer
+- QA fallback / legacy workflow
+- Agent state definitions
+
+这部分不等同于新的 Project Agent Runtime。
+
+V1 不因 Project 重构而重写成熟 PDF parse / Reader QA 基础。
+
+---
+
+## 9. PDF Ingestion / Parse Pipeline
+
+现有主链大致为：
+
+```text
+PDF upload / approved remote import
+→ Paper record
+→ background worker
+→ text / section / multimedia parse
+→ database persistence
+→ chunking / indexing
+→ Reader / RAG available
+```
+
+V1 新增的 Project Paper Profile 应在：
+
+```text
+parse / index ready
+```
+
+之后作为非阻塞 enrichment 生成。
+
+Paper Profile 失败不得导致 Reader 不可用。
+
+---
+
+## 10. RAG / Retrieval
+
+核心位于：
+
+```text
+backend/app/rag/
+```
+
+现有能力包括：
+
+- chunking
+- embeddings
+- vector retrieval
+- Hybrid / Table retrieval related foundations
+- Reader QA retrieval
+
+V1 原则：
+
+- 保留现有 RAG
+- 不建立第二套向量库
+- Writing Evidence Retrieval 在现有 retrieval 上增加 Project / Paper candidate filter
+- Paper Profile 用来先缩小候选论文
+- Evidence 才作为最终引用支撑
+
+---
+
+## 11. External Literature
+
+现有：
+
+```text
+backend/app/harness/tools/external_literature.py
+backend/app/harness/tools/literature_research.py
+```
+
+已经具备 arXiv / Semantic Scholar 相关能力。
+
+当前问题：
+
+- Provider 访问、搜索策略、workflow 职责还没有彻底分离
+- arXiv 搜索能力较基础
+- V1 尚未冻结 Primary Academic Search Provider
+- 搜索结果 schema 需要统一
+
+V1 目标：
+
+```text
+Academic Search Provider
+→ Normalized Paper
+→ Literature Discovery Workflow
+→ bounded Agent result-quality decisions
+```
+
+Search Provider 与 PDF Remote Import 是不同架构层。
+
+---
+
+## 12. Remote Paper Import
+
+现有远程论文导入能力应继续作为安全边界。
+
+它负责：
+
+- approved source resolution
+- host / identifier validation
+- size checks
+- PDF validation
+- temporary file handling
+- cleanup
+- 接入现有 Paper parse pipeline
+
+它不应升级为 arbitrary URL downloader。
+
+---
+
+## 13. Project Domain
+
+当前模型已经存在 Project 相关结构。
+
+V1 核心：
+
+```text
+ResearchProject
+ProjectPaper
+```
+
+ResearchProject 用于承载：
+
+- title
+- research topic
+- optional structured research scope
+
+ProjectPaper 表示：
+
+> 已正式进入当前 Project 的 Paper 关系。
+
+Discover 的 Favorite 不是 ProjectPaper。
+
+---
+
+## 14. Project Context
+
+当前系统已有 memory / research / evidence 相关基础，但 V1 不再把 Project Context 理解为一个大字符串。
+
+目标语义：
+
+```text
+Project Context
+├── Project Profile
+├── Literature Memory
+├── Paper Profile
+├── Evidence
+└── Writing Context
+```
+
+### Project Profile
+
+描述用户正在研究什么。
+
+### Literature Memory
+
+保存少量长期有价值的检索偏好与确认后的 Search Intent。
+
+### Paper Profile
+
+描述已导入论文大致研究什么。
+
+优先演化现有：
+
+```text
+ProjectPaper.analysis_card
+```
+
+### Evidence
+
+来自真实 Project Paper 全文、可定位并可用于支持 claim 的来源对象。
+
+继续复用现有 Evidence 基础。
+
+### Writing Context
+
+一次 Writing Agent 请求临时构造的上下文，不作为长期 Memory blob。
+
+详细规则：
+
+`docs/spec-v2/03_PROJECT_CONTEXT_AND_EVIDENCE.md`
+
+---
+
+## 15. Execution / Event
+
+当前系统已经具有 execution service / execution state / event 恢复基础。
+
+用途包括：
+
+- long-running Agent run
+- progress events
+- pause / resume / cancel
+- checkpoint / recovery
+- SSE
+
+内部可以记录细粒度 execution event。
+
+用户界面只显示产品可理解的阶段，不展示 raw tool log 或 chain-of-thought。
+
+---
+
+## 16. Writing Domain
+
+当前系统已经存在正式写作能力基础，包括：
+
+- WritingDocument
+- revision
+- Tiptap editor
+- AI proposal / diff 基础
+- Citation Node
+- citation audit
+- export foundations
+
+V1 不重建编辑器。
+
+目标 Writing 主链：
+
+```text
+Editor selection/current section
+→ Writing API
+→ WritingService
+→ Project Context
+→ candidate Paper Profiles
+→ Evidence Retrieval
+→ generation / rewrite
+→ Citation Mapping
+→ Citation Verification
+→ Proposal
+```
+
+AI 不直接覆盖正文。
+
+用户通过：
+
+```text
+Replace selected content
+Copy
+```
+
+决定是否采用 Proposal。
+
+---
+
+## 17. Citation Architecture
+
+内部引用不能只保存：
+
+```text
+[1]
+```
+
+结构化 Citation 至少关联：
+
+```text
+paper_id
+citation_key
+evidence_id
+```
+
+V1 Citation Verification 分为：
+
+```text
+Referential Integrity
+→ lexical / retrieval gate
+→ semantic support verification
+```
+
+输出：
+
+```text
+verified
+weak
+unsupported
+```
+
+Citation style（GB/T 7714 / APA / IEEE）只影响渲染，不改变底层关联。
+
+---
+
+## 18. Frontend State
+
+当前前端已经使用 Pinia 基础。
+
+V1 推荐职责：
+
+```text
+authStore
+projectStore
+discoverStore
+writingStore
+executionStore
+workspaceStore
+```
+
+原则：
+
+- business entity state 与 UI shell state 分离
+- Tiptap document 不重复存成第二份全局正文真值
+- 不把 raw execution trace / provider payload 放进全局 store
+
+---
+
+## 19. Frontend Product Architecture
+
+V1 Global：
+
+```text
+Home / Projects
+Independent Reading
+Settings
+```
+
+Project：
+
+```text
+Overview
+Discover
+Papers
+Writing
+```
+
+不再继续扩大一个万能 `ProjectWorkspace.vue`。
+
+迁移目标：
+
+- `ProjectWorkspace.vue` 退化为 shell 或最终拆除
+- Project route 拆成清晰子页面
+- `ProjectChat.vue` 不再作为 Project 主入口
+- `PaperReader.vue` 冻结为成熟资产
+- `WritingDocumentEditor.vue` 保留 editor core，重构三栏 layout 与右侧 Agent
+
+---
+
+## 20. Reader Boundary
+
+独立论文阅读是 V1 明确保留的另一条产品路径。
+
+V1 不要求：
+
+- 独立 Reader 自动加入 Project
+- Reader 大规模 UI 重构
+- 新增复杂高亮 / memory 工作流
+
+Project Papers 只需要能稳定进入现有 Reader。
+
+---
+
+## 21. Literature Discovery Target Flow
+
+V1 目标：
+
+```text
+Requirement Chat
+→ SearchIntent
+→ user-editable structured filters
+→ Search Planner
+→ Academic Search Provider
+→ Normalize
+→ Deduplicate
+→ relevance / coverage check
+→ bounded retry
+→ <= 10 real papers
+```
+
+结果返回结构化对象。
+
+前端渲染 2-column cards。
+
+操作：
+
+```text
+Details
+Favorite
+Download
+Import
+```
+
+完整实现见：
+
+`docs/spec-v2/04_LITERATURE_DISCOVERY.md`
+
+---
+
+## 22. Writing Target Flow
+
+V1 目标：
+
+```text
+Instruction
+→ current section / selection
+→ Project Profile
+→ Paper Profile shortlist
+→ Evidence Retrieval
+→ generation
+→ Citation Mapping
+→ Citation Verification
+→ Proposal
+```
+
+只允许引用：
+
+> 当前 Project 已正式导入并可检索的论文。
+
+Writing 不在 V1 自动联网搜索新论文。
+
+完整实现见：
+
+`docs/spec-v2/05_WRITING_WORKSPACE.md`
+
+---
+
+## 23. API / Frontend Contract
+
+所有新 V1 主链接口应使用稳定 schema。
+
+重点包括：
+
+```text
+SearchIntent
+SearchFilters
+Normalized Paper Search Result
+Writing Request
+Writing Proposal
+Citation Mapping
+Citation Verification
+Execution Progress
+```
+
+前端不得通过正则从 Agent prose 中解析论文卡片或 Citation。
+
+---
+
+## 24. Database Migration
+
+Schema 修改必须走 Alembic。
+
+禁止：
+
+- startup `ALTER TABLE`
+- 无兼容计划地删除列
+- 为 V1 创建大量平行 V2 表
+
+优先扩展现有：
+
+- ResearchProject
+- ProjectPaper
+- MemoryItem
+- EvidenceItem
+- WritingDocument
+- existing analysis-card structures
+
+---
+
+## 25. Documentation Architecture
+
+当前文档分三层：
+
+```text
+docs/spec-v2/
+= 当前 V1 施工合同
+
+docs/*.md
+= 长期维护 / 当前系统文档
+
+docs/archive/
+= 历史设计与历史代码快照
+```
+
+`docs/archive/` 不具有当前施工权威。
+
+实施状态只由：
+
+```text
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+```
+
+持续维护。
+
+---
+
+## 26. V1 迁移期间的关键保护项
+
+不得无明确迁移计划破坏：
+
+- PDF ingestion
+- Paper IDs / file paths
+- section / bbox / Reader定位
+- Hybrid Retrieval
+- Reader QA
+- existing chat compatibility
+- Project ownership
+- execution / SSE recovery
+- WritingDocument / revision
+- Citation Node
+- export
+- remote import safety
+- PostgreSQL / Redis deployment
+
+---
+
+## 27. 当前主要架构风险
+
+详见：
+
+`docs/TODO_OR_RISKS.md`
+
+当前重点包括：
+
+- Lead Agent God Object
+- literature research Tool / Workflow 混合
+- ProjectWorkspace 产品过载
+- Academic Search Provider 选型
+- Context 退化为大 Prompt
+- Citation semantic verification
+- Writing / Reader regression
+- 文档权威冲突
+
+---
+
+## 28. 施工完成后的同步要求
+
+Phase 9 时必须重新核对：
+
+- 实际目录结构
+- 实际 API
+- actual provider
+- actual Context implementation
+- actual Writing workflow
+- actual citation verifier
+- actual routes / stores
+
+然后删除本文中的“V1 目标 / 迁移方向”措辞，使 `ARCHITECTURE.md` 只描述已经存在的稳定系统。

@@ -216,6 +216,10 @@
                       <div v-else-if="qa.streaming" class="qa-stream-progress">
                         {{ qa.status || '正在生成' }}
                       </div>
+                      <div v-if="projectId && qa.answer && !qa.streaming" class="research-save-actions">
+                        <a-button size="mini" @click="saveAnswerAsNote(qa)">保存为研究笔记</a-button>
+                        <a-button size="mini" @click="compareInProject">与项目论文比较</a-button>
+                      </div>
                       <div
                         v-if="qa.streamError"
                         class="qa-stream-error"
@@ -281,11 +285,12 @@
                           <span>引用溯源</span>
                           <span class="citation-hint">当前论文可直接定位，跨论文引用会打开来源论文</span>
                         </div>
-                        <button
+                        <div
                           v-for="(cite, ci) in visibleCitations(qa)"
                           :key="ci"
-                          type="button"
-                          class="citation-item"
+                          class="citation-row"
+                        >
+                        <button type="button" class="citation-item"
                           :class="{ active: activeCitationKey === citationKey(qa.id, ci) }"
                           :aria-label="`查看引用：${cite.paper_title || cite.section || '原文引用'}`"
                           @click="handleCitationClick(cite, citationKey(qa.id, ci))"
@@ -303,6 +308,8 @@
                           </div>
                           <p class="citation-text">{{ cite.text }}</p>
                         </button>
+                        <a-button v-if="projectId" size="mini" class="save-evidence-button" @click="saveCitationAsEvidence(cite)">保存证据</a-button>
+                        </div>
                         <button
                           v-if="qa.citations.length > 2"
                           type="button"
@@ -671,11 +678,13 @@ import {
   interpretPaper, getInterpretCache
 } from '@/api/paper'
 import type { AskStreamHandlers } from '@/api/paper'
+import { createEvidence, createResearchNote } from '@/api/projects'
 
 const route = useRoute()
 const router = useRouter()
 const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
 const paperId = route.params.id as string
+const projectId = computed(() => String(route.query.project_id || ''))
 const paper = ref<any>(null)
 const pdfUrl = ref('')
 const pdfError = ref(false)
@@ -816,6 +825,32 @@ const visibleCitations = (qa: any) => (
   isCitationGroupExpanded(qa.id) ? qa.citations : qa.citations.slice(0, 2)
 )
 
+const citationPage = (cite: any): number | undefined => {
+  const value = Number(cite.page || cite.page_number || String(cite.position || '').match(/\d+/)?.[0])
+  return Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+const saveCitationAsEvidence = async (cite: any) => {
+  if (!projectId.value || !cite.text) return
+  try {
+    await createEvidence(projectId.value, {
+      paper_id: String(cite.paper_id || paperId), evidence_type: 'quote', snippet: String(cite.text),
+      normalized_claim: '', page_number: citationPage(cite),
+    })
+    Message.success('引用已保存为研究证据')
+  } catch (error: any) { Message.error(error?.response?.data?.detail || '保存证据失败') }
+}
+
+const saveAnswerAsNote = async (qa: any) => {
+  if (!projectId.value || !qa.answer) return
+  try {
+    await createResearchNote(projectId.value, { type: 'finding', title: String(qa.question || '论文问答记录').slice(0, 300), content: String(qa.answer), tags: ['paper-reader'] })
+    Message.success('回答已保存为研究笔记')
+  } catch (error: any) { Message.error(error?.response?.data?.detail || '保存笔记失败') }
+}
+
+const compareInProject = () => router.push({ name: 'ProjectWorkspace', params: { id: projectId.value }, query: { area: 'reading' } })
+
 const toggleCitationGroup = (qaId: string | number) => {
   const next = new Set(expandedCitationGroups.value)
   const key = String(qaId)
@@ -913,7 +948,7 @@ const createNewSession = async () => {
     qaHistory.value = []
     await loadSessions()
     Message.success('已创建新对话')
-  } catch (error) {
+  } catch {
     Message.error('创建会话失败')
   }
 }
@@ -949,7 +984,7 @@ const switchSession = async (sessionId: string) => {
       await nextTick()
       questionInputRef.value?.focus?.()
     }
-  } catch (error) {
+  } catch {
     Message.error('加载会话失败')
   }
 }
@@ -1002,7 +1037,7 @@ const handleDeleteSession = async (sessionId: string) => {
         }
         await loadSessions()
         Message.success('已删除')
-      } catch (error) {
+      } catch {
         Message.error('删除失败')
       }
     }
@@ -1370,7 +1405,7 @@ const stopCurrentAnswer = async () => {
   if (pending) pending.status = '正在停止生成'
   try {
     await stopAnswerTask(currentAnswerTaskId.value)
-  } catch (error) {
+  } catch {
     Message.error('停止生成失败，请重试')
   }
 }
@@ -1608,7 +1643,7 @@ const handleGenerateSummary = async () => {
     const response = await generateSummary(paperId)
     structuredSummary.value = response
     Message.success('摘要已更新')
-  } catch (error) {
+  } catch {
     Message.error('摘要生成失败')
   } finally {
     summaryLoading.value = false
@@ -1633,7 +1668,7 @@ const handleInterpret = async () => {
     const response = await interpretPaper(paperId, interpretType.value)
     interpretResult.value = response
     Message.success('解读完成')
-  } catch (error) {
+  } catch {
     Message.error('解读失败')
   } finally {
     interpretLoading.value = false
@@ -2506,6 +2541,7 @@ watch(interpretType, () => {
 }
 
 /* 引用溯源 */
+.research-save-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .qa-citations {
   margin-top: 10px;
   padding: 10px;
@@ -2513,6 +2549,10 @@ watch(interpretType, () => {
   border-radius: 8px;
   border: 1px solid oklch(0.82 0.05 250);
 }
+
+.citation-row { position: relative; margin-bottom: 6px; }
+.citation-row .citation-item { padding-right: 92px; }
+.save-evidence-button { position: absolute; top: 8px; right: 8px; }
 
 .citation-title {
   display: flex;

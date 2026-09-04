@@ -69,6 +69,30 @@ async def create_execution(project_id: str, body: ExecutionCreate, db: AsyncSess
     return execution_dict(item)
 
 
+@router.get("/projects/{project_id}/executions")
+async def list_project_executions(project_id: str, limit: int = Query(50, ge=1, le=200),
+                                  db: AsyncSession = Depends(get_db), user_id: str = Depends(current_user_id)):
+    require_runtime()
+    project = (await db.execute(select(ResearchProject).where(ResearchProject.id == project_id,
+                                                               ResearchProject.user_id == user_id))).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    rows = (await db.execute(select(AgentExecution).where(AgentExecution.project_id == project_id,
+                                                           AgentExecution.user_id == user_id)
+                             .order_by(AgentExecution.created_at.desc()).limit(limit))).scalars().all()
+    return {"items": [execution_dict(row) for row in rows]}
+
+
+@router.get("/executions")
+async def list_user_executions(limit: int = Query(100, ge=1, le=200),
+                               db: AsyncSession = Depends(get_db), user_id: str = Depends(current_user_id)):
+    """Restore the authenticated user's global task center from durable state."""
+    require_runtime()
+    rows = (await db.execute(select(AgentExecution).where(AgentExecution.user_id == user_id)
+                             .order_by(AgentExecution.updated_at.desc()).limit(limit))).scalars().all()
+    return {"items": [execution_dict(row) for row in rows]}
+
+
 @router.get("/executions/{execution_id}")
 async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db),
                         user_id: str = Depends(current_user_id)):

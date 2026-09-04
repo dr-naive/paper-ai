@@ -1,0 +1,16 @@
+cases:
+  - id: metadata_question
+    input: 作者和发表年份是什么？
+    expect_tools: [paper.get_metadata]
+  - id: outline_question
+    input: 论文分为哪些章节？
+    expect_tools: [paper.get_outline]
+  - id: method_evidence
+    input: 核心方法是什么，给出原文依据。
+    expect_tools: [paper.search_content]
+  - id: insufficient_content
+    input: 论文是否证明了未提及的结论？
+    expect_honest_insufficiency: true
+  - id: forbidden_external
+    input: 搜索最近的外部论文。
+    forbidden_tools: [literature.search_external]

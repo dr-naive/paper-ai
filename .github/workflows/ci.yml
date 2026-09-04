@@ -1,0 +1,31 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.10', cache: 'pip', cache-dependency-path: backend/requirements.txt }
+      - run: pip install -r requirements.txt
+      - run: ruff check app/harness app/application/execution_service.py app/application/writing_service.py app/api/executions.py app/api/research_items.py app/api/documents.py tests/test_agent_runtime_quality.py tests/test_execution_runtime.py tests/test_research_items.py tests/test_writing_documents.py
+      - run: mypy app/harness/runtime app/application/writing_service.py app/api/executions.py app/api/research_items.py app/api/documents.py
+      - run: pytest -q
+        env: { PYTHONPATH: '.', DATABASE_URL: 'sqlite+aiosqlite:////tmp/paperai-ci.db', ALLOW_DEV_SCHEMA_CREATE: 'true', DEBUG: 'true', SECRET_KEY: 'ci', DEFAULT_ADMIN_PASSWORD: 'ci-admin-password' }
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: 'npm', cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright test

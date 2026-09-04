@@ -1,0 +1,19 @@
+<template>
+  <a-spin :loading="loading">
+    <div v-if="!artifact" class="empty-state"><h3>把精读结果变成可比较的证据</h3><p>至少完成两篇论文卡片后，在项目对话中生成跨论文证据矩阵。矩阵会区分方法、数据集、指标、发现、局限、冲突结论和待补证据。</p><a-button type="primary" :disabled="completedCards < 2" @click="emit('chat')">进入项目对话</a-button></div>
+    <section v-else class="matrix" aria-label="跨论文证据矩阵">
+      <header><div><span>来自 {{ content.generated_from_cards }} 张论文卡片</span><h2>{{ artifact.title }}</h2><p>{{ content.research_question }}</p></div><a-button size="small" @click="emit('open', artifact)">查看完整产物</a-button></header>
+      <div class="table-wrap" tabindex="0" aria-label="证据矩阵，可横向滚动"><table><thead><tr><th>论文</th><th>方法</th><th>数据集</th><th>指标</th><th>主要发现</th><th>局限</th></tr></thead><tbody><tr v-for="row in content.rows" :key="row.paper_id"><th scope="row"><button type="button" @click="emit('paper', row.paper_id)">{{ row.paper_title }}</button></th><td>{{ cell(row.methods) }}</td><td>{{ cell(row.datasets) }}</td><td>{{ cell(row.metrics) }}</td><td>{{ cell(row.findings) }}</td><td>{{ cell(row.limitations) }}</td></tr></tbody></table></div>
+      <div class="insights"><section><h3>冲突结论</h3><ul v-if="content.conflicts.length"><li v-for="(item, index) in content.conflicts" :key="index"><strong>{{ item.explanation || item.claim_a || '待核对冲突' }}</strong><span v-if="item.source_ids?.length">来源 {{ item.source_ids.join('、') }}</span></li></ul><p v-else>尚未发现有来源支持的冲突结论。</p></section><section><h3>证据缺口</h3><ul v-if="content.evidence_gaps.length"><li v-for="(item, index) in content.evidence_gaps" :key="index"><strong>{{ item.dimension || '未分类缺口' }}</strong><span>{{ item.missing_evidence || item.next_action || '需要继续补证' }}</span></li></ul><p v-else>当前未记录证据缺口。</p></section></div>
+    </section>
+  </a-spin>
+</template>
+<script setup lang="ts">
+import type { EvidenceMatrixContent, WritingArtifactItem } from '@/api/projects'
+defineProps<{ artifact: WritingArtifactItem | null; content: EvidenceMatrixContent; loading: boolean; completedCards: number }>()
+const emit = defineEmits<{ chat: []; open: [artifact: WritingArtifactItem]; paper: [paperId: string] }>()
+const cell = (values?: string[]) => values?.length ? values.join('；') : '未报告'
+</script>
+<style scoped>
+.empty-state { max-width: 680px; margin: 0 auto; padding: 48px 24px; color: var(--pa-muted); text-align: center; }.empty-state h3 { margin: 0 0 8px; color: var(--pa-text); font-size: 20px; }.empty-state p { margin: 0 0 20px; line-height: 1.7; }.matrix { display: flex; flex-direction: column; gap: 24px; }.matrix > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }.matrix header span { color: var(--pa-muted); font-size: 12px; }.matrix h2 { margin: 4px 0 8px; font-size: 22px; }.matrix header p,.insights p { margin: 0; color: var(--pa-muted); line-height: 1.6; }.table-wrap { overflow-x: auto; border: 1px solid var(--pa-border); border-radius: 8px; }.table-wrap:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }table { width: 100%; min-width: 960px; border-collapse: collapse; font-size: 13px; }th,td { padding: 12px; border-bottom: 1px solid var(--pa-border); text-align: left; vertical-align: top; line-height: 1.5; }thead th { background: var(--pa-surface-soft); }tbody th { min-width: 180px; }tbody button { padding: 0; border: 0; background: transparent; color: var(--pa-primary); cursor: pointer; text-align: left; font: inherit; font-weight: 600; }.insights { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; }.insights h3 { margin: 0 0 12px; }.insights ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }.insights li { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--pa-border); border-radius: 8px; }.insights span { color: var(--pa-muted); font-size: 13px; }@media(max-width:767px){.matrix>header{flex-direction:column}.insights{grid-template-columns:1fr}}
+</style>

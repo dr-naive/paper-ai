@@ -1,0 +1,16 @@
+cases:
+  - id: clear_topic
+    input: 调研多模态模型用于伪造检测。
+    require: [representative_papers, theme_clusters, source_ids, open_questions]
+  - id: broad_topic
+    input: 帮我研究大模型。
+    expect_clarification: true
+  - id: insufficient_papers
+    input: 项目只有一篇论文时生成领域共识。
+    expect_honest_gap: true
+  - id: conflicting_evidence
+    input: 两篇论文对同一方法结论冲突。
+    expect_conflict_preserved: true
+  - id: external_api_failure
+    input: 外部检索失败但项目已有论文。
+    expect_project_fallback: true

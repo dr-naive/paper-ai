@@ -231,9 +231,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import {
-  getCurrentUser,
   login,
-  type UserResponse,
 } from '@/api/auth'
 import {
   IconDashboard,
@@ -245,15 +243,16 @@ import {
 } from '@arco-design/web-vue/es/icon'
 import BrandMark from '@/components/BrandMark.vue'
 import {
-  activateAccount,
   getSavedAccounts,
   rememberAccount,
   rememberCurrentAccount,
   removeSavedAccount,
   type SavedAccount,
 } from '@/utils/accountSessions'
+import { useAuthStore } from '@/stores/auth'
 
-const currentUser = ref<UserResponse | null>(null)
+const auth = useAuthStore()
+const currentUser = computed(() => auth.user)
 const savedAccounts = ref<SavedAccount[]>(getSavedAccounts())
 const showDropdown = ref(false)
 const showAddAccount = ref(false)
@@ -327,19 +326,10 @@ const selectBackground = (index: number) => {
 }
 
 onMounted(async () => {
-  const token = localStorage.getItem('access_token')
-  if (token) {
-    try {
-      const user = await getCurrentUser()
-      currentUser.value = user
-      localStorage.setItem('user', JSON.stringify(user))
-      rememberCurrentAccount(user)
-      savedAccounts.value = getSavedAccounts()
-    } catch {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('user')
-      currentUser.value = null
-    }
+  const user = await auth.validate()
+  if (user) {
+    rememberCurrentAccount(user)
+    savedAccounts.value = getSavedAccounts()
   }
   window.addEventListener('scroll', handleScroll)
 
@@ -360,13 +350,11 @@ const handleLogout = () => {
     ? removeSavedAccount(currentUser.value.id)
     : getSavedAccounts()
   if (remainingAccounts.length) {
-    activateAccount(remainingAccounts[0])
+    auth.setSession(remainingAccounts[0])
     window.location.reload()
     return
   }
-  localStorage.removeItem('access_token')
-  localStorage.removeItem('user')
-  currentUser.value = null
+  auth.clearSession()
   savedAccounts.value = []
   showDropdown.value = false
   Message.success('已退出登录')
@@ -374,7 +362,7 @@ const handleLogout = () => {
 
 const handleSwitchAccount = (account: SavedAccount) => {
   if (account.user.id === currentUser.value?.id) return
-  activateAccount(account)
+  auth.setSession(account)
   window.location.reload()
 }
 
@@ -395,7 +383,7 @@ const handleAddAccount = async () => {
   try {
     const response = await login(accountForm.value)
     rememberAccount(response)
-    activateAccount({ access_token: response.access_token, user: response.user })
+    auth.setSession(response)
     showAddAccount.value = false
     Message.success(`已添加并切换到 ${response.user.username}`)
     window.location.reload()

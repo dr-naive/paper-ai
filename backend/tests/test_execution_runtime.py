@@ -32,6 +32,7 @@ def test_execution_api_routes_are_registered():
     routes = {(route.path, tuple(route.methods or ())) for route in app.routes}
     paths = {path for path, _ in routes}
     assert "/api/v1/projects/{project_id}/executions" in paths
+    assert "/api/v1/executions" in paths
     assert "/api/v1/executions/{execution_id}/events" in paths
     assert "/api/v1/executions/{execution_id}/stream" in paths
     for action in ("cancel", "pause", "resume", "approve"):

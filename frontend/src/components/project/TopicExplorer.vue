@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { importExternalPaper, searchExternalPapers, type ExternalPaperCandidate } from '@/api/projects'
 
@@ -59,6 +59,10 @@ const searching = ref(false)
 const searched = ref(false)
 const batchImporting = ref(false)
 const error = ref('')
+
+watch(() => props.initialQuery, value => {
+  if (value && !searching.value) query.value = value
+})
 
 const search = async () => {
   if (query.value.trim().length < 2) return

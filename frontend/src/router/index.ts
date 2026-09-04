@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
-import { getCurrentUser } from '@/api/auth'
+import { pinia } from '@/stores'
+import { useAuthStore } from '@/stores/auth'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/home' },
@@ -42,36 +43,18 @@ const router = createRouter({
   },
 })
 
-let validatedToken = ''
-
 router.beforeEach(async (to) => {
+  const auth = useAuthStore(pinia)
   const token = localStorage.getItem('access_token')
   const isPublicRoute = to.path === '/login' || to.path === '/home' || to.path === '/guide' || to.path === '/register'
 
   if (!token) {
-    validatedToken = ''
+    auth.clearSession()
     return isPublicRoute ? true : '/login'
   }
 
-  let currentUser: any = null
-  if (validatedToken !== token) {
-    try {
-      currentUser = await getCurrentUser()
-      localStorage.setItem('user', JSON.stringify(currentUser))
-      validatedToken = token
-    } catch {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('user')
-      validatedToken = ''
-      return isPublicRoute ? true : '/login'
-    }
-  } else {
-    try {
-      currentUser = JSON.parse(localStorage.getItem('user') || 'null')
-    } catch {
-      currentUser = null
-    }
-  }
+  const currentUser = await auth.validate()
+  if (!currentUser) return isPublicRoute ? true : '/login'
 
   if (to.meta.requiresAdmin && currentUser?.role !== 'admin') return '/home'
   return to.path === '/login' || to.path === '/register' ? '/home' : true

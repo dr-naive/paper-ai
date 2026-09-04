@@ -70,6 +70,8 @@ from app.api.chat import router as chat_router
 from app.api.admin import router as admin_router
 from app.api.projects import router as projects_router
 from app.api.executions import router as executions_router
+from app.api.research_items import evidence_router, router as research_items_router
+from app.api.documents import router as documents_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
 from app.models.user import User
@@ -89,6 +91,8 @@ from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCac
 # 项目/写作产物模型:import 后 Base.metadata.create_all 会自动建表
 from app.models.project import ResearchProject, ProjectPaper, WritingArtifact
 from app.models.execution import AgentExecution, AgentEvent, ToolCall
+from app.models.research import MemoryItem, EvidenceItem
+from app.models.document import WritingDocument, DocumentRevision
 
 app.include_router(auth_router)
 app.include_router(papers_router)
@@ -97,6 +101,9 @@ app.include_router(chat_router)
 app.include_router(admin_router)
 app.include_router(projects_router)
 app.include_router(executions_router)
+app.include_router(research_items_router)
+app.include_router(evidence_router)
+app.include_router(documents_router)
 
 
 @app.get("/")

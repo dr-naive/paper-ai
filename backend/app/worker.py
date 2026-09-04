@@ -32,6 +32,8 @@ from app.models.user import User  # noqa: F401
 from app.models.paper import Paper, Section, Image, Note, Table, TableStructure  # noqa: F401
 from app.models.project import ResearchProject, ProjectPaper, WritingArtifact  # noqa: F401
 from app.models.execution import AgentExecution, AgentEvent, ToolCall, TERMINAL_EXECUTION_STATUSES  # noqa: F401
+from app.models.research import MemoryItem, EvidenceItem  # noqa: F401
+from app.models.document import WritingDocument, DocumentRevision  # noqa: F401
 from app.application.execution_service import append_event, get_control, set_control, set_status
 from app.redis_client import close_redis, get_async_redis, get_json, initialize_redis, set_json
 

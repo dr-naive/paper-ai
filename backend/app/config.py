@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:paperai-local@localhost:5432/paperai"
     ALLOW_DEV_SCHEMA_CREATE: bool = False
     ENABLE_AGENT_RUNTIME_V2: bool = False
+    ENABLE_MEMORY_V2: bool = False
+    ENABLE_WRITING_V2: bool = False
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_ANSWER_TASK_TTL_SECONDS: int = 24 * 60 * 60
     REDIS_UPLOAD_TASK_TTL_SECONDS: int = 7 * 24 * 60 * 60

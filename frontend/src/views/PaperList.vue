@@ -322,7 +322,7 @@ const toggleFavorite = async (paper: any) => {
     const result = await updateReadingStatus(paper.id, { favorite: paper.is_favorite }) as any
     paper.is_favorite = result.is_favorite
     paper.updated_at = result.updated_at
-  } catch (error) {
+  } catch {
     paper.is_favorite = previous
     Message.error('更新收藏失败，请重试')
   }

@@ -32,7 +32,6 @@ from app.rag.hybrid_retrieval import HybridPaperRetriever, tokenize
 from app.models.project import (
     ARTIFACT_STATUS_DRAFT,
     ARTIFACT_STATUS_READY,
-    PAPER_ROLE_CORE,
     PAPER_ROLE_RELATED,
     PROJECT_PHASE_WRITING,
     PROJECT_PHASE_REFINEMENT,

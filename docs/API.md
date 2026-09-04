@@ -1,5 +1,12 @@
 # API
 
+> 状态：ACTIVE / CURRENT-CONTRACT-ONLY
+>
+> 本文档只记录当前代码中已经存在并完成验证的 API。
+> `docs/spec-v2/` 中出现的未来 endpoint、DTO 或 route 只是施工目标，在对应实现与测试完成前不得提前写入本文。
+>
+> 每个实施 Phase 如果新增、删除或修改真实 API，必须在同一 Phase 更新本文和 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`。
+
 本文档记录当前后端主要 API 路径，以及前端 API 客户端的调用关系。以后修改接口时，先同步这里，避免前后端路径漂移。
 
 ## 认证
@@ -25,7 +32,7 @@ Authorization: Bearer <access_token>
 角色目前分为 `admin` 和 `user`。管理员接口只允许 `admin` 角色访问。
 系统每次启动都会确保固定的 `admin` 管理员存在并处于启用状态；密码由 `DEFAULT_ADMIN_PASSWORD` 环境变量提供。
 
-注意：前端 `auth.ts` 中仍保留 `/api/auth/logout` 调用，但后端当前代码没有对应路由；当前退出登录由前端删除 token 完成。
+兼容性说明：如前端仍调用 `/api/auth/logout` 而后端没有对应路由，应在 `docs/TODO_OR_RISKS.md` 中以当前代码重新验证后记录；本文件只保留已经确认的接口事实。
 
 ## 管理员观测
 
@@ -60,7 +67,7 @@ Router：`backend/app/api/papers.py`
 
 前端主要调用文件：`frontend/src/api/paper.ts`
 
-注意：前端 `updateReadingStatus()` 调用了 `PATCH /api/v1/papers/{paper_id}/status`，但当前后端 `papers.py` 中未看到对应 router。详见 `docs/TODO_OR_RISKS.md`。
+阅读状态相关接口若在前后端存在契约差异，应以当前分支重新验证后记录到 `docs/TODO_OR_RISKS.md`；不要把未重新验证的历史风险继续固化在 API Contract 中。
 
 ## 聊天会话
 
@@ -100,3 +107,30 @@ Router：`backend/app/api/chat.py`
 - 反向代理。
 
 当前 Docker 前端通过 Nginx 将 `/api/` 代理到 backend 容器，通常无需设置该变量。
+
+## 文档维护规则
+
+`API.md` 是当前实现 Contract，不是未来 API 设计文档。
+
+以下接口只有在对应 Phase 实现、测试通过后才能加入：
+
+- Project V1 新增 / 调整接口
+- Literature Discovery API
+- Favorite / Import API
+- Project Context / Paper Profile API（如果最终对前端暴露）
+- Writing Agent API
+- Citation Verification API
+- 新 Execution / SSE API
+
+实现 API 时必须同步记录：
+
+1. Method
+2. Path
+3. Request schema
+4. Response schema
+5. Ownership / auth requirement
+6. Frontend caller
+7. Backward compatibility
+8. 对应测试
+
+未来施工目标请查看 `docs/spec-v2/`，实施状态查看 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`。

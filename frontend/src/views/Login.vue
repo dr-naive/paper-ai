@@ -28,8 +28,10 @@ import { Message } from '@arco-design/web-vue'
 import { login } from '@/api/auth'
 import AuthShell from '@/components/AuthShell.vue'
 import { rememberAccount } from '@/utils/accountSessions'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
 const formError = ref('')
@@ -44,8 +46,7 @@ const handleLogin = async () => {
   try {
     const response = await login(form.value)
     rememberAccount(response)
-    localStorage.setItem('access_token', response.access_token)
-    localStorage.setItem('user', JSON.stringify(response.user))
+    auth.setSession(response)
     Message.success('登录成功')
     router.push('/home')
   } catch (error: any) {

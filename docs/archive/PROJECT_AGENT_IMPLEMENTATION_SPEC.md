@@ -1,3 +1,20 @@
+STATUS: ARCHIVED
+
+This document records an earlier PaperAI Agent rearchitecture proposal.
+It is retained for historical context only.
+
+DO NOT use this document as the current implementation contract.
+
+Current authoritative V1 specifications are under:
+
+docs/spec-v2/
+
+Current implementation status is tracked in:
+
+docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+
+If this document conflicts with AGENTS.md or docs/spec-v2/, the current rules win.
+
 # PaperAI Research Agent 产品化与工程实施规格
 
 > 文档版本：v1.0  

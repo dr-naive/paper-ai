@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import xml.etree.ElementTree as ET
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from langchain_core.tools import StructuredTool

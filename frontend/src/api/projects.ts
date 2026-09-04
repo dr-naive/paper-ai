@@ -28,6 +28,38 @@ export interface ProjectMemoryNote {
   source_id?: string | null
 }
 
+export interface ResearchNoteItem {
+  id: string
+  project_id: string
+  type: string
+  title: string
+  content: string
+  source_type?: string | null
+  source_id?: string | null
+  confidence: number
+  tags: string[]
+  created_by: string
+  created_at?: string | null
+  updated_at?: string | null
+  legacy: boolean
+}
+
+export interface EvidenceItem {
+  id: string
+  project_id: string
+  paper_id: string
+  section_id?: string | null
+  page_number?: number | null
+  evidence_type: string
+  snippet: string
+  normalized_claim: string
+  source_title: string
+  source_authors: string[] | string
+  source_year?: number | null
+  doi?: string | null
+  created_at?: string
+}
+
 export interface ProjectPaperCard {
   summary?: string
   research_questions?: string[]
@@ -470,6 +502,27 @@ export const appendProjectMemoryNote = (projectId: string, data: {
     `/api/v1/projects/${projectId}/memory/note`,
     data
   )
+
+// ==================== 研究笔记与证据 ====================
+export const listResearchNotes = (projectId: string, includeLegacy = true) =>
+  request.get<{ items: ResearchNoteItem[] }>(`/api/v1/projects/${projectId}/notes`, { params: { include_legacy: includeLegacy } })
+
+export const createResearchNote = (projectId: string, data: {
+  type: string; title?: string; content: string; confidence?: number; tags?: string[]
+}) => request.post<ResearchNoteItem>(`/api/v1/projects/${projectId}/notes`, data)
+
+export const deleteResearchNote = (projectId: string, noteId: string) =>
+  request.delete(`/api/v1/projects/${projectId}/notes/${noteId}`)
+
+export const listEvidence = (projectId: string, paperId?: string) =>
+  request.get<{ items: EvidenceItem[] }>(`/api/v1/projects/${projectId}/evidence`, { params: paperId ? { paper_id: paperId } : undefined })
+
+export const createEvidence = (projectId: string, data: {
+  paper_id: string; evidence_type: string; snippet: string; normalized_claim?: string; page_number?: number
+}) => request.post<EvidenceItem>(`/api/v1/projects/${projectId}/evidence`, data)
+
+export const deleteEvidence = (projectId: string, evidenceId: string) =>
+  request.delete(`/api/v1/projects/${projectId}/evidence/${evidenceId}`)
 
 // ==================== 项目对话会话 ====================
 /**

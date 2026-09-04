@@ -1,5 +1,4 @@
 import { createApp, type Component } from 'vue'
-import { createPinia } from 'pinia'
 import {
   Avatar,
   Button,
@@ -41,6 +40,7 @@ import '@arco-design/web-vue/es/textarea/style/css.js'
 import '@arco-design/web-vue/es/upload/style/css.js'
 import router from './router'
 import App from './App.vue'
+import { pinia } from './stores'
 
 const app = createApp(App)
 const arcoComponents: Array<[string, Component]> = [
@@ -68,6 +68,6 @@ const arcoComponents: Array<[string, Component]> = [
   ['AUpload', Upload]
 ]
 
-app.use(createPinia()).use(router)
+app.use(pinia).use(router)
 arcoComponents.forEach(([name, component]) => app.component(name, component))
 app.mount('#app')

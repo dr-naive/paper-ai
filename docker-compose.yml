@@ -10,6 +10,8 @@ services:
       - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?请在 .env 中设置 DEFAULT_ADMIN_PASSWORD}
       - ENABLE_AGENT_RUNTIME_V2=${ENABLE_AGENT_RUNTIME_V2:-true}
+      - ENABLE_MEMORY_V2=${ENABLE_MEMORY_V2:-true}
+      - ENABLE_WRITING_V2=${ENABLE_WRITING_V2:-true}
     depends_on:
       db:
         condition: service_healthy
@@ -35,6 +37,8 @@ services:
       - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?请在 .env 中设置 DEFAULT_ADMIN_PASSWORD}
       - ENABLE_AGENT_RUNTIME_V2=${ENABLE_AGENT_RUNTIME_V2:-true}
+      - ENABLE_MEMORY_V2=${ENABLE_MEMORY_V2:-true}
+      - ENABLE_WRITING_V2=${ENABLE_WRITING_V2:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:5173", "http://127.0.0.1:5173"]}
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}

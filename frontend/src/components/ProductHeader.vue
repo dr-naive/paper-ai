@@ -33,6 +33,7 @@
     </template>
 
     <div class="product-header__main"><slot /></div>
+    <GlobalTaskCenter />
     <div v-if="$slots.actions" class="product-header__actions"><slot name="actions" /></div>
   </header>
 </template>
@@ -40,6 +41,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import BrandMark from './BrandMark.vue'
+import GlobalTaskCenter from './GlobalTaskCenter.vue'
 
 withDefaults(defineProps<{
   context?: string
@@ -172,7 +174,6 @@ const router = useRouter()
   flex-shrink: 0;
   margin-left: 16px;
 }
-
 @media (max-width: 760px) {
   .product-header { min-height: 60px; padding-inline: 14px; flex-wrap: wrap; }
   .product-header--edge { padding-left: 4px; }

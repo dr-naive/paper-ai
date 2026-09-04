@@ -1044,7 +1044,6 @@ async def stream_lead_agent(
     # 2. 快速路径:元数据问题直接查 DB,跳过 ReAct 循环
     _CHUNK_SIZE = 40  # 分块推送大小,快速路径和 ReAct 路径共用
     from app.models.paper import Paper as _Paper
-    from app.utils.qa_helpers import detect_metadata_intent as _detect_intent
     metadata_field = _detect_intent(question)
     if metadata_field and paper_id:
         yield "status", {"stage": "fast_path", "message": "正在查询论文信息..."}
