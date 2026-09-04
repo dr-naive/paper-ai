@@ -18,7 +18,7 @@
         :title="`返回${backLabel}`"
         @click="router.push(backTo)"
       >
-        <span class="product-header__back-icon" aria-hidden="true">←</span>
+        <IconLeft class="product-header__back-icon" aria-hidden="true" />
         <span>{{ backLabel }}</span>
       </button>
       <span
@@ -27,12 +27,12 @@
         aria-hidden="true"
       ></span>
       <span v-if="context" class="product-header__context">{{ context }}</span>
-      <div v-if="$slots.navigation" class="product-header__navigation">
-        <slot name="navigation" />
-      </div>
     </template>
 
     <div class="product-header__main"><slot /></div>
+    <div v-if="$slots.navigation" class="product-header__navigation">
+      <slot name="navigation" />
+    </div>
     <GlobalTaskCenter />
     <div v-if="$slots.actions" class="product-header__actions"><slot name="actions" /></div>
   </header>
@@ -40,6 +40,7 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { IconLeft } from '@arco-design/web-vue/es/icon'
 import BrandMark from './BrandMark.vue'
 import GlobalTaskCenter from './GlobalTaskCenter.vue'
 
@@ -62,8 +63,8 @@ const router = useRouter()
 .product-header {
   display: flex;
   align-items: center;
-  min-height: 52px;
-  padding: 6px 16px;
+  min-height: var(--pa-header-height);
+  padding: 0 16px;
   border-bottom: 1px solid var(--pa-border);
   background: var(--pa-surface);
   color: var(--pa-ink);
@@ -150,13 +151,14 @@ const router = useRouter()
   flex-shrink: 0;
   color: var(--pa-ink);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .product-header__navigation {
   display: flex;
   align-items: center;
   flex-shrink: 0;
+  margin-left: 18px;
 }
 
 .product-header__main {
@@ -165,9 +167,12 @@ const router = useRouter()
 }
 
 .product-header__back + .product-header__main,
-.product-header__context + .product-header__main,
-.product-header__navigation + .product-header__main {
+.product-header__context + .product-header__main {
   margin-left: 12px;
+}
+
+.product-header__main + .product-header__navigation {
+  margin-left: 18px;
 }
 
 .product-header__actions {
@@ -177,7 +182,7 @@ const router = useRouter()
   margin-left: 12px;
 }
 @media (max-width: 760px) {
-  .product-header { min-height: 52px; padding-inline: 10px; flex-wrap: wrap; }
+  .product-header { min-height: var(--pa-header-height); padding-inline: 10px; flex-wrap: wrap; }
   .product-header--edge { padding-left: 4px; }
   .product-header__leading { margin-right: 8px; }
   .product-header__brand :deep(.brand-mark__name) { display: none; }

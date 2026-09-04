@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { approveExecution, cancelExecution, listExecutionEvents, listProjectExecutions, listUserExecutions, pauseExecution, resumeExecution, streamExecutionEvents, type AgentEvent, type AgentExecution } from '@/api/executions'
+import { approveExecution, cancelExecution, createWritingExecution, getExecutionEvaluation, getExecutionTrace, listExecutionEvents, listProjectExecutions, listUserExecutions, pauseExecution, resumeExecution, streamExecutionEvents, type AgentEvent, type AgentExecution, type ExecutionEvaluation, type ExecutionTraceReport, type WritingExecutionCreate } from '@/api/executions'
 
 const terminalStatuses = new Set<AgentExecution['status']>(['completed', 'failed', 'cancelled'])
 
@@ -8,6 +8,8 @@ export const useExecutionsStore = defineStore('executions', () => {
   const byProject = ref<Record<string, AgentExecution[]>>({})
   const globalExecutions = ref<AgentExecution[]>([])
   const eventsByExecution = ref<Record<string, AgentEvent[]>>({})
+  const tracesByExecution = ref<Record<string, ExecutionTraceReport>>({})
+  const evaluationsByExecution = ref<Record<string, ExecutionEvaluation>>({})
   const loadingProjects = ref<Record<string, boolean>>({})
   const streamControllers = new Map<string, AbortController>()
   const allExecutions = computed(() => {
@@ -19,6 +21,15 @@ export const useExecutionsStore = defineStore('executions', () => {
   const runningCount = computed(() => allExecutions.value.filter(item => ['queued', 'running', 'waiting_user', 'paused'].includes(item.status)).length)
   const projectExecutions = (projectId: string) => byProject.value[projectId] || []
   const executionEvents = (executionId: string) => eventsByExecution.value[executionId] || []
+  const executionTrace = (executionId: string) => tracesByExecution.value[executionId] || null
+  const executionEvaluation = (executionId: string) => evaluationsByExecution.value[executionId] || null
+  const upsert = (execution: AgentExecution) => {
+    globalExecutions.value = [execution, ...globalExecutions.value.filter(item => item.id !== execution.id)]
+    if (execution.project_id) {
+      const current = projectExecutions(execution.project_id)
+      byProject.value = { ...byProject.value, [execution.project_id]: [execution, ...current.filter(item => item.id !== execution.id)] }
+    }
+  }
   const loadProject = async (projectId: string) => {
     loadingProjects.value = { ...loadingProjects.value, [projectId]: true }
     try { byProject.value = { ...byProject.value, [projectId]: (await listProjectExecutions(projectId)).items || [] } }
@@ -26,6 +37,11 @@ export const useExecutionsStore = defineStore('executions', () => {
   }
   const loadGlobal = async () => { globalExecutions.value = (await listUserExecutions()).items || [] }
   const loadEvents = async (executionId: string) => { eventsByExecution.value = { ...eventsByExecution.value, [executionId]: (await listExecutionEvents(executionId)).items || [] } }
+  const loadTrace = async (executionId: string) => {
+    const [trace, evaluation] = await Promise.all([getExecutionTrace(executionId), getExecutionEvaluation(executionId)])
+    tracesByExecution.value = { ...tracesByExecution.value, [executionId]: trace }
+    evaluationsByExecution.value = { ...evaluationsByExecution.value, [executionId]: evaluation }
+  }
   const stopStream = (executionId: string) => { streamControllers.get(executionId)?.abort(); streamControllers.delete(executionId) }
   const startStream = async (projectId: string, executionId: string) => {
     stopStream(executionId)
@@ -37,8 +53,10 @@ export const useExecutionsStore = defineStore('executions', () => {
       await streamExecutionEvents(executionId, after, event => {
         const current = executionEvents(executionId)
         if (!current.some(item => item.seq === event.seq)) eventsByExecution.value = { ...eventsByExecution.value, [executionId]: [...current, event] }
+        const execution = allExecutions.value.find(item => item.id === executionId)
+        if (execution && event.stage) upsert({ ...execution, current_stage: event.stage, updated_at: event.timestamp })
       }, controller.signal)
-      await Promise.all([loadProject(projectId), loadGlobal()])
+      await Promise.all([loadProject(projectId), loadGlobal(), loadTrace(executionId)])
     } catch (error) {
       if (!controller.signal.aborted) throw error
     } finally {
@@ -46,12 +64,21 @@ export const useExecutionsStore = defineStore('executions', () => {
     }
   }
   const act = async (projectId: string, executionId: string, action: 'pause' | 'resume' | 'cancel' | 'approve') => {
-    if (action === 'pause') await pauseExecution(executionId)
-    if (action === 'resume') await resumeExecution(executionId)
-    if (action === 'cancel') await cancelExecution(executionId)
-    if (action === 'approve') await approveExecution(executionId)
+    let updated: AgentExecution | undefined
+    if (action === 'pause') updated = await pauseExecution(executionId)
+    if (action === 'resume') updated = await resumeExecution(executionId)
+    if (action === 'cancel') updated = await cancelExecution(executionId)
+    if (action === 'approve') updated = await approveExecution(executionId)
+    if (updated) upsert(updated)
     await Promise.all([loadProject(projectId), loadGlobal()])
+    if (action === 'resume') void startStream(projectId, executionId)
+  }
+  const createWriting = async (projectId: string, data: WritingExecutionCreate) => {
+    const execution = await createWritingExecution(projectId, data)
+    upsert(execution)
+    eventsByExecution.value = { ...eventsByExecution.value, [execution.id]: [] }
+    return execution
   }
   const shouldStream = (execution: AgentExecution) => !terminalStatuses.has(execution.status)
-  return { byProject, globalExecutions, eventsByExecution, loadingProjects, allExecutions, runningCount, projectExecutions, executionEvents, loadProject, loadGlobal, loadEvents, startStream, stopStream, shouldStream, act }
+  return { byProject, globalExecutions, eventsByExecution, tracesByExecution, evaluationsByExecution, loadingProjects, allExecutions, runningCount, projectExecutions, executionEvents, executionTrace, executionEvaluation, loadProject, loadGlobal, loadEvents, loadTrace, startStream, stopStream, shouldStream, act, createWriting }
 })

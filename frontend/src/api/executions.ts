@@ -1,4 +1,5 @@
 import request from './index'
+import type { WritingGenerateRequest, WritingGenerationProposal } from './documents'
 
 export interface AgentExecution {
   id: string
@@ -14,6 +15,17 @@ export interface AgentExecution {
   updated_at: string
   completed_at?: string | null
   error_message?: string | null
+  input_payload: Record<string, unknown>
+  result_payload?: {
+    proposal?: WritingGenerationProposal
+    completion?: Record<string, unknown>
+  } | null
+}
+
+export interface WritingExecutionCreate {
+  agent_type: 'writing_generate'
+  goal: string
+  input: WritingGenerateRequest
 }
 
 export interface AgentEvent {
@@ -27,14 +39,55 @@ export interface AgentEvent {
   data: Record<string, unknown>
 }
 
+export interface ExecutionTraceReport {
+  trace_id: string
+  status: AgentExecution['status']
+  total_ms?: number | null
+  budget: {
+    tool_calls: { used: number; limit: number }
+    model_calls: { used: number; limit: number }
+    tokens: { input: number; output: number; limit: number }
+  }
+  quality: {
+    completion_gate_passed: boolean
+    proposal_status?: string | null
+    citation_count: number
+    verified_count: number
+    weak_count: number
+    unsupported_count: number
+    skill_id?: string | null
+    skill_completion_passed?: boolean
+    reviewer_status?: string | null
+    repair_count?: number
+  }
+}
+
+export interface ExecutionEvaluation {
+  evaluation_version: string
+  trace_id: string
+  verdict: 'pass' | 'fail' | 'incomplete'
+  score: number
+  maximum_score: number
+  checks: Array<{ name: string; passed: boolean; earned: number; maximum: number; detail: string }>
+}
+
 export const listProjectExecutions = (projectId: string, limit = 50) =>
   request.get<{ items: AgentExecution[] }>(`/api/v1/projects/${projectId}/executions`, { params: { limit } })
 
 export const listUserExecutions = (limit = 100) =>
   request.get<{ items: AgentExecution[] }>('/api/v1/executions', { params: { limit } })
 
+export const createWritingExecution = (projectId: string, data: WritingExecutionCreate) =>
+  request.post<AgentExecution>(`/api/v1/projects/${projectId}/executions`, data)
+
 export const listExecutionEvents = (executionId: string, after = 0) =>
   request.get<{ items: AgentEvent[] }>(`/api/v1/executions/${executionId}/events`, { params: { after } })
+
+export const getExecutionTrace = (executionId: string) =>
+  request.get<ExecutionTraceReport>(`/api/v1/executions/${executionId}/trace`)
+
+export const getExecutionEvaluation = (executionId: string) =>
+  request.get<ExecutionEvaluation>(`/api/v1/executions/${executionId}/evaluation`)
 
 export const streamExecutionEvents = async (
   executionId: string,

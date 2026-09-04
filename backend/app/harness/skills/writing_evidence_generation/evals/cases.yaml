@@ -1,0 +1,21 @@
+cases:
+  - id: verified_without_repair
+    metadata: {document_id: d1, proposal_id: p1, citation_count: 2, reviewer_status: passed, repair_count: 0, completion_contract_ready: true}
+    criteria: [true, true, true, true, true]
+    expected_pass: true
+  - id: verified_after_one_repair
+    metadata: {document_id: d1, proposal_id: p1, citation_count: 1, reviewer_status: repaired, repair_count: 1, completion_contract_ready: true}
+    criteria: [true, true, true, true, true]
+    expected_pass: true
+  - id: reviewer_rejected
+    metadata: {document_id: d1, proposal_id: p1, citation_count: 1, reviewer_status: failed, repair_count: 1, completion_contract_ready: false}
+    criteria: [true, true, false, true, false]
+    expected_pass: false
+  - id: unsupported_citation
+    metadata: {document_id: d1, proposal_id: p1, citation_count: 1, reviewer_status: passed, repair_count: 0, completion_contract_ready: false}
+    criteria: [true, true, true, false, false]
+    expected_pass: false
+  - id: missing_proposal_metadata
+    metadata: {document_id: d1, citation_count: 1, reviewer_status: passed, repair_count: 0, completion_contract_ready: true}
+    criteria: [true, true, true, true, true]
+    expected_pass: false

@@ -37,18 +37,17 @@ const tabs = [
 .project-tabs {
   display: flex;
   align-items: center;
-  gap: 3px;
-  margin-left: 4px;
+  gap: 2px;
 }
 
 .project-tab {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 34px;
   align-items: center;
-  padding: 0 9px;
-  border-radius: 6px;
+  padding: 0 10px;
+  border-radius: var(--pa-radius-sm);
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   text-decoration: none;
   white-space: nowrap;
   transition: color 180ms ease-out, background-color 180ms ease-out;
@@ -69,8 +68,15 @@ const tabs = [
   overflow: hidden;
   color: var(--pa-muted);
   font-size: 12px;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-topic::before {
+  margin-right: 6px;
+  color: var(--pa-border-strong);
+  content: '·';
 }
 
 .project-tabs :focus-visible {

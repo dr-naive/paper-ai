@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -12,7 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id
-from app.application.execution_service import append_event, event_envelope, execution_dict, set_control, set_status
+from app.application.execution_service import append_event, evaluate_execution_trace, event_envelope, execution_dict, execution_trace_report, set_control, set_status
+from app.application.writing_service import WritingGenerateRequest
 from app.config import settings
 from app.database import AsyncSessionLocal, get_db
 from app.job_queue import enqueue_job
@@ -27,8 +28,9 @@ async def current_user_id(authorization: str | None = Header(None), db: AsyncSes
 
 
 class ExecutionCreate(BaseModel):
-    agent_type: str = Field(default="mock_agent", min_length=1, max_length=80)
+    agent_type: Literal["writing_generate"] = "writing_generate"
     goal: str = Field(min_length=1, max_length=20000)
+    input: WritingGenerateRequest
     conversation_id: str | None = None
     max_tool_calls: int = Field(default=30, ge=0, le=1000)
     max_model_calls: int = Field(default=20, ge=0, le=1000)
@@ -58,6 +60,7 @@ async def create_execution(project_id: str, body: ExecutionCreate, db: AsyncSess
     if project is None:
         raise HTTPException(status_code=404, detail="项目不存在")
     item = AgentExecution(user_id=user_id, project_id=project_id, agent_type=body.agent_type, goal=body.goal,
+                          input_payload=body.input.model_dump(mode="json"),
                           conversation_id=body.conversation_id, max_tool_calls=body.max_tool_calls,
                           max_model_calls=body.max_model_calls, max_tokens=body.max_tokens,
                           max_seconds=body.max_seconds)
@@ -108,6 +111,28 @@ async def get_events(execution_id: str, after: int = Query(0, ge=0), limit: int 
     rows = (await db.execute(select(AgentEvent).where(AgentEvent.execution_id == execution_id,
                                                        AgentEvent.seq > after).order_by(AgentEvent.seq).limit(limit))).scalars().all()
     return {"items": [event_envelope(row) for row in rows]}
+
+
+@router.get("/executions/{execution_id}/trace")
+async def get_execution_trace(execution_id: str, db: AsyncSession = Depends(get_db),
+                              user_id: str = Depends(current_user_id)):
+    require_runtime()
+    execution = await owned_execution(db, execution_id, user_id)
+    events = (await db.execute(
+        select(AgentEvent).where(AgentEvent.execution_id == execution_id).order_by(AgentEvent.seq)
+    )).scalars().all()
+    return execution_trace_report(execution, list(events))
+
+
+@router.get("/executions/{execution_id}/evaluation")
+async def get_execution_evaluation(execution_id: str, db: AsyncSession = Depends(get_db),
+                                   user_id: str = Depends(current_user_id)):
+    require_runtime()
+    execution = await owned_execution(db, execution_id, user_id)
+    events = (await db.execute(
+        select(AgentEvent).where(AgentEvent.execution_id == execution_id).order_by(AgentEvent.seq)
+    )).scalars().all()
+    return evaluate_execution_trace(execution_trace_report(execution, list(events)))
 
 
 @router.get("/executions/{execution_id}/stream")

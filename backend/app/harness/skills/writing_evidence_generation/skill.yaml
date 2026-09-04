@@ -1,0 +1,30 @@
+id: writing_evidence_generation
+version: 1.0.0
+title: Evidence-backed Writing Generation
+description: 使用当前项目已导入论文证据生成一个段落，并经过审查、引用验证和完成质量检查。
+allowed_tools:
+  - project.search_content
+permissions:
+  network: false
+  write_project: true
+  write_memory: false
+  destructive: false
+budget:
+  max_tool_calls: 10
+  max_external_searches: 0
+  max_papers_to_read: 5
+  max_seconds: 1800
+completion:
+  criteria:
+    - 生成结果只有一个段落
+    - 每个事实性引用具有结构化 Evidence 映射
+    - Writing Reviewer 已通过或完成一次有限修复
+    - Citation Verification 不包含 unsupported
+    - 生成结果满足 Completion Gate 输入契约
+  required_metadata:
+    - document_id
+    - proposal_id
+    - citation_count
+    - reviewer_status
+    - repair_count
+    - completion_contract_ready

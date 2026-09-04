@@ -37,6 +37,11 @@ const mountView = () => mount(ResearchProjectList, {
       ProductHeader: { template: '<header><slot name="actions" /></header>' },
       RouterLink: { props: ['to'], template: '<a href="#"><slot /></a>' },
       'a-spin': { template: '<div><slot /></div>' },
+      'a-dropdown': { template: '<div class="dropdown-stub"><slot /><slot name="content" /></div>' },
+      'a-doption': {
+        props: ['status'],
+        template: '<button class="doption-stub" @click="$emit(\'click\')"><slot name="icon" /><slot /></button>',
+      },
       'a-button': {
         props: ['disabled', 'loading'],
         template: '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
@@ -65,12 +70,13 @@ describe('ResearchProjectList', () => {
     await flushPromises()
 
     expect(wrapper.findAll('.project-card')).toHaveLength(2)
-    await wrapper.get('[aria-label="删除项目 检索增强生成研究"]').trigger('click')
+    const firstCard = wrapper.findAll('.project-card').at(0)!
+    await firstCard.get('[aria-label="打开项目菜单 检索增强生成研究"]').trigger('click')
+    await firstCard.get('.doption-stub').trigger('click')
 
     expect(wrapper.get('.delete-confirmation').text()).toContain('检索增强生成研究')
     expect(wrapper.get('.delete-confirmation').text()).toContain('无法撤销')
-    const deleteButtons = wrapper.findAll('button').filter(button => button.text() === '删除项目')
-    await deleteButtons.at(-1)!.trigger('click')
+    await wrapper.get('.delete-confirmation__actions button:last-child').trigger('click')
     await flushPromises()
 
     expect(deleteProject).toHaveBeenCalledOnce()
@@ -85,9 +91,10 @@ describe('ResearchProjectList', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.get('[aria-label="删除项目 检索增强生成研究"]').trigger('click')
-    const deleteButtons = wrapper.findAll('button').filter(button => button.text() === '删除项目')
-    await deleteButtons.at(-1)!.trigger('click')
+    const firstCard = wrapper.findAll('.project-card').at(0)!
+    await firstCard.get('[aria-label="打开项目菜单 检索增强生成研究"]').trigger('click')
+    await firstCard.get('.doption-stub').trigger('click')
+    await wrapper.get('.delete-confirmation__actions button:last-child').trigger('click')
     await flushPromises()
 
     expect(wrapper.findAll('.project-card')).toHaveLength(2)

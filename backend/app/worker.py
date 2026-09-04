@@ -8,6 +8,7 @@ import json
 import logging
 import signal
 import time
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -34,7 +35,24 @@ from app.models.project import ResearchProject, ProjectPaper, WritingArtifact  #
 from app.models.execution import AgentExecution, AgentEvent, ToolCall, TERMINAL_EXECUTION_STATUSES  # noqa: F401
 from app.models.research import MemoryItem, EvidenceItem  # noqa: F401
 from app.models.document import WritingDocument, DocumentRevision  # noqa: F401
-from app.application.execution_service import append_event, get_control, set_control, set_status
+from app.application.execution_service import (
+    CompletionGateError,
+    append_event,
+    delete_checkpoint,
+    get_control,
+    save_checkpoint,
+    set_control,
+    set_status,
+    validate_writing_completion,
+)
+from app.application.writing_service import (
+    WritingGenerateRequest,
+    WritingGenerationProposal,
+    WritingService,
+    WritingServiceError,
+)
+from app.harness.runtime.skill_runtime import SkillRuntime
+from app.harness.runtime.standard_tools import build_standard_tool_runtime
 from app.research.context.paper_profile import (
     PaperProfileNotFoundError,
     PaperProfileService,
@@ -53,6 +71,8 @@ WORKER_HEARTBEAT_KEY = "paperai:worker:heartbeat"
 ANSWER_TRACE_PREFIX = "paperai:answer-trace:"
 READING_EXECUTION_PREFIX = "paperai:reading-execution:"
 READING_EXECUTION_TTL = 7 * 24 * 60 * 60
+WRITING_SKILL_ID = "writing_evidence_generation"
+SKILLS_DIR = Path(__file__).resolve().parent / "harness" / "skills"
 
 
 async def handle_agent_execution_v2(job: WorkerJob) -> None:
@@ -63,25 +83,149 @@ async def handle_agent_execution_v2(job: WorkerJob) -> None:
             return
         if await get_control(execution_id) == "pause":
             return
-        await set_status(db, item, "running", stage="planning")
-        await append_event(db, item, "execution_started", "Agent 执行已启动", stage="planning")
-        for stage, message in (("planning", "正在制定执行计划"), ("working", "正在执行任务"), ("finalizing", "正在整理结果")):
-            control = await get_control(execution_id)
-            if control == "cancel":
-                await set_status(db, item, "cancelled", stage="cancelled", error_code="EXECUTION_CANCELLED", error_message="用户取消")
-                await append_event(db, item, "execution_cancelled", "执行已取消", stage="cancelled")
-                await set_control(execution_id, None)
-                return
-            if control == "pause":
-                await set_status(db, item, "paused", stage=stage)
-                return
+        if item.agent_type != "writing_generate":
+            await set_status(db, item, "failed", stage="failed", error_code="UNSUPPORTED_AGENT_TYPE",
+                             error_message="不支持的执行类型")
+            await append_event(db, item, "execution_failed", "执行类型不受支持", stage="failed")
+            return
+
+        stage_messages = {
+            "context_started": "正在查找与写作要求相关的项目论文",
+            "context_ready": "已找到候选论文与支持证据",
+            "generation_started": "正在生成证据支持的段落",
+            "proposal_generated": "段落草案已生成",
+            "review_started": "正在审查草案质量与证据一致性",
+            "review_passed": "Writing Reviewer 审查已通过",
+            "review_repair_required": "Writing Reviewer 要求进行一次有限修复",
+            "review_repair_completed": "一次有限修复已完成",
+            "evidence_persisted": "引用证据已保存",
+            "verification_started": "正在验证引用与论断",
+            "citation_verified": "引用验证已完成",
+        }
+        safe_control_stages = {"context_started", "context_ready", "generation_started", "proposal_generated"}
+
+        class ExecutionPaused(Exception):
+            pass
+
+        class ExecutionCancelled(Exception):
+            pass
+
+        async def check_control(stage: str) -> None:
+            action = await get_control(execution_id)
+            if action == "cancel":
+                raise ExecutionCancelled
+            if action == "pause":
+                raise ExecutionPaused
+
+        async def progress(stage: str, data: dict[str, Any]) -> None:
             item.current_stage = stage
             await db.commit()
-            await append_event(db, item, "stage_changed", message, stage=stage)
-            await asyncio.sleep(0.2)
-        await set_status(db, item, "completed", stage="completed")
-        await append_event(db, item, "execution_completed", "执行已完成", stage="completed", data={"result": "mock_agent_completed"})
-        await set_control(execution_id, None)
+            await save_checkpoint(execution_id, {"stage": stage, "data": data})
+            await append_event(db, item, stage, stage_messages[stage], stage=stage, data=data)
+            if stage in safe_control_stages:
+                await check_control(stage)
+
+        try:
+            await set_status(db, item, "running", stage="starting")
+            await append_event(db, item, "execution_started", "写作任务已启动", stage="starting")
+            skill_runtime = SkillRuntime(SKILLS_DIR, build_standard_tool_runtime().specs())
+            skill = await skill_runtime.activate(item, WRITING_SKILL_ID, db=db)
+            await append_event(
+                db, item, "skill_activated", "Evidence-backed Writing Skill 已激活",
+                stage="skill_activated", data={"skill_id": skill.id, "skill_version": skill.version},
+            )
+            if item.result_payload and item.result_payload.get("proposal"):
+                proposal = WritingGenerationProposal.model_validate(item.result_payload["proposal"])
+            else:
+                request = WritingGenerateRequest.model_validate(item.input_payload or {})
+                proposal = await WritingService(db).generate_paragraph(
+                    project_id=str(item.project_id),
+                    user_id=item.user_id,
+                    request=request,
+                    on_progress=progress,
+                )
+                item.result_payload = {"proposal": proposal.model_dump(mode="json")}
+                await db.commit()
+                await save_checkpoint(execution_id, {"stage": "proposal_ready", "result_persisted": True})
+
+            await check_control("proposal_ready")
+            review = proposal.review
+            single_paragraph = len([part for part in proposal.content.split("\n\n") if part.strip()]) == 1
+            mappings_valid = bool(proposal.citations) and all(
+                citation.citation_key and citation.paper_id and citation.evidence_id for citation in proposal.citations
+            )
+            reviewer_valid = review is not None and review.status in {"passed", "repaired"} and review.repair_count <= 1
+            citations_supported = all(citation.status != "unsupported" for citation in proposal.citations)
+            contract_ready = single_paragraph and mappings_valid and reviewer_valid and citations_supported
+            criteria = {
+                "生成结果只有一个段落": single_paragraph,
+                "每个事实性引用具有结构化 Evidence 映射": mappings_valid,
+                "Writing Reviewer 已通过或完成一次有限修复": reviewer_valid,
+                "Citation Verification 不包含 unsupported": citations_supported,
+                "生成结果满足 Completion Gate 输入契约": contract_ready,
+            }
+            skill_report = skill_runtime.evaluate_completion(
+                WRITING_SKILL_ID,
+                metadata={
+                    "document_id": proposal.document_id,
+                    "proposal_id": proposal.proposal_id,
+                    "citation_count": len(proposal.citations),
+                    "reviewer_status": review.status if review else None,
+                    "repair_count": review.repair_count if review else None,
+                    "completion_contract_ready": contract_ready,
+                },
+                criterion_results=criteria,
+            ).model_dump(mode="json")
+            item.result_payload = {"proposal": proposal.model_dump(mode="json"), "skill_completion": skill_report}
+            await db.commit()
+            await append_event(
+                db, item, "skill_completion_evaluated",
+                "Writing Skill 完成条件已通过" if skill_report["passed"] else "Writing Skill 完成条件未通过",
+                stage="skill_completion", data={
+                    "skill_id": skill_report["skill_id"], "passed": skill_report["passed"],
+                    "failed_criteria_count": sum(not criterion["passed"] for criterion in skill_report["criteria"]),
+                    "missing_metadata_count": len(skill_report["missing_metadata"]),
+                },
+            )
+            completion = validate_writing_completion(item, proposal, skill_report)
+            item.result_payload = {
+                "proposal": proposal.model_dump(mode="json"),
+                "skill_completion": skill_report,
+                "completion": completion,
+            }
+            await db.commit()
+            await append_event(db, item, "completion_gate_passed", "完成质量检查已通过",
+                               stage="completion_gate", data=completion)
+            await set_status(db, item, "completed", stage="completed")
+            await append_event(db, item, "execution_completed", "写作建议已完成", stage="completed",
+                               data={"proposal_id": proposal.proposal_id, "proposal_status": proposal.status})
+            await delete_checkpoint(execution_id)
+            await set_control(execution_id, None)
+        except ExecutionPaused:
+            await set_status(db, item, "paused", stage=item.current_stage)
+            await append_event(db, item, "execution_paused", "执行已在安全边界暂停", stage=item.current_stage)
+        except ExecutionCancelled:
+            await set_status(db, item, "cancelled", stage="cancelled", error_code="EXECUTION_CANCELLED",
+                             error_message="用户取消")
+            await append_event(db, item, "execution_cancelled", "执行已取消", stage="cancelled")
+            await delete_checkpoint(execution_id)
+            await set_control(execution_id, None)
+        except CompletionGateError as exc:
+            await set_status(db, item, "failed", stage="completion_gate", error_code="COMPLETION_GATE_FAILED",
+                             error_message=str(exc))
+            await append_event(db, item, "completion_gate_failed", "完成质量检查未通过",
+                               stage="completion_gate", data={"checks_failed": str(exc).split(",")})
+            await set_control(execution_id, None)
+        except WritingServiceError as exc:
+            await set_status(db, item, "failed", stage="failed", error_code=exc.code, error_message=str(exc))
+            await append_event(db, item, "execution_failed", str(exc), stage="failed", data={"code": exc.code})
+            await set_control(execution_id, None)
+        except Exception:
+            logger.exception("Durable writing execution failed execution_id=%s", execution_id)
+            await set_status(db, item, "failed", stage="failed", error_code="EXECUTION_FAILED",
+                             error_message="执行失败，请稍后重试")
+            await append_event(db, item, "execution_failed", "执行失败，请稍后重试", stage="failed")
+            await set_control(execution_id, None)
 
 
 async def _load_answer_data(task_id: str) -> dict[str, Any]:

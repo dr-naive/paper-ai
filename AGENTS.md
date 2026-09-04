@@ -17,42 +17,39 @@ The product goal is not to expose an Agent platform. Agent behavior is an intern
 
 ## Source of truth
 
-Do **not** read every long specification in full at the start of every Codex session.
+For PaperAI implementation work, first read:
 
-For every normal implementation session, read in this order:
+1. `/AGENTS.md`
+2. `/docs/spec-v2/execution/EXECUTION_INDEX.md`
+3. `/docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
 
-1. `AGENTS.md`
-2. `docs/spec-v2/EXECUTION_INDEX.md`
-3. `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`
-   - `Overall Status`
-   - current Phase / Implementation Block
-   - `Current Blockers`
-   - `Latest Handoff`
-4. Only the current Block-specific specification sections listed by `EXECUTION_INDEX.md`
-5. Only source files and tests directly related to the current Block
+Then read only the spec sections, source files, and tests listed by
+`docs/spec-v2/execution/EXECUTION_INDEX.md` for the current Implementation Block.
 
-Read other long documents only when the current Block actually needs them.
+Do not read all spec documents by default.
 
-If documents conflict, use this authority order:
+Do not read `/docs/archive/` unless historical context is explicitly
+required by the current block.
+
+Authority order for current work is:
 
 1. `AGENTS.md`
-2. `docs/spec-v2/EXECUTION_INDEX.md`
-3. `docs/spec-v2/00_PRODUCT_SCOPE.md`
-4. Relevant feature specification under `docs/spec-v2/`
-5. `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
-6. `docs/spec-v2/01_CODEBASE_MIGRATION_MAP.md`
-7. `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`
-8. `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` for implementation state
-9. Relevant long-term maintenance documents under `docs/`
-10. `docs/archive/` for historical context only
+2. `docs/spec-v2/execution/EXECUTION_INDEX.md`
+3. `docs/spec-v2/product/PRODUCT_SCOPE.md`
+4. Relevant active feature specification under `docs/spec-v2/`
+5. `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+6. `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+7. `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md` for implementation state
+8. Relevant long-term maintenance documents under `docs/`
+9. `docs/archive/` for historical context only
 
-`08_IMPLEMENTATION_PROGRESS.md` is authoritative for **what has actually been completed**, not for product design.
+`docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md` is authoritative for **what has actually
+been completed**, not for product design. Documents under `docs/archive/`
+are historical only and MUST NOT override active specifications.
 
-Documents under `docs/archive/` are historical context only and MUST NOT override current specifications.
-
-Do not recursively read every document referenced by another document unless `EXECUTION_INDEX.md` explicitly requires it.
-
-Do not rely on a referenced path unless it actually exists in the current branch.
+Do not recursively read every document referenced by another document unless
+`docs/spec-v2/execution/EXECUTION_INDEX.md` explicitly requires it. Do not rely on a referenced path
+unless it actually exists in the current branch.
 
 ## V1 product boundary
 
@@ -244,6 +241,12 @@ Generated citations must use structured mappings, not only textual markers such 
 
 Citation Verification is mandatory for evidence-backed generated claims.
 
+Evidence-backed paragraph generation activates the internal
+`writing_evidence_generation` Skill. Its bounded Writing Reviewer may request
+at most one repair; repaired output must still pass the normal Evidence,
+Citation Verification, Skill completion evaluation, and Completion Gate. The
+Reviewer is a workflow step, not a new general SubAgent or user-facing Agent.
+
 Unsupported citations must not be presented as verified.
 
 ## Frontend rules
@@ -317,7 +320,7 @@ Before implementing against a new external service:
 1. inspect existing project configuration and `.env.example`;
 2. determine whether the service works without credentials;
 3. determine whether an API key, account, paid quota, approval, console setup, or user authorization is required;
-4. record the provider decision and required configuration in `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`.
+4. record the provider decision and required configuration in `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`.
 
 Codex may independently:
 
@@ -352,7 +355,7 @@ then:
 
 1. complete all code work that does not require the missing credential;
 2. stop real-provider validation for that dependency;
-3. record `BLOCKED_BY_USER` in `08_IMPLEMENTATION_PROGRESS.md`;
+3. record `BLOCKED_BY_USER` in `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`;
 4. record provider/service, reason, exact user action, environment/config variable, configuration location, and verification method;
 5. ask the user for that action;
 6. do not try unrelated replacement providers unless the user or an authoritative specification explicitly reopens the provider decision.
@@ -375,13 +378,13 @@ The relevant Phase must not be marked fully `DONE` until required real-provider 
 
 ## Required implementation flow
 
-All V1 implementation follows `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`.
+All V1 implementation follows `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`.
 
 Before a Phase starts:
 
 1. inspect the actual current code,
 2. read the relevant spec,
-3. update `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`,
+3. update `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`,
 4. record the baseline commit and target files.
 
 During implementation:
@@ -401,13 +404,13 @@ Before a Phase is marked complete:
 3. run migration checks when schema changed,
 4. verify Reader and export regressions when affected,
 5. perform the Phase acceptance criteria,
-6. update `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`.
+6. update `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`.
 
 Do not enter the next Phase before the current acceptance gate passes.
 
 ## Progress document rules
 
-`docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` is the handoff source of truth for implementation status.
+`docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md` is the handoff source of truth for implementation status.
 
 Every Codex session must update it with:
 
@@ -522,4 +525,4 @@ docker compose run --rm backend python -m scripts.check_schema_revision
 cd frontend && npm run build
 ```
 
-Before adding new required commands, verify they exist in the current repository and record them in `08_IMPLEMENTATION_PROGRESS.md`.
+Before adding new required commands, verify they exist in the current repository and record them in `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`.

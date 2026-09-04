@@ -6,16 +6,16 @@
       </RouterLink>
 
       <nav class="global-nav" aria-label="主导航">
-        <RouterLink to="/home" class="global-nav__item" active-class="is-active">
-          <span aria-hidden="true">⌂</span>
+        <RouterLink to="/home" class="global-nav__item" active-class="is-active" title="首页">
+          <span class="global-nav__icon" aria-hidden="true"><IconHome /></span>
           <span>首页</span>
         </RouterLink>
-        <RouterLink to="/projects" class="global-nav__item" active-class="is-active">
-          <span aria-hidden="true">▦</span>
+        <RouterLink to="/projects" class="global-nav__item" active-class="is-active" title="项目">
+          <span class="global-nav__icon" aria-hidden="true"><IconApps /></span>
           <span>项目</span>
         </RouterLink>
-        <RouterLink to="/library" class="global-nav__item" active-class="is-active">
-          <span aria-hidden="true">▤</span>
+        <RouterLink to="/library" class="global-nav__item" active-class="is-active" title="独立阅读">
+          <span class="global-nav__icon" aria-hidden="true"><IconBook /></span>
           <span>独立阅读</span>
         </RouterLink>
       </nav>
@@ -25,7 +25,7 @@
         <RouterLink
           v-for="project in recentProjects.slice(0, 5)"
           :key="project.id"
-          class="recent-project"
+          :class="['recent-project', { 'is-active': isCurrentProject(project.id) }]"
           :to="{ name: 'ProjectOverview', params: { projectId: project.id } }"
           :title="project.title"
         >
@@ -46,12 +46,17 @@
 </template>
 
 <script setup lang="ts">
+import { useRoute } from 'vue-router'
+import { IconApps, IconBook, IconHome } from '@arco-design/web-vue/es/icon'
 import BrandMark from '@/components/BrandMark.vue'
 import type { ResearchProject } from '@/api/projects'
 
 withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
   recentProjects: () => [],
 })
+
+const route = useRoute()
+const isCurrentProject = (projectId: string) => String(route.params.projectId || '') === projectId
 </script>
 
 <style scoped>
@@ -65,19 +70,19 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
   position: sticky;
   top: 0;
   display: flex;
-  width: 180px;
+  width: var(--pa-sidebar-width);
   height: 100vh;
-  flex: 0 0 180px;
+  flex: 0 0 var(--pa-sidebar-width);
   flex-direction: column;
   border-right: 1px solid var(--pa-border);
-  background: var(--pa-surface);
+  background: var(--pa-surface-soft);
 }
 
 .sidebar-brand {
   display: flex;
-  min-height: 52px;
+  min-height: var(--pa-header-height);
   align-items: center;
-  padding: 0 14px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--pa-border);
 }
 
@@ -91,29 +96,32 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 
 .global-nav {
   display: grid;
-  gap: 4px;
-  padding: 12px 8px 8px;
+  gap: var(--pa-space-1);
+  padding: var(--pa-space-3) 10px var(--pa-space-2);
 }
 
 .global-nav__item {
   display: flex;
-  min-height: 36px;
+  min-height: 40px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 0 10px;
-  border-radius: 7px;
+  border-radius: var(--pa-radius-sm);
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   text-decoration: none;
   transition: color 180ms ease-out, background-color 180ms ease-out;
 }
 
-.global-nav__item > span:first-child {
+.global-nav__icon {
+  display: inline-flex;
   width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
   color: currentColor;
-  font-size: 16px;
   line-height: 1;
-  text-align: center;
 }
 
 .global-nav__item:hover,
@@ -129,7 +137,7 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 .recent-projects {
   display: grid;
   gap: 3px;
-  padding: 12px 8px 0;
+  padding: var(--pa-space-3) 10px 0;
 }
 
 .sidebar-label {
@@ -141,12 +149,13 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 
 .recent-project {
   display: flex;
+  min-height: 32px;
   min-width: 0;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 0 10px;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-sm);
   color: var(--pa-text);
   font-size: 12px;
   text-decoration: none;
@@ -159,6 +168,12 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
   color: var(--pa-primary-hover);
 }
 
+.recent-project.is-active {
+  background: var(--pa-primary-soft);
+  color: var(--pa-primary-hover);
+  font-weight: 650;
+}
+
 .recent-project__dot {
   width: 6px;
   height: 6px;
@@ -169,7 +184,7 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 
 .sidebar-footer {
   margin-top: auto;
-  padding: 10px 14px 12px;
+  padding: 12px 16px 16px;
   border-top: 1px solid var(--pa-border);
 }
 
@@ -190,8 +205,8 @@ withDefaults(defineProps<{ recentProjects?: ResearchProject[] }>(), {
 
 @media (max-width: 1024px) {
   .global-sidebar {
-    width: 60px;
-    flex-basis: 60px;
+    width: var(--pa-sidebar-collapsed-width);
+    flex-basis: var(--pa-sidebar-collapsed-width);
   }
 
   .sidebar-brand {

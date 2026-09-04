@@ -190,7 +190,8 @@ SECRET_KEY='replace-with-at-least-32-characters' docker compose up -d --build
 
 ## 更多文档
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/spec-v2/README.md`](docs/spec-v2/README.md)
+- [`docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`](docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md)
 - [`docs/API.md`](docs/API.md)
 - [`docs/DEV_NOTES.md`](docs/DEV_NOTES.md)
 - [`docs/SMOKE_TESTS.md`](docs/SMOKE_TESTS.md)

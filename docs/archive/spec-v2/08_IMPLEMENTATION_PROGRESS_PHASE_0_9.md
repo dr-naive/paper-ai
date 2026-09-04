@@ -1,6 +1,16 @@
+# Archived
+
+Status: COMPLETED / HISTORICAL
+
+This document records completed PaperAI V1 implementation work.
+It is no longer an active implementation authority.
+
+Do not use this document for current implementation decisions unless
+historical context is explicitly required.
+
 # PaperAI V1 Implementation Progress
 
-> 文档状态：ACTIVE / LIVING DOCUMENT
+> 文档状态：ARCHIVED / HISTORICAL
 > 版本：v2.0-template
 > 适用对象：Codex、AI Coding Agent、PaperAI 开发者
 > 本文不是设计规范，而是 PaperAI V1 实施过程的**唯一持续进度账本**。

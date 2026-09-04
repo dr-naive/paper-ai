@@ -5,8 +5,8 @@
 ## 推荐维护方式
 
 1. V1 开发首先遵循根目录 `AGENTS.md`。
-2. 每个 Codex 会话读取 `docs/spec-v2/EXECUTION_INDEX.md`，只加载当前 Block 所需规范。
-3. 当前施工状态查看 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`。
+2. 每个 Codex 会话读取 `docs/spec-v2/execution/EXECUTION_INDEX.md`，只加载当前 Block 所需规范。
+3. 当前施工状态查看 `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`。
 4. 涉及接口时同步检查并更新 `docs/API.md`。
 5. 涉及用户流程时在 Block / Phase 验收点运行相关 smoke，而不是每个小改动后全量运行。
 6. 长期风险查看 `docs/TODO_OR_RISKS.md`。
@@ -115,4 +115,6 @@ npm run build
 docker compose exec backend pytest -q
 ```
 
-具体当前 Block 应运行哪些检查，以 `EXECUTION_INDEX.md`、当前 feature spec 和 `08_IMPLEMENTATION_PROGRESS.md` 为准。
+具体当前 Block 应运行哪些检查，以
+`docs/spec-v2/execution/EXECUTION_INDEX.md`、当前 feature spec 和
+`docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md` 为准。

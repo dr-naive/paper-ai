@@ -67,13 +67,13 @@ const updateContexts = (value: string) => emit('update:intent', { target_context
 </script>
 
 <style scoped>
-.intent-card { padding: 24px 26px 26px; border: 1px solid var(--pa-border); border-radius: 12px; background: var(--pa-surface); }
+.intent-card { padding: 20px; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); }
 .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .section-label { margin: 0 0 6px; color: var(--pa-primary-hover); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.card-heading h2 { margin: 0; color: var(--pa-ink); font-size: 19px; line-height: 1.3; }
+.card-heading h2 { margin: 0; color: var(--pa-ink); font-size: 18px; font-weight: 650; line-height: 1.3; }
 .intent-lock { padding: 4px 8px; border-radius: 999px; background: var(--pa-surface-soft); color: var(--pa-muted); font-size: 12px; }
-label { display: block; margin-bottom: 7px; color: var(--pa-text); font-size: 12px; font-weight: 650; }
+label { display: block; margin-bottom: 7px; color: var(--pa-text); font-size: 12px; font-weight: 600; }
 .intent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 .field-block--wide { grid-column: 1 / -1; }
-@media (max-width: 680px) { .intent-card { padding: 20px 18px; } .intent-grid { grid-template-columns: 1fr; gap: 14px; } .field-block--wide { grid-column: auto; } }
+@media (max-width: 680px) { .intent-card { padding: 18px; } .intent-grid { grid-template-columns: 1fr; gap: 14px; } .field-block--wide { grid-column: auto; } }
 </style>

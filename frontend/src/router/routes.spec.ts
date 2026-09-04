@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import router, { routes } from './index'
 
 describe('project route foundation', () => {
@@ -46,5 +46,19 @@ describe('project route foundation', () => {
     const resolved = router.resolve('/paper/paper-1')
     expect(resolved.name).toBe('PaperReader')
     expect(resolved.params.id).toBe('paper-1')
+  })
+
+  it('disables smooth anchor scrolling when reduced motion is requested', () => {
+    const matchMedia = vi.fn().mockReturnValue({ matches: true } as MediaQueryList)
+    vi.stubGlobal('matchMedia', matchMedia)
+    const result = router.options.scrollBehavior?.(
+      { hash: '#overview' } as any,
+      {} as any,
+      null,
+    )
+
+    expect(result).toEqual({ el: '#overview', top: 20, behavior: 'auto' })
+    expect(matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)')
+    vi.unstubAllGlobals()
   })
 })

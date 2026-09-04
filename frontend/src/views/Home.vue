@@ -78,24 +78,24 @@
       <div class="hero-content">
         <div class="hero-badge">
           <span class="badge-dot"></span>
-          可追溯原文的 AI 论文阅读助手
+          从真实文献到可核对写作
         </div>
         <h1 class="hero-title">
-          让 AI 帮你<br/>
-          <span class="title-highlight">读懂每一篇论文</span>
+          让论文研究<br/>
+          <span class="title-highlight">从阅读走向写作</span>
         </h1>
         <p class="hero-desc">
-          上传 PDF，自动提取论文目录与关键内容。<br/>
-          围绕论文连续提问，回答附带页码、原文引用与高亮定位。
+          在项目中发现真实论文、管理全文证据并完成写作。<br/>
+          也可以独立精读 PDF，用页码、原文片段和版面定位核对回答。
         </p>
         <div class="hero-actions">
-          <a-button type="primary" size="large" class="btn-primary" @click="$router.push('/papers')">
+          <a-button type="primary" size="large" class="btn-primary" @click="$router.push('/projects')">
             <template #icon>
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
               </svg>
             </template>
-            {{ isLoggedIn ? '进入论文工作台' : '开始使用' }}
+            {{ isLoggedIn ? '进入研究项目' : '开始研究' }}
           </a-button>
           <a-button size="large" class="btn-secondary" @click="$router.push('/guide')">
             查看使用指南
@@ -108,16 +108,16 @@
         </div>
         <div class="hero-stats">
           <div class="stat-item">
-            <span class="stat-value">目录导航</span>
-            <span class="stat-label">多级章节快速跳转</span>
+            <span class="stat-value">真实文献</span>
+            <span class="stat-label">可编辑条件与有界检索</span>
           </div>
           <div class="stat-item">
-            <span class="stat-value">连续问答</span>
-            <span class="stat-label">流式回答与深度思考</span>
+            <span class="stat-value">原文证据</span>
+            <span class="stat-label">页码、片段与版面定位</span>
           </div>
           <div class="stat-item">
-            <span class="stat-value">原文溯源</span>
-            <span class="stat-label">页码定位与内容高亮</span>
+            <span class="stat-value">过程可见</span>
+            <span class="stat-label">流式阶段与任务状态</span>
           </div>
         </div>
         <div class="slideshow-controls" aria-label="背景图片轮播">
@@ -138,8 +138,8 @@
     <section class="features-section">
       <div class="section-shell">
         <div class="section-header">
-          <h2>核心功能</h2>
-          <p>从结构浏览到证据核对，完整支持论文精读过程</p>
+          <h2>一套连续的研究工作流</h2>
+          <p>检索结果、项目论文、原文证据和写作文稿各自有清晰边界</p>
         </div>
         <div class="features-grid">
           <div class="feature-card" v-for="(f, i) in features" :key="i">
@@ -159,8 +159,8 @@
     <section class="workflow-section">
       <div class="section-shell workflow-shell">
         <div class="section-header workflow-header">
-          <h2>三步开始</h2>
-          <p>上传、阅读、提问，在同一个工作台完成。</p>
+          <h2>项目研究的四个阶段</h2>
+          <p>每个模块只处理自己的任务，资料沿流程进入下一步。</p>
         </div>
         <div class="workflow-steps">
           <div class="workflow-step" v-for="(step, i) in workflowSteps" :key="i">
@@ -181,16 +181,17 @@
 
     <section class="cta-section">
       <div class="cta-content">
-        <h2>开始阅读你的下一篇论文</h2>
-        <p>上传 PDF，沿着目录阅读，并用可核对的引用理解关键内容。</p>
-        <a-button type="primary" size="large" @click="$router.push('/papers')">
-          {{ isLoggedIn ? '进入论文工作台' : '立即开始' }}
-        </a-button>
+        <h2>按你的任务选择入口</h2>
+        <p>多篇论文的发现、管理与写作从研究项目开始；单篇 PDF 精读从本地论文库开始。</p>
+        <div class="cta-actions">
+          <a-button type="primary" size="large" @click="$router.push('/projects')">进入研究项目</a-button>
+          <a-button size="large" @click="$router.push('/library')">打开本地论文库</a-button>
+        </div>
       </div>
     </section>
 
     <footer class="footer">
-      <p>PaperAI &copy; 2026 · 智能论文精读助手</p>
+      <p>PaperAI &copy; 2026 · 证据可追溯的论文研究工作台</p>
       <button type="button" @click="$router.push('/guide')">使用指南</button>
     </footer>
 
@@ -276,39 +277,40 @@ const userInitial = computed(() => {
 
 const features = [
   {
-    title: '结构化阅读',
-    desc: '自动提取多级论文目录，展开或收起章节，并快速跳转到对应页面',
+    title: '真实文献发现',
+    desc: '把研究需求整理成可编辑的检索意图和筛选条件，只返回学术来源中的真实结果',
     icon: '<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
     color: 'oklch(0.50 0.16 45)',
-    tags: ['多级目录', '章节跳转', '阅读位置']
+    tags: ['有界检索', '结构化结果', '独立导入']
   },
   {
-    title: '论文问答',
-    desc: '围绕论文连续追问，支持流式生成、停止回答和可选的深度思考',
+    title: '论文结构化解析',
+    desc: '解析章节、正文、表格和图片等版面元素，保留页码与 bbox 坐标用于原文定位',
     icon: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
     color: 'oklch(0.55 0.14 30)',
-    tags: ['流式回答', '多轮对话', '深度思考']
+    tags: ['多级目录', '版面元素', 'bbox 定位']
   },
   {
-    title: '可信引用',
-    desc: '引用的章节、页码和原文来自检索证据，减少模型改写与位置偏差',
+    title: '证据支持的写作',
+    desc: '从已导入的项目论文中查找证据，生成带结构化引用的段落或改写建议',
     icon: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>',
     color: 'oklch(0.48 0.12 55)',
-    tags: ['确定性引用', '准确页码', '证据核对']
+    tags: ['Evidence', 'Citation', '明确替换']
   },
   {
-    title: '精确定位',
-    desc: '点击回答中的引用，直接跳转 PDF 页面并高亮对应原文区域',
+    title: '可追踪的质量检查',
+    desc: '以流式阶段展示后台进度，保存检查点，并在任务完成前核对证据、引用与输出完整性',
     icon: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
     color: 'oklch(0.52 0.13 120)',
-    tags: ['原文高亮', '页面跳转', '引用溯源']
+    tags: ['SSE 阶段', 'Checkpoint', '完成检查']
   }
 ]
 
 const workflowSteps = [
-  { title: '上传论文', desc: '上传 PDF，等待正文、目录和图表解析完成' },
-  { title: '浏览结构', desc: '沿多级目录阅读，系统自动保存最近位置' },
-  { title: '提问核对', desc: '连续追问，并点击引用定位到 PDF 原文' }
+  { title: '概览', desc: '定义研究主题、问题与目标' },
+  { title: '文献发现', desc: '检索真实论文并选择需要导入的全文' },
+  { title: '项目论文', desc: '等待解析与索引，阅读并核对原文' },
+  { title: '写作', desc: '使用证据生成建议稿并验证引用' }
 ]
 
 let bgInterval: ReturnType<typeof setInterval> | undefined
@@ -838,17 +840,12 @@ const handleAddAccount = async () => {
 }
 
 .workflow-shell {
-  display: grid;
-  grid-template-columns: minmax(210px, 0.72fr) minmax(0, 2.28fr);
-  gap: clamp(40px, 5vw, 72px);
-  align-items: start;
   padding-top: clamp(48px, 5vw, 64px);
   border-top: 1px solid oklch(0.84 0.012 255);
 }
 
 .workflow-header {
-  text-align: left;
-  margin-bottom: 0;
+  text-align: center;
 }
 
 .workflow-header h2 {
@@ -856,14 +853,14 @@ const handleAddAccount = async () => {
 }
 
 .workflow-header p {
-  max-width: 18em;
+  max-width: 42em;
+  margin-inline: auto;
   line-height: 1.7;
 }
 
 .workflow-steps {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
   margin-top: 2px;
 }
@@ -918,7 +915,7 @@ const handleAddAccount = async () => {
 }
 
 .cta-content {
-  max-width: 600px;
+  max-width: 680px;
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -934,6 +931,12 @@ const handleAddAccount = async () => {
   font-size: 16px;
   color: oklch(0.78 0.018 255);
   margin: 0 0 32px;
+}
+
+.cta-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
 }
 
 .footer {
@@ -974,14 +977,8 @@ const handleAddAccount = async () => {
 }
 
 @media (max-width: 960px) {
-  .workflow-shell {
-    grid-template-columns: 1fr;
-    gap: 28px;
-  }
-
-  .workflow-header p { max-width: 32em; }
-  .workflow-step:first-child { padding-left: 0; }
-  .workflow-step:last-child { padding-right: 0; }
+  .workflow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workflow-step:nth-child(2) .step-connector { display: none; }
 }
 
 @media (max-width: 768px) {
@@ -1005,8 +1002,7 @@ const handleAddAccount = async () => {
     border-left: 0;
   }
   .workflow-steps {
-    flex-direction: column;
-    align-items: stretch;
+    display: block;
   }
   .workflow-step {
     position: relative;
@@ -1025,6 +1021,8 @@ const handleAddAccount = async () => {
     bottom: 2px;
     transform: rotate(90deg);
   }
+  .workflow-step:nth-child(2) .step-connector { display: block; }
+  .cta-actions { flex-direction: column; }
 }
 
 @media (max-width: 480px) {

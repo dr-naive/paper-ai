@@ -3,7 +3,7 @@
     :visible="Boolean(paper)"
     title="论文详情"
     placement="right"
-    :width="520"
+    :width="540"
     :footer="false"
     unmount-on-close
     @cancel="$emit('close')"
@@ -14,15 +14,17 @@
         <p class="detail-meta">{{ authorLabel }}<span v-if="paper.year"> · {{ paper.year }}</span><span v-if="paper.venue"> · {{ paper.venue }}</span></p>
 
         <div class="detail-actions" aria-label="论文操作">
-          <a-button type="secondary" size="small" :loading="favoritePending" :disabled="favoritePending" @click="$emit('toggle-favorite', paper)">{{ paper.is_favorite ? '★ 已收藏' : '☆ 收藏' }}</a-button>
-          <a-tooltip v-if="!paper.download_available" content="暂无可用下载链接">
-            <span class="action-tooltip"><a-button size="small" disabled aria-label="暂无可用下载链接">下载</a-button></span>
-          </a-tooltip>
-          <a-button v-else size="small" @click="$emit('download', paper)">下载</a-button>
+          <div class="detail-actions__secondary">
+            <a-button type="text" size="small" :loading="favoritePending" :disabled="favoritePending" @click="$emit('toggle-favorite', paper)"><IconStar aria-hidden="true" />{{ paper.is_favorite ? '已收藏' : '收藏' }}</a-button>
+            <a-tooltip v-if="!paper.download_available" content="暂无可用下载链接">
+              <span class="action-tooltip"><a-button type="text" size="small" disabled aria-label="暂无可用下载链接">下载</a-button></span>
+            </a-tooltip>
+            <a-button v-else type="text" size="small" @click="$emit('download', paper)">下载</a-button>
+          </div>
           <a-tooltip v-if="!paper.import_available" content="暂无可导入的论文全文">
-            <span class="action-tooltip"><a-button size="small" disabled aria-label="暂无可导入的论文全文">导入</a-button></span>
+            <span class="action-tooltip detail-actions__import"><a-button type="secondary" size="small" disabled aria-label="暂无可导入的论文全文">导入项目</a-button></span>
           </a-tooltip>
-          <a-button v-else size="small" :loading="importState === 'importing'" :disabled="importState === 'importing' || importState === 'imported'" @click="$emit('import', paper)">{{ importLabel }}</a-button>
+          <a-button v-else :type="importState === 'imported' ? 'secondary' : 'primary'" size="small" class="detail-actions__import" :loading="importState === 'importing'" :disabled="importState === 'importing' || importState === 'imported'" @click="$emit('import', paper)">{{ importLabel === '导入' ? '导入项目' : importLabel }}</a-button>
         </div>
         <p v-if="importMessage" class="import-message" role="status">{{ importMessage }}</p>
 
@@ -45,7 +47,7 @@
             <div v-if="paper.fields.length"><dt>学科领域</dt><dd>{{ paper.fields.join('、') }}</dd></div>
           </dl>
         </section>
-        <a v-if="paper.paper_url" class="original-link" :href="paper.paper_url" target="_blank" rel="noopener noreferrer">打开原始页面 <span aria-hidden="true">↗</span></a>
+        <a v-if="paper.paper_url" class="original-link" :href="paper.paper_url" target="_blank" rel="noopener noreferrer">打开原始页面 <IconLaunch aria-hidden="true" /></a>
       </article>
     </template>
   </a-drawer>
@@ -53,6 +55,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { IconLaunch, IconStar } from '@arco-design/web-vue/es/icon'
 import type { PaperSearchResult } from '@/api/discovery'
 import type { ImportState } from '@/stores/discover'
 
@@ -82,15 +85,17 @@ const importLabel = computed(() => props.importState === 'importing' ? '正在�
 .detail-content { padding-bottom: 28px; }
 .detail-content h2 { margin: 0; color: var(--pa-ink); font-size: 21px; line-height: 1.4; }
 .detail-meta { margin: 8px 0 0; color: var(--pa-muted); font-size: 13px; line-height: 1.6; }
-.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.detail-actions__secondary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.detail-actions__import { margin-left: auto; }
 .action-tooltip { display: inline-flex; }
 .import-message { margin: 9px 0 0; color: var(--pa-muted); font-size: 12px; line-height: 1.5; }
 .detail-section { margin-top: 25px; padding-top: 18px; border-top: 1px solid var(--pa-border); }
 .detail-section h3 { margin: 0 0 9px; color: var(--pa-ink); font-size: 14px; }
 .detail-section p { margin: 0; color: var(--pa-text); font-size: 13px; line-height: 1.7; }
-.full-abstract { white-space: pre-wrap; }
+.detail-section .full-abstract { white-space: pre-wrap; font-size: 14px; line-height: 1.7; }
 .metadata-list { display: grid; gap: 9px; margin: 0; }
-.metadata-list div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; font-size: 12px; line-height: 1.5; }
+.metadata-list div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 12px; font-size: 12px; line-height: 1.5; }
 .metadata-list dt { color: var(--pa-muted); }
 .metadata-list dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--pa-text); }
 .original-link { display: inline-flex; gap: 6px; margin-top: 24px; color: var(--pa-primary-hover); font-size: 13px; font-weight: 650; text-decoration: none; }

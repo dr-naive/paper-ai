@@ -23,23 +23,34 @@
       <template v-else>
         <header class="document-header">
           <input v-model="documentTitle" aria-label="文档标题" @change="titleDirty = true" />
-          <span>v{{ revisionVersion }}</span>
-          <span class="save-state" :class="{ 'save-state-error': saveError }" aria-live="polite">{{ saveError || saveStateLabel }}</span>
-          <a-button :loading="auditing" @click="runCitationAudit">引用审计</a-button>
-          <a-button type="primary" :loading="saving" :disabled="!editor" @click="saveRevision()">保存新版本</a-button>
+          <div class="document-meta" aria-live="polite">
+            <span class="revision-version">v{{ revisionVersion }}</span>
+            <span class="save-state" :class="{ 'save-state-error': saveError }">{{ saveError || saveStateLabel }}</span>
+          </div>
+          <div class="document-actions">
+            <a-button :loading="auditing" @click="runCitationAudit">引用检查</a-button>
+            <a-button type="primary" :loading="saving" :disabled="!editor" @click="saveRevision()">保存版本</a-button>
+          </div>
         </header>
         <div v-if="editor" class="editor-toolbar" role="toolbar" aria-label="文本格式">
-          <button type="button" :class="{ active: editor.isActive('heading', { level: 2 }) }" @click="editor.chain().focus().toggleHeading({ level: 2 }).run()">标题</button>
-          <button type="button" :class="{ active: editor.isActive('bold') }" @click="editor.chain().focus().toggleBold().run()">粗体</button>
-          <button type="button" :class="{ active: editor.isActive('italic') }" @click="editor.chain().focus().toggleItalic().run()">斜体</button>
-          <button type="button" @click="editor.chain().focus().toggleBlockquote().run()">引用</button>
-          <button type="button" @click="editor.chain().focus().toggleBulletList().run()">列表</button>
-          <button type="button" :disabled="!editor.can().chain().focus().undo().run()" @click="editor.chain().focus().undo().run()">撤销</button>
-          <button type="button" :disabled="!editor.can().chain().focus().redo().run()" @click="editor.chain().focus().redo().run()">重做</button>
+          <select class="heading-select" aria-label="文本样式" :value="currentHeadingLevel" @change="changeHeading">
+            <option value="paragraph">正文</option>
+            <option value="1">标题 1</option>
+            <option value="2">标题 2</option>
+            <option value="3">标题 3</option>
+          </select>
+          <span class="toolbar-divider" role="separator" aria-hidden="true"></span>
+          <button type="button" class="toolbar-icon-button" :class="{ active: editor.isActive('bold') }" aria-label="粗体" title="粗体" @click="editor.chain().focus().toggleBold().run()"><IconBold aria-hidden="true" /></button>
+          <button type="button" class="toolbar-icon-button" :class="{ active: editor.isActive('italic') }" aria-label="斜体" title="斜体" @click="editor.chain().focus().toggleItalic().run()"><IconItalic aria-hidden="true" /></button>
+          <button type="button" class="toolbar-icon-button" :class="{ active: editor.isActive('blockquote') }" aria-label="引用" title="引用" @click="editor.chain().focus().toggleBlockquote().run()"><IconQuote aria-hidden="true" /></button>
+          <button type="button" class="toolbar-icon-button" :class="{ active: editor.isActive('bulletList') }" aria-label="列表" title="列表" @click="editor.chain().focus().toggleBulletList().run()"><IconList aria-hidden="true" /></button>
+          <span class="toolbar-divider" role="separator" aria-hidden="true"></span>
+          <button type="button" class="toolbar-icon-button" :disabled="!editor.can().chain().focus().undo().run()" aria-label="撤销" title="撤销" @click="editor.chain().focus().undo().run()"><IconUndo aria-hidden="true" /></button>
+          <button type="button" class="toolbar-icon-button" :disabled="!editor.can().chain().focus().redo().run()" aria-label="重做" title="重做" @click="editor.chain().focus().redo().run()"><IconRedo aria-hidden="true" /></button>
         </div>
         <div class="editor-paper"><editor-content :editor="editor || undefined" class="editor-surface" /></div>
         <section v-if="citationAudit" class="audit-panel" aria-live="polite">
-          <header><strong>引用审计</strong><span>{{ citationAudit.citation_count }} 个引用 · {{ citationAudit.linked_evidence_count }} 个已绑定证据</span><a-button size="mini" @click="citationAudit = null">关闭</a-button></header>
+          <header><strong>引用检查</strong><span>{{ citationAudit.citation_count }} 个引用 · {{ citationAudit.linked_evidence_count }} 个已绑定证据</span><a-button size="mini" @click="citationAudit = null">关闭</a-button></header>
           <p v-if="citationAudit.passed && !citationAudit.issue_count" class="audit-pass">所有引用均已连接到当前项目的有效证据。</p>
           <ul v-else><li v-for="issue in citationAudit.issues" :key="`${issue.citation_index}-${issue.code}-${issue.claim_excerpt || ''}`" :class="issue.severity"><strong v-if="issue.code === 'unsupported_claim'">Unsupported claim</strong><template v-else>引用 {{ issue.citation_index + 1 }}</template>：{{ issue.message }}<blockquote v-if="issue.claim_excerpt">{{ issue.claim_excerpt }}</blockquote></li></ul>
         </section>
@@ -66,17 +77,22 @@
       @replace="replaceProposal"
       @dismiss="writingStore.setProposal(null)"
     >
-      <details v-if="activeDocument" class="evidence-library">
-        <summary>已保存证据 <span>{{ filteredEvidence.length }}</span></summary>
-        <div class="evidence-content">
-          <a-input v-model="evidenceSearch" allow-clear placeholder="搜索证据" />
-          <p v-if="!filteredEvidence.length" class="rail-empty">没有匹配证据。先从论文阅读器保存原文片段。</p>
-          <article v-for="item in filteredEvidence" :key="item.id">
-            <span>{{ item.evidence_type }} · p.{{ item.page_number || '?' }}</span><strong>{{ item.source_title }}</strong><p>{{ item.snippet }}</p>
-            <div><a-button size="mini" @click="insertCitation(item)">插入引用</a-button><a-button size="mini" @click="openEvidence(item)">打开来源</a-button></div>
-          </article>
-        </div>
-      </details>
+      <template #evidence>
+        <section v-if="activeDocument" class="evidence-library">
+          <header class="evidence-heading"><strong>当前项目已保存证据</strong><span>{{ filteredEvidence.length }} 条</span></header>
+          <div class="evidence-content">
+            <a-input v-model="evidenceSearch" allow-clear placeholder="搜索证据" />
+            <p v-if="!filteredEvidence.length" class="rail-empty">当前项目还没有可用证据。<br />在阅读论文时保存证据，或让写作助手基于已导入论文检索支持内容。</p>
+            <article v-for="item in filteredEvidence" :key="item.id">
+              <strong>{{ item.source_title }}</strong>
+              <span v-if="item.page_number">第 {{ item.page_number }} 页</span>
+              <p>{{ item.snippet }}</p>
+              <p v-if="item.normalized_claim" class="evidence-claim">支持：{{ item.normalized_claim }}</p>
+              <div><a-button size="mini" @click="openEvidence(item)">查看原文</a-button><a-button size="mini" @click="insertCitation(item)">插入引用</a-button></div>
+            </article>
+          </div>
+        </section>
+      </template>
     </WritingAgentPanel>
   </section>
 </template>
@@ -87,8 +103,10 @@ import { Editor, EditorContent } from '@tiptap/vue-3'
 import { Node, type Editor as CoreEditor } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { Message, Modal } from '@arco-design/web-vue'
-import { auditCitations, createDocument, createRevision, generateParagraph, getDocument, listDocuments, rewriteSelection, updateDocument, type CitationAudit, type WritingCitationMapping, type WritingDocument, type WritingGenerateRequest, type WritingRewriteRequest } from '@/api/documents'
+import { IconBold, IconItalic, IconList, IconQuote, IconRedo, IconUndo } from '@arco-design/web-vue/es/icon'
+import { auditCitations, createDocument, createRevision, getDocument, listDocuments, rewriteSelection, updateDocument, type CitationAudit, type WritingCitationMapping, type WritingDocument, type WritingGenerateRequest, type WritingRewriteRequest } from '@/api/documents'
 import { listEvidence, type EvidenceItem } from '@/api/projects'
+import { useExecutionsStore } from '@/stores/executions'
 import { useWritingStore, type WritingProposal } from '@/stores/writing'
 import { deriveWritingContext, type WritingOutlineItem } from '@/utils/writingContext'
 import { citationPlaceholder, copyTextToClipboard, proposalInlineContent, proposalPlainText, selectionAnchorIsCurrent, type SelectionAnchor } from '@/utils/writingProposal'
@@ -97,6 +115,8 @@ import WritingOutlinePanel from './WritingOutlinePanel.vue'
 
 const props = defineProps<{ projectId: string }>()
 const writingStore = useWritingStore()
+const executionStore = useExecutionsStore()
+const activeExecutionId = ref('')
 const Citation = Node.create({ name: 'citation', group: 'inline', inline: true, atom: true, addAttributes: () => ({ paper_id: { default: null }, citation_key: { default: '' }, evidence_id: { default: null } }), parseHTML: () => [{ tag: 'span[data-citation]' }], renderHTML: ({ HTMLAttributes }) => ['span', { ...HTMLAttributes, 'data-citation': '', class: 'citation-node' }, `[${HTMLAttributes.citation_key}]`] })
 
 const documents = ref<WritingDocument[]>([])
@@ -112,6 +132,13 @@ const titleDirty = ref(false)
 const evidenceSearch = ref('')
 const citationAudit = ref<CitationAudit | null>(null)
 const revisionVersion = computed(() => activeDocument.value?.current_revision?.version || 1)
+const currentHeadingLevel = computed(() => {
+  // Keep the native select in sync with Tiptap without introducing editor state.
+  editorContentVersion.value
+  if (!editor.value) return 'paragraph'
+  for (const level of [1, 2, 3]) if (editor.value.isActive('heading', { level })) return String(level)
+  return 'paragraph'
+})
 const saveError = ref('')
 const editorContentVersion = ref(0)
 const proposalEditorVersion = ref(0)
@@ -221,6 +248,13 @@ const saveRevision = async (createdBy: 'user' | 'agent' = 'user') => {
 }
 const focusHeading = (pos: number) => editor.value?.chain().focus().setTextSelection(pos + 1).scrollIntoView().run()
 const addSection = () => editor.value?.chain().focus().insertContent([{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: '新章节' }] }, { type: 'paragraph' }]).run()
+const changeHeading = (event: Event) => {
+  if (!editor.value) return
+  const value = (event.target as HTMLSelectElement).value
+  const chain = editor.value.chain().focus()
+  if (value === 'paragraph') chain.setParagraph().run()
+  else chain.toggleHeading({ level: Number(value) as 1 | 2 | 3 }).run()
+}
 const friendlyWritingError = (error: unknown) => {
   const response = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
   const detail = typeof response === 'object' && response !== null ? response as { code?: string; message?: string } : { message: typeof response === 'string' ? response : '' }
@@ -233,7 +267,7 @@ const friendlyWritingError = (error: unknown) => {
     GENERATION_ERROR: '段落生成暂时不可用，文档未发生变化。',
     WRITING_REWRITE_ERROR: '改写服务暂时不可用，文档未发生变化。',
   }
-  return messages[detail.code || ''] || detail.message || '写作建议暂时不可用，请稍后重试。'
+  return messages[detail.code || ''] || detail.message || (error instanceof Error ? error.message : '') || '写作建议暂时不可用，请稍后重试。'
 }
 const submitAgentInstruction = async (instruction: string) => {
   if (!activeDocument.value || !editor.value || writingStore.requestStatus === 'generating') return
@@ -272,7 +306,19 @@ const submitAgentInstruction = async (instruction: string) => {
         citation_style: 'gbt7714',
         base_revision_id: baseRevisionId,
       }
-      proposal = await generateParagraph(props.projectId, payload)
+      const execution = await executionStore.createWriting(props.projectId, {
+        agent_type: 'writing_generate',
+        goal: instruction,
+        input: payload,
+      })
+      activeExecutionId.value = execution.id
+      await executionStore.loadEvents(execution.id)
+      await executionStore.startStream(props.projectId, execution.id)
+      const completed = executionStore.allExecutions.find(item => item.id === execution.id)
+      if (completed?.status !== 'completed' || !completed.result_payload?.proposal) {
+        throw new Error(completed?.error_message || '写作任务没有返回可用建议。')
+      }
+      proposal = completed.result_payload.proposal
     }
     writingStore.finishRequest(proposal)
     proposalEditorVersion.value = requestEditorVersion
@@ -313,35 +359,56 @@ const openEvidence = (item: EvidenceItem) => window.open(`/paper/${item.paper_id
 
 watch(() => props.projectId, load)
 onMounted(load)
-onBeforeUnmount(() => { editor.value?.destroy(); writingStore.clear() })
+onBeforeUnmount(() => {
+  if (activeExecutionId.value) executionStore.stopStream(activeExecutionId.value)
+  editor.value?.destroy()
+  writingStore.clear()
+})
 </script>
 
 <style scoped>
-.writing-v2 { position: relative; display: grid; grid-template-columns: 176px minmax(0, 1fr) 320px; min-height: calc(100vh - 52px); overflow: hidden; background: var(--pa-surface); }
-.writing-v2.outline-collapsed { grid-template-columns: 44px minmax(0, 1fr) 320px; }
-.writing-v2.agent-collapsed { grid-template-columns: 176px minmax(0, 1fr) 44px; }
+.writing-v2 { position: relative; display: grid; grid-template-columns: 220px minmax(0, 1fr) 344px; min-height: calc(100vh - 112px); overflow: hidden; background: var(--pa-surface); }
+.writing-v2.outline-collapsed { grid-template-columns: 44px minmax(0, 1fr) 344px; }
+.writing-v2.agent-collapsed { grid-template-columns: 220px minmax(0, 1fr) 44px; }
 .writing-v2.outline-collapsed.agent-collapsed { grid-template-columns: 44px minmax(0, 1fr) 44px; }
 .editor-column { min-width: 0; background: var(--pa-surface); }
 .editor-empty { padding: 80px 24px; text-align: center; }
 .editor-empty p { margin: 8px 0 18px; color: var(--pa-muted); }
-.document-header { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; border-bottom: 1px solid var(--pa-border); }
-.document-header input { min-width: 0; flex: 1; border: 0; background: transparent; color: var(--pa-text); font-size: 15px; font-weight: 650; }.save-state { color: var(--pa-success); font-size: 10px; white-space: nowrap; }.save-state-error { color: var(--pa-danger); }
-.document-header input:focus-visible,.editor-toolbar button:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
-.editor-toolbar { display: flex; flex-wrap: wrap; gap: 3px; min-height: 40px; padding: 4px 10px; border-bottom: 1px solid var(--pa-border); }
-.editor-toolbar button { min-height: 30px; padding: 3px 8px; border: 1px solid var(--pa-border); border-radius: 4px; background: var(--pa-surface); color: var(--pa-text); cursor: pointer; font-size: 12px; }
-.editor-toolbar button.active { border-color: var(--pa-primary); color: var(--pa-primary); }
-.editor-paper { background: var(--pa-bg); }
-.editor-surface { width: min(100%, 860px); min-height: calc(100vh - 136px); margin: 0 auto; background: var(--pa-surface); }
-.editor-surface :deep(.ProseMirror) { min-height: calc(100vh - 136px); padding: 28px clamp(24px, 5vw, 56px) 96px; outline: 0; color: var(--pa-text); font-size: 16px; line-height: 1.72; }
+.document-header { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 20px; border-bottom: 1px solid var(--pa-border); }
+.document-header input { min-width: 0; flex: 1; border: 1px solid transparent; border-radius: var(--pa-radius-sm); background: transparent; color: var(--pa-ink); font-size: 15px; font-weight: 650; line-height: 32px; }
+.document-header input:hover { border-color: var(--pa-border); }
+.document-header input:focus { border-color: var(--pa-primary); outline: 0; box-shadow: var(--pa-focus-ring); }
+.document-meta { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.revision-version { color: var(--pa-muted); font-size: 12px; }
+.save-state { color: var(--pa-success); font-size: 12px; white-space: nowrap; }.save-state-error { color: var(--pa-danger); }
+.document-actions { display: flex; align-items: center; gap: 8px; }
+.editor-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-height: 44px; padding: 6px 20px; border-bottom: 1px solid var(--pa-border); background: var(--pa-surface); }
+.heading-select { height: 32px; padding: 0 28px 0 9px; border: 1px solid transparent; border-radius: var(--pa-radius-sm); background: var(--pa-surface); color: var(--pa-text); cursor: pointer; font: inherit; font-size: 12px; }
+.heading-select:hover { border-color: var(--pa-border); }
+.heading-select:focus-visible,.editor-toolbar button:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
+.toolbar-divider { width: 1px; height: 20px; margin: 0 6px; background: var(--pa-border); }
+.toolbar-icon-button { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--pa-radius-sm); background: transparent; color: var(--pa-text); cursor: pointer; }
+.toolbar-icon-button:hover { border-color: var(--pa-border); background: var(--pa-surface-soft); }
+.toolbar-icon-button.active { border-color: var(--pa-primary); background: var(--pa-primary-soft); color: var(--pa-primary); }
+.toolbar-icon-button:disabled { cursor: not-allowed; opacity: .4; }
+.editor-paper { min-height: calc(100vh - 208px); padding: 24px 0 56px; background: var(--pa-bg); }
+.editor-surface { width: min(100%, var(--pa-editor-reading-width)); min-height: calc(100vh - 208px); margin: 0 auto; background: var(--pa-surface); box-shadow: var(--pa-shadow-sm); }
+.editor-surface :deep(.ProseMirror) { min-height: calc(100vh - 208px); padding: 40px 56px 96px; outline: 0; color: var(--pa-text); font-size: 16px; line-height: 1.78; }
+.editor-surface :deep(.ProseMirror h1) { margin: 0 0 24px; color: var(--pa-ink); font-size: 28px; line-height: 1.25; }
+.editor-surface :deep(.ProseMirror h2) { margin: 32px 0 14px; color: var(--pa-ink); font-size: 22px; line-height: 1.35; }
+.editor-surface :deep(.ProseMirror h3) { margin: 24px 0 10px; color: var(--pa-ink); font-size: 18px; line-height: 1.4; }
+.editor-surface :deep(.ProseMirror p) { margin: 0 0 16px; }
+.editor-surface :deep(.ProseMirror ul),.editor-surface :deep(.ProseMirror ol) { margin: 0 0 16px; padding-left: 28px; }
+.editor-surface :deep(.ProseMirror blockquote) { margin: 20px 0; padding-left: 18px; border-left: 2px solid var(--pa-border-strong); color: var(--pa-muted); }
 .editor-surface :deep(.ProseMirror:focus-visible) { box-shadow: inset 0 0 0 2px var(--pa-primary-soft); }
-.editor-surface :deep(.citation-node) { padding: 1px 5px; border-radius: 4px; background: var(--pa-primary-soft); color: var(--pa-primary); }
-.audit-panel { margin: 0 14px 14px; padding: 14px; border: 1px solid var(--pa-border); border-radius: 8px; background: var(--pa-surface-soft); }
+.editor-surface :deep(.citation-node) { padding: 1px 5px; border: 1px solid rgb(177 58 23 / 0.18); border-radius: 4px; background: var(--pa-primary-soft); color: var(--pa-primary); }
+.audit-panel { margin: 0 20px 20px; padding: 16px; border: 1px solid var(--pa-border); border-radius: var(--pa-radius-md); background: var(--pa-surface-soft); }
 .audit-panel header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .audit-panel header span { flex: 1; color: var(--pa-muted); font-size: 12px; }
-.audit-panel ul { margin: 10px 0 0; padding-left: 20px; }.audit-panel li { margin-top: 5px; font-size: 12px; }.audit-panel li.error { color: var(--pa-danger); }.audit-panel li.warning { color: oklch(0.48 0.12 75); }.audit-panel blockquote { margin: 5px 0 0; padding-left: 8px; border-left: 2px solid currentColor; color: var(--pa-text); }.audit-pass { margin: 10px 0 0; color: var(--pa-success); font-size: 12px; }
-.evidence-library { margin-top: 16px; border-top: 1px solid var(--pa-border); }.evidence-library summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; color: var(--pa-text); cursor: pointer; font-size: 12px; font-weight: 650; }.evidence-library summary:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }.evidence-library summary span { color: var(--pa-muted); font-weight: 400; }.evidence-content { padding-bottom: 12px; }.rail-empty { margin-top: 10px; color: var(--pa-muted); font-size: 11px; }.evidence-content article { padding: 12px 0; border-bottom: 1px solid var(--pa-border); }.evidence-content article > span { color: var(--pa-muted); font-size: 11px; }.evidence-content article strong { display: block; margin: 3px 0; font-size: 12px; }.evidence-content article p { display: -webkit-box; overflow: hidden; font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }.evidence-content article div { display: flex; gap: 6px; margin-top: 6px; }
-@media (min-width: 1024px) and (max-width: 1279px) { .writing-v2 { grid-template-columns: 160px minmax(0, 1fr) 300px; }.writing-v2.outline-collapsed { grid-template-columns: 44px minmax(0, 1fr) 300px; }.writing-v2.agent-collapsed { grid-template-columns: 160px minmax(0, 1fr) 44px; }.writing-v2.outline-collapsed.agent-collapsed { grid-template-columns: 44px minmax(0, 1fr) 44px; } }
+.audit-panel ul { margin: 10px 0 0; padding-left: 20px; }.audit-panel li { margin-top: 5px; font-size: 12px; }.audit-panel li.error { color: var(--pa-danger); }.audit-panel li.warning { color: var(--pa-warning); }.audit-panel blockquote { margin: 5px 0 0; padding-left: 8px; border-left: 2px solid currentColor; color: var(--pa-text); }.audit-pass { margin: 10px 0 0; color: var(--pa-success); font-size: 12px; }
+.evidence-library { margin-top: 0; }.evidence-heading { display: flex; align-items: center; justify-content: space-between; min-height: 36px; color: var(--pa-text); font-size: 12px; }.evidence-heading span { color: var(--pa-muted); }.evidence-content { padding-bottom: 12px; }.rail-empty { margin-top: 10px; color: var(--pa-muted); font-size: 12px; line-height: 1.55; }.evidence-content article { padding: 14px 0; border-bottom: 1px solid var(--pa-border); }.evidence-content article > span { display: block; margin-top: 4px; color: var(--pa-muted); font-size: 11px; }.evidence-content article strong { display: block; margin: 3px 0; color: var(--pa-ink); font-size: 13px; font-weight: 650; }.evidence-content article p { display: -webkit-box; overflow: hidden; margin-top: 8px; font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }.evidence-content article p.evidence-claim { margin-top: 6px; color: var(--pa-muted); -webkit-line-clamp: 2; }.evidence-content article div { display: flex; gap: 6px; margin-top: 10px; }
+@media (min-width: 1024px) and (max-width: 1279px) { .writing-v2 { grid-template-columns: 196px minmax(0, 1fr) 320px; }.writing-v2.outline-collapsed { grid-template-columns: 44px minmax(0, 1fr) 320px; }.writing-v2.agent-collapsed { grid-template-columns: 196px minmax(0, 1fr) 44px; }.writing-v2.outline-collapsed.agent-collapsed { grid-template-columns: 44px minmax(0, 1fr) 44px; } }
 @media (min-width: 768px) and (max-width: 1023px) { .writing-v2,.writing-v2.agent-collapsed { display: block; }.writing-v2 > :first-child { display: none; }.writing-v2 :deep(.agent-panel) { position: absolute; z-index: 10; top: 0; right: 0; bottom: 0; width: min(320px, 88vw); box-shadow: var(--pa-shadow-md); }.writing-v2 :deep(.agent-panel.collapsed) { width: 44px; height: 64px; bottom: auto; box-shadow: var(--pa-shadow-sm); }.editor-column { padding-right: 44px; } }
-@media (max-width: 767px) { .writing-v2,.writing-v2.agent-collapsed { display: block; }.writing-v2 > :first-child,.writing-v2 :deep(.agent-panel) { display: none; }.document-header { flex-wrap: wrap; }.document-header input { flex-basis: calc(100% - 48px); }.editor-surface :deep(.ProseMirror) { padding: 24px 18px; } }
-@media (pointer: coarse) { .editor-toolbar button { min-height: 44px; } }
+@media (max-width: 767px) { .writing-v2,.writing-v2.agent-collapsed { display: block; }.writing-v2 > :first-child,.writing-v2 :deep(.agent-panel) { display: none; }.document-header { flex-wrap: wrap; padding-inline: 16px; }.document-header input { flex-basis: calc(100% - 48px); }.document-meta { order: 3; }.document-actions { margin-left: auto; }.editor-toolbar { padding-inline: 16px; }.editor-paper { padding-top: 0; }.editor-surface { box-shadow: none; }.editor-surface :deep(.ProseMirror) { padding: 24px 18px 64px; } }
+@media (pointer: coarse) { .editor-toolbar button { min-width: 44px; min-height: 44px; }.heading-select { height: 44px; } }
 </style>

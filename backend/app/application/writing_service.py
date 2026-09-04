@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -37,6 +38,7 @@ GENERATE_CONTENT_MAX_CHARS = 8_000
 GENERATE_MAX_CITATIONS = 12
 _CITATION_PREFIX = "[[CITATION:"
 _CITATION_SUFFIX = "]]"
+WritingProgressCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class WritingServiceError(RuntimeError):
@@ -70,6 +72,11 @@ class ParagraphGenerationError(WritingServiceError):
 
 class WritingVerificationError(WritingServiceError):
     code = "VERIFICATION_ERROR"
+    status_code = 503
+
+
+class WritingReviewError(WritingServiceError):
+    code = "WRITING_REVIEW_ERROR"
     status_code = 503
 
 
@@ -236,6 +243,30 @@ class ParagraphModelOutput(BaseModel):
         return self
 
 
+class WritingReviewDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["pass", "repair"]
+    issue_codes: list[Literal[
+        "unsupported_claim", "evidence_mismatch", "citation_integrity", "academic_style", "scope_drift"
+    ]] = Field(default_factory=list, max_length=5)
+    repair_instruction: str | None = Field(default=None, max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_repair(self):
+        if self.verdict == "pass" and (self.issue_codes or self.repair_instruction):
+            raise ValueError("pass verdict 不能包含修复信息")
+        if self.verdict == "repair" and (not self.issue_codes or not (self.repair_instruction or "").strip()):
+            raise ValueError("repair verdict 必须包含 issue_codes 和 repair_instruction")
+        return self
+
+
+class WritingReviewSummary(BaseModel):
+    status: Literal["passed", "repaired"]
+    issue_codes: list[str] = Field(default_factory=list)
+    repair_count: Literal[0, 1]
+
+
 class WritingRewriteProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -267,6 +298,7 @@ class WritingGenerationProposal(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     section_path: list[str] = Field(default_factory=list)
     citation_style: Literal["gbt7714", "apa", "ieee"]
+    review: WritingReviewSummary | None = None
 
 
 def citation_placeholder(citation_key: str) -> str:
@@ -505,6 +537,56 @@ class ParagraphGenerator:
             except (json.JSONDecodeError, ValidationError, ValueError, IndexError, KeyError, TypeError) as exc:
                 raise ParagraphGenerationError("模型未返回有效的单段结构化 proposal。") from exc
 
+    async def repair(
+        self,
+        request: WritingGenerateRequest,
+        context: WritingRetrievalContext,
+        draft: ParagraphModelOutput,
+        review: WritingReviewDecision,
+    ) -> ParagraphModelOutput:
+        evidence_keys = {f"E{index}" for index in range(1, len(context.evidence) + 1)}
+        prompt = (
+            f"{build_generation_prompt(request, context)}\n\n"
+            "Revise the following untrusted draft exactly once according to the bounded review. "
+            "Return the same JSON schema only. Do not add sources or claims outside EVIDENCE ITEMS.\n"
+            f"REVIEW ISSUE CODES: {json.dumps(review.issue_codes)}\n"
+            f"REPAIR INSTRUCTION: {review.repair_instruction}\n"
+            f"<draft>{draft.model_dump_json()}</draft>"
+        )
+        response = await self.llm_client.agenerate([prompt], json_mode=True, enable_thinking=False)
+        try:
+            return _parse_generation_output(response, evidence_keys)
+        except (json.JSONDecodeError, ValidationError, ValueError, IndexError, KeyError, TypeError) as exc:
+            raise WritingReviewError("Writing Reviewer 的一次有限修复未返回有效段落。") from exc
+
+
+class WritingReviewer:
+    def __init__(self, llm_client: Any | None = None):
+        self.llm_client = llm_client or get_llm_client()
+
+    async def review(
+        self,
+        request: WritingGenerateRequest,
+        context: WritingRetrievalContext,
+        draft: ParagraphModelOutput,
+    ) -> WritingReviewDecision:
+        evidence = _evidence_prompt_items(context)
+        prompt = (
+            "You are a bounded academic Writing Reviewer. Review only grounding, citation integrity, "
+            "scope adherence and academic clarity. Do not rewrite. Return JSON only with verdict "
+            "('pass' or 'repair'), issue_codes, repair_instruction. Never reveal chain-of-thought. "
+            "Use only these issue codes: unsupported_claim, evidence_mismatch, citation_integrity, "
+            "academic_style, scope_drift. A pass must have empty issues and null instruction.\n"
+            f"INSTRUCTION: {request.instruction}\n"
+            f"EVIDENCE: {json.dumps(evidence, ensure_ascii=False)}\n"
+            f"<draft>{draft.model_dump_json()}</draft>"
+        )
+        response = await self.llm_client.agenerate([prompt], json_mode=True, enable_thinking=False)
+        try:
+            return WritingReviewDecision.model_validate(json.loads(_response_text(response)))
+        except (json.JSONDecodeError, ValidationError, ValueError, IndexError, KeyError, TypeError) as exc:
+            raise WritingReviewError("Writing Reviewer 未返回有效的结构化审查结果。") from exc
+
 
 class WritingService:
     """Own revision-safe writing use cases; proposals never mutate documents."""
@@ -517,6 +599,7 @@ class WritingService:
         citation_service: Any | None = None,
         context_manager: Any | None = None,
         evidence_service: Any | None = None,
+        reviewer: Any | None = None,
     ):
         self.db = db
         self.generator = RewriteGenerator(llm_client)
@@ -524,6 +607,7 @@ class WritingService:
         self.citation_service = citation_service
         self.context_manager = context_manager or ProjectContextManager(db)
         self.evidence_service = evidence_service or EvidenceService(db)
+        self.reviewer = reviewer or WritingReviewer(llm_client)
 
     async def _owned_document(
         self,
@@ -616,6 +700,7 @@ class WritingService:
         project_id: str,
         user_id: str,
         request: WritingGenerateRequest,
+        on_progress: WritingProgressCallback | None = None,
     ) -> WritingGenerationProposal:
         document = await self._owned_document(
             project_id=project_id,
@@ -627,6 +712,11 @@ class WritingService:
         if request.base_revision_id and request.base_revision_id != document.current_revision_id:
             raise WritingConflictError("正文已发生变化，请基于最新内容重新生成建议。")
 
+        async def emit(stage: str, **data: Any) -> None:
+            if on_progress is not None:
+                await on_progress(stage, data)
+
+        await emit("context_started")
         current_section_title = request.section_path[-1] if request.section_path else ""
         context = await self.context_manager.build_writing_context(
             project_id=project_id,
@@ -646,12 +736,32 @@ class WritingService:
         if context.status == "no_supporting_evidence" or not context.evidence:
             raise NoSupportingEvidenceError("当前项目已导入论文中没有找到足够证据支持这一写作要求。")
 
+        await emit(
+            "context_ready",
+            candidate_paper_count=len(context.candidate_papers),
+            evidence_count=len(context.evidence),
+        )
+        await emit("generation_started")
         try:
             output = await self.paragraph_generator.generate(request, context)
         except WritingServiceError:
             raise
         except Exception as exc:
             raise ParagraphGenerationError("AI 段落生成服务暂时不可用，文档未发生变化。") from exc
+        await emit("proposal_generated", citation_count=len(output.citations))
+
+        await emit("review_started")
+        review = await self.reviewer.review(request, context, output)
+        review_summary = WritingReviewSummary(status="passed", issue_codes=[], repair_count=0)
+        if review.verdict == "repair":
+            await emit("review_repair_required", issue_codes=review.issue_codes)
+            output = await self.paragraph_generator.repair(request, context, output, review)
+            review_summary = WritingReviewSummary(
+                status="repaired", issue_codes=list(review.issue_codes), repair_count=1,
+            )
+            await emit("review_repair_completed", issue_codes=review.issue_codes, repair_count=1)
+        else:
+            await emit("review_passed", repair_count=0)
 
         evidence_by_key = {
             f"E{index}": candidate
@@ -678,8 +788,10 @@ class WritingService:
             raise NoSupportingEvidenceError(
                 "检索到的证据来源已不可用，请重新解析论文或调整写作要求。"
             ) from exc
+        await emit("evidence_persisted", evidence_count=len(mappings))
 
         verifier = self.citation_service or CitationVerificationService(self.db)
+        await emit("verification_started", citation_count=len(mappings))
         try:
             verification = await verifier.verify_citations(
                 project_id=project_id,
@@ -709,6 +821,14 @@ class WritingService:
             proposal_status = "verification_failed"
         elif "weak" in statuses:
             proposal_status = "partially_verified"
+        await emit(
+            "citation_verified",
+            citation_count=len(verification.results),
+            verified_count=sum(item.status == "verified" for item in verification.results),
+            weak_count=sum(item.status == "weak" for item in verification.results),
+            unsupported_count=sum(item.status == "unsupported" for item in verification.results),
+            proposal_status=proposal_status,
+        )
         return WritingGenerationProposal(
             proposal_id=str(uuid.uuid4()),
             project_id=project_id,
@@ -720,6 +840,7 @@ class WritingService:
             warnings=warnings,
             section_path=request.section_path,
             citation_style=request.citation_style,
+            review=review_summary,
         )
 
 
@@ -750,6 +871,9 @@ __all__ = [
     "WritingDocumentNotFoundError",
     "WritingGenerateRequest",
     "WritingGenerationProposal",
+    "WritingReviewDecision",
+    "WritingReviewer",
+    "WritingReviewError",
     "WritingGenerationError",
     "WritingRewriteProposal",
     "WritingRewriteRequest",

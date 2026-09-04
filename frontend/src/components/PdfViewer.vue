@@ -840,7 +840,7 @@ defineExpose({
   justify-content: space-between;
   gap: 8px;
   padding: 8px 16px;
-  background: var(--pa-toolbar);
+  background: var(--pa-reader-toolbar);
   border-bottom: 1px solid oklch(0.22 0.015 45);
   position: relative;
   z-index: 10;
@@ -861,7 +861,7 @@ defineExpose({
 .page-input {
   width: 50px;
   padding: 4px 8px;
-  background: var(--pa-toolbar-control);
+  background: var(--pa-reader-toolbar-control);
   border: 1px solid oklch(0.46 0.018 45);
   border-radius: 4px;
   color: white;
@@ -903,7 +903,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
   padding: 6px 12px;
-  background: var(--pa-toolbar-control);
+  background: var(--pa-reader-toolbar-control);
   border: none;
   border-radius: 4px;
   color: white;
@@ -940,7 +940,7 @@ defineExpose({
   overflow-x: hidden;
   position: relative;
   scrollbar-width: auto;
-  scrollbar-color: oklch(0.62 0.012 45) var(--pa-toolbar);
+  scrollbar-color: oklch(0.62 0.012 45) var(--pa-reader-toolbar);
 }
 
 .pdf-container::-webkit-scrollbar {
@@ -948,7 +948,7 @@ defineExpose({
 }
 
 .pdf-container::-webkit-scrollbar-track {
-  background: var(--pa-toolbar);
+  background: var(--pa-reader-toolbar);
 }
 
 .pdf-container::-webkit-scrollbar-thumb {
@@ -1074,7 +1074,7 @@ defineExpose({
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: var(--pa-toolbar);
+  background: var(--pa-reader-toolbar);
   border-radius: 8px;
   z-index: 20;
 }

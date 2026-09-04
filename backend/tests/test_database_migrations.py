@@ -51,12 +51,21 @@ def test_runtime_head_points_to_writing_documents_revision():
 def test_runtime_head_points_to_evidence_verification_revision():
     revision = BACKEND_DIR / "alembic" / "versions" / "0005_evidence_verification_add_evidence_lifecycle.py"
     source = revision.read_text(encoding="utf-8")
-    assert ALEMBIC_HEAD_REVISION == "0005_evidence_verification"
     assert 'revision: str = "0005_evidence_verification"' in source
     assert 'down_revision: Union[str, None] = "0004_writing_documents"' in source
     for column in ("source_type", "status", "source_fingerprint", "verification_status", "verification_reason", "verification_model", "verification_version", "updated_at"):
         assert f'"{column}"' in source
     assert "idx_evidence_items_project_status" in source
+
+
+def test_runtime_head_points_to_execution_io_revision():
+    revision = BACKEND_DIR / "alembic" / "versions" / "0006_execution_io_add_execution_input_and_result.py"
+    source = revision.read_text(encoding="utf-8")
+    assert ALEMBIC_HEAD_REVISION == "0006_execution_io"
+    assert 'revision: str = "0006_execution_io"' in source
+    assert 'down_revision: Union[str, None] = "0005_evidence_verification"' in source
+    assert '"input_payload"' in source
+    assert '"result_payload"' in source
 
 
 def test_schema_check_loads_every_current_model_family():

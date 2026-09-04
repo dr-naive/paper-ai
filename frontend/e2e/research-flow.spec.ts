@@ -24,7 +24,7 @@ test.describe('PaperAI research workflow', () => {
     await page.getByRole('link', { name: '项目论文', exact: true }).click()
     await expect(page).toHaveURL(/\/projects\/[^/]+\/papers$/)
     await expect(page.getByRole('heading', { name: '项目论文' })).toBeVisible()
-    const readerButton = page.getByRole('button', { name: '打开 Reader' }).first()
+    const readerButton = page.getByRole('button', { name: /^(开始阅读|继续阅读|查看)$/ }).first()
     if (await readerButton.count()) {
       await readerButton.click()
       await expect(page).toHaveURL(/\/paper\/[^/]+/)

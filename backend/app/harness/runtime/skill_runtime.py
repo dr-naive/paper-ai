@@ -59,6 +59,20 @@ class SkillDefinition(BaseModel):
         return {key: values.get(key) for key in self.completion.required_metadata}
 
 
+class SkillCriterionEvaluation(BaseModel):
+    criterion: str
+    passed: bool
+
+
+class SkillCompletionReport(BaseModel):
+    skill_id: str
+    skill_version: str
+    passed: bool
+    criteria: list[SkillCriterionEvaluation]
+    missing_metadata: list[str]
+    metadata: dict[str, Any]
+
+
 class SkillRuntime:
     def __init__(self, skills_dir: Path, tool_specs: list[ToolSpec]):
         self.skills_dir = skills_dir
@@ -93,6 +107,36 @@ class SkillRuntime:
 
     def allows(self, skill_id: str, tool_name: str) -> bool:
         return tool_name in self.load(skill_id).allowed_tools
+
+    async def activate(self, execution: AgentExecution, skill_id: str, *, db: Any) -> SkillDefinition:
+        definition = self.load(skill_id)
+        execution.active_skill = skill_id
+        await db.commit()
+        return definition
+
+    def evaluate_completion(self, skill_id: str, *, metadata: dict[str, Any],
+                            criterion_results: dict[str, bool]) -> SkillCompletionReport:
+        definition = self.load(skill_id)
+        expected = definition.completion.criteria
+        unknown = sorted(set(criterion_results) - set(expected))
+        if unknown:
+            raise ValueError(f"Skill completion 包含未知 criteria: {unknown}")
+        evaluations = [
+            SkillCriterionEvaluation(criterion=criterion, passed=criterion_results.get(criterion) is True)
+            for criterion in expected
+        ]
+        missing = [
+            key for key in definition.completion.required_metadata
+            if metadata.get(key) is None or metadata.get(key) == "" or metadata.get(key) == []
+        ]
+        return SkillCompletionReport(
+            skill_id=definition.id,
+            skill_version=definition.version,
+            passed=all(item.passed for item in evaluations) and not missing,
+            criteria=evaluations,
+            missing_metadata=missing,
+            metadata=definition.completion_metadata(metadata),
+        )
 
     def assert_budget(self, skill_id: str, *, tool_calls: int, external_searches: int = 0,
                       papers_read: int = 0) -> None:

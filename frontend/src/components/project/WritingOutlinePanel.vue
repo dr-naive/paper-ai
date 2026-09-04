@@ -2,10 +2,11 @@
   <aside class="outline-panel" :class="{ collapsed }" aria-label="文档与大纲">
     <header class="panel-heading">
       <button type="button" class="outline-toggle" :aria-label="collapsed ? '展开论文结构' : '收起论文结构'" :aria-expanded="!collapsed" @click="$emit('toggle')">
-        <span aria-hidden="true">{{ collapsed ? '›' : '‹' }}</span>
+        <IconRight v-if="collapsed" aria-hidden="true" />
+        <IconLeft v-else aria-hidden="true" />
         <strong v-if="!collapsed">文档</strong>
       </button>
-      <a-button v-if="!collapsed" size="mini" @click="$emit('create-document')">新建文档</a-button>
+      <a-button v-if="!collapsed" size="mini" @click="$emit('create-document')"><IconPlus aria-hidden="true" />新建文档</a-button>
     </header>
     <nav v-if="!collapsed" aria-label="写作文档">
       <button
@@ -26,7 +27,7 @@
     <section v-if="!collapsed && activeDocumentId" class="outline-section">
       <header class="panel-heading">
         <strong>大纲</strong>
-        <a-button size="mini" @click="$emit('add-section')">添加章节</a-button>
+        <a-button size="mini" @click="$emit('add-section')"><IconPlus aria-hidden="true" />添加章节</a-button>
       </header>
       <nav v-if="outline.length" aria-label="文档大纲">
         <button
@@ -48,6 +49,7 @@
 <script setup lang="ts">
 import type { WritingDocument } from '@/api/documents'
 import type { WritingOutlineItem } from '@/utils/writingContext'
+import { IconLeft, IconPlus, IconRight } from '@arco-design/web-vue/es/icon'
 
 defineProps<{
   documents: WritingDocument[]
@@ -69,20 +71,24 @@ const formatTime = (value: string) => new Date(value).toLocaleDateString('zh-CN'
 </script>
 
 <style scoped>
-.outline-panel { min-width: 0; padding: 10px 8px; overflow: auto; border-right: 1px solid var(--pa-border); background: var(--pa-surface-soft); font-size: 12px; }
+.outline-panel { min-width: 0; padding: 12px 10px; overflow: auto; border-right: 1px solid var(--pa-border); background: var(--pa-surface-soft); font-size: 12px; }
 .outline-panel.collapsed { padding: 6px 0; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.outline-toggle { position: relative; display: flex; align-items: center; gap: 4px; min-width: 40px; min-height: 36px; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }
+.outline-toggle { position: relative; display: flex; align-items: center; gap: 6px; min-width: 40px; min-height: 32px; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }
 .outline-toggle::before { position: absolute; inset: -4px; content: ''; }
 .outline-toggle:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
 .collapsed .panel-heading { justify-content: center; }
 .collapsed .outline-toggle { justify-content: center; }
 .document-item,.outline-item { width: 100%; border: 0; border-radius: 6px; background: transparent; color: var(--pa-text); cursor: pointer; text-align: left; }
-.document-item { display: flex; flex-direction: column; gap: 2px; min-height: 40px; margin-top: 5px; padding: 6px; }
-.document-item.active,.outline-item.active { background: var(--pa-primary-soft); color: var(--pa-primary-hover); }
+.document-item { display: flex; flex-direction: column; gap: 3px; min-height: 48px; margin-top: 5px; padding: 8px; }
+.document-item.active { border: 1px solid var(--pa-border); background: var(--pa-surface); color: var(--pa-ink); }
+.document-item:hover,.outline-item:hover { background: rgb(255 255 255 / 0.72); }
+.document-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
 .document-item small,.panel-empty { color: var(--pa-muted); font-size: 11px; }
-.outline-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--pa-border); }
-.outline-item { display: block; min-height: 32px; margin-top: 1px; padding-block: 6px; font-size: 11px; }
+.outline-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--pa-border); }
+.outline-section .panel-heading > strong { color: var(--pa-muted); font-size: 11px; font-weight: 650; letter-spacing: .04em; }
+.outline-item { display: block; min-height: 32px; margin-top: 1px; padding-block: 7px; font-size: 12px; line-height: 1.35; }
+.outline-item.active { background: var(--pa-primary-soft); color: var(--pa-primary-hover); font-weight: 650; }
 .document-item:focus-visible,.outline-item:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
 .panel-empty { margin-top: 10px; line-height: 1.5; }
 @media (pointer: coarse) { .outline-toggle { min-width: 44px; min-height: 44px; } }

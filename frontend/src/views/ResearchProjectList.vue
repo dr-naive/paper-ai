@@ -1,6 +1,6 @@
 <template>
   <ProjectShell :recent-projects="projects">
-    <ProductHeader context="项目">
+    <ProductHeader context="项目" :show-brand="false">
       <template #actions>
         <a-button size="small" @click="router.push('/library')">打开论文库</a-button>
       </template>
@@ -16,15 +16,24 @@
         <a-button type="primary" size="large" @click="showCreateModal = true">新建项目</a-button>
       </header>
 
-      <a-spin :loading="loading">
-        <section v-if="!loading && !projects.length" class="projects-empty" aria-live="polite">
-          <div class="empty-mark" aria-hidden="true">＋</div>
+      <section v-if="loading" class="project-grid project-grid--loading" aria-label="正在加载项目" aria-busy="true">
+        <article v-for="index in 3" :key="index" class="project-card project-card--skeleton" aria-hidden="true">
+          <span class="skeleton-line skeleton-line--short"></span>
+          <span class="skeleton-line skeleton-line--title"></span>
+          <span class="skeleton-line skeleton-line--body"></span>
+          <span class="skeleton-line skeleton-line--body skeleton-line--body-short"></span>
+          <span class="skeleton-line skeleton-line--meta"></span>
+        </article>
+      </section>
+
+      <section v-else-if="!projects.length" class="projects-empty" aria-live="polite">
+          <div class="empty-mark" aria-hidden="true"><IconPlus /></div>
           <h2>从一个研究主题开始</h2>
           <p>创建项目后，你可以在概览、文献发现、项目论文和写作之间切换。</p>
           <a-button type="primary" @click="showCreateModal = true">创建第一个项目</a-button>
-        </section>
+      </section>
 
-        <section v-else-if="!loading" class="project-grid" aria-label="科研项目列表">
+      <section v-else class="project-grid" aria-label="科研项目列表">
           <article
             v-for="project in projects"
             :key="project.id"
@@ -43,22 +52,28 @@
               <div class="project-card__meta">
                 <span>{{ project.paper_count ?? 0 }} 篇项目论文</span>
               </div>
-              <span class="project-card__open">打开项目 <span aria-hidden="true">→</span></span>
+              <span class="project-card__open">打开项目 <IconRight aria-hidden="true" /></span>
             </RouterLink>
-            <div class="project-card__actions">
-              <button
-                type="button"
-                class="project-card__delete"
-                :disabled="Boolean(deletingProjectId)"
-                :aria-label="`删除项目 ${project.title}`"
-                @click="openDeleteModal(project)"
-              >
-                {{ deletingProjectId === project.id ? '正在删除…' : '删除项目' }}
-              </button>
+            <div class="project-card__menu">
+              <a-dropdown trigger="click" position="br">
+                <button
+                  type="button"
+                  class="project-card__more"
+                  :disabled="Boolean(deletingProjectId)"
+                  :aria-label="`打开项目菜单 ${project.title}`"
+                >
+                  <IconMore aria-hidden="true" />
+                </button>
+                <template #content>
+                  <a-doption status="danger" @click="openDeleteModal(project)">
+                    <template #icon><IconDelete aria-hidden="true" /></template>
+                    删除项目
+                  </a-doption>
+                </template>
+              </a-dropdown>
             </div>
           </article>
-        </section>
-      </a-spin>
+      </section>
     </main>
 
     <a-modal v-model:visible="showCreateModal" title="新建研究项目" :ok-loading="creating" @ok="handleCreate">
@@ -114,6 +129,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
+import { IconDelete, IconMore, IconPlus, IconRight } from '@arco-design/web-vue/es/icon'
 import ProductHeader from '@/components/ProductHeader.vue'
 import ProjectShell from '@/components/project/ProjectShell.vue'
 import { createProject, deleteProject, listProjects, type ResearchProject } from '@/api/projects'
@@ -232,34 +248,42 @@ onMounted(loadProjects)
 </script>
 
 <style scoped>
-.projects-page { max-width: 1180px; margin: 0 auto; padding: 42px 32px 72px; }
-.projects-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
+.projects-page { max-width: var(--pa-content-max); margin: 0 auto; padding: 40px 32px 64px; }
+.projects-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
 .page-kicker { margin: 0 0 8px; color: var(--pa-primary-hover); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.projects-heading h1 { margin: 0; color: var(--pa-ink); font-size: clamp(26px, 3vw, 36px); letter-spacing: -0.025em; line-height: 1.2; text-wrap: balance; }
+.projects-heading h1 { margin: 0; color: var(--pa-ink); font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; text-wrap: balance; }
 .page-description { max-width: 48ch; margin: 10px 0 0; color: var(--pa-muted); font-size: 14px; line-height: 1.6; }
-.projects-empty { padding: 72px 24px; border: 1px dashed var(--pa-border); border-radius: 12px; background: var(--pa-surface); text-align: center; }
-.empty-mark { display: grid; width: 48px; height: 48px; margin: 0 auto 18px; place-items: center; border-radius: 50%; background: var(--pa-primary-soft); color: var(--pa-primary); font-size: 28px; font-weight: 300; }
+.projects-empty { padding: 72px 24px; border: 1px dashed var(--pa-border); border-radius: var(--pa-radius-lg); background: var(--pa-surface); text-align: center; }
+.empty-mark { display: grid; width: 48px; height: 48px; margin: 0 auto 18px; place-items: center; border-radius: 50%; background: var(--pa-primary-soft); color: var(--pa-primary); font-size: 24px; }
 .projects-empty h2 { margin: 0; font-size: 20px; line-height: 1.3; }
 .projects-empty p { max-width: 48ch; margin: 10px auto 22px; color: var(--pa-muted); font-size: 14px; line-height: 1.6; }
-.project-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-.project-card { display: flex; min-height: 246px; flex-direction: column; overflow: hidden; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); transition: border-color 180ms ease-out, box-shadow 180ms ease-out, transform 180ms ease-out; }
-.project-card:hover { border-color: var(--pa-primary); box-shadow: var(--pa-shadow-sm); transform: translateY(-2px); }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 360px)); justify-content: start; gap: 16px; }
+.project-card { position: relative; display: flex; min-height: 210px; flex-direction: column; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); transition: border-color 180ms ease-out, box-shadow 180ms ease-out; }
+.project-card:hover { border-color: var(--pa-primary); box-shadow: var(--pa-shadow-sm); }
 .project-card:focus-within { border-color: var(--pa-primary); }
-.project-card.is-deleting { opacity: 0.68; transform: none; }
-.project-card__main { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 20px; color: inherit; text-decoration: none; }
+.project-card.is-deleting { opacity: 0.68; }
+.project-card__main { display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 18px 64px 18px 18px; color: inherit; text-decoration: none; }
 .project-card__main:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: -3px; }
 .project-card__topline, .project-card__meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .project-card__label, .project-card__time, .project-card__meta { color: var(--pa-muted); font-size: 12px; }
 .project-card__label { color: var(--pa-primary-hover); font-weight: 650; }
-.project-card h2 { display: -webkit-box; margin: 22px 0 8px; overflow: hidden; font-size: 18px; line-height: 1.35; text-overflow: ellipsis; text-wrap: pretty; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.project-card__time { white-space: nowrap; }
+.project-card__menu { position: absolute; top: 14px; right: 14px; z-index: 1; }
+.project-card__more { display: inline-grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: var(--pa-radius-sm); background: transparent; color: var(--pa-muted); cursor: pointer; }
+.project-card__more:hover:not(:disabled) { background: var(--pa-surface-soft); color: var(--pa-ink); }
+.project-card__more:focus-visible { outline: 2px solid var(--pa-primary); outline-offset: 2px; }
+.project-card__more:disabled { cursor: not-allowed; opacity: 0.55; }
+.project-card h2 { display: -webkit-box; margin: 18px 0 8px; overflow: hidden; color: var(--pa-ink); font-size: 16px; font-weight: 650; line-height: 1.35; text-overflow: ellipsis; text-wrap: pretty; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .project-card__topic { display: -webkit-box; margin: 0; overflow: hidden; color: var(--pa-text); font-size: 14px; line-height: 1.55; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .project-card__meta { justify-content: flex-start; margin-top: auto; padding-top: 18px; }
-.project-card__open { margin-top: 14px; color: var(--pa-primary-hover); font-size: 13px; font-weight: 650; }
-.project-card__actions { display: flex; min-height: 42px; align-items: center; justify-content: flex-end; padding: 5px 12px; border-top: 1px solid var(--pa-border); background: var(--pa-surface-soft); }
-.project-card__delete { min-height: 32px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--pa-muted); cursor: pointer; font: inherit; font-size: 12px; transition: background-color 160ms ease-out, color 160ms ease-out; }
-.project-card__delete:hover:not(:disabled) { background: oklch(0.96 0.025 28); color: var(--pa-danger); }
-.project-card__delete:focus-visible { outline: 2px solid var(--pa-danger); outline-offset: 2px; }
-.project-card__delete:disabled { cursor: not-allowed; opacity: 0.62; }
+.project-card__open { display: inline-flex; align-items: center; gap: 4px; margin-top: 14px; color: var(--pa-primary-hover); font-size: 13px; font-weight: 650; }
+.project-card--skeleton { gap: 12px; padding: 18px; }
+.skeleton-line { display: block; height: 12px; border-radius: var(--pa-radius-sm); background: var(--pa-surface-soft); }
+.skeleton-line--short { width: 35%; }
+.skeleton-line--title { width: 72%; height: 20px; margin-top: 12px; }
+.skeleton-line--body { width: 92%; }
+.skeleton-line--body-short { width: 64%; }
+.skeleton-line--meta { width: 42%; margin-top: auto; }
 .delete-confirmation p { margin: 0; color: var(--pa-ink); font-size: 15px; line-height: 1.65; }
 .delete-confirmation__detail { margin-top: 12px !important; color: var(--pa-muted) !important; font-size: 13px !important; }
 .delete-confirmation__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
@@ -267,6 +291,6 @@ onMounted(loadProjects)
 .optional-fields summary { padding: 14px 0 4px; color: var(--pa-muted); cursor: pointer; font-size: 13px; }
 .optional-fields summary:hover { color: var(--pa-primary-hover); }
 .optional-fields__body { padding-top: 12px; }
-@media (max-width: 680px) { .projects-page { padding: 30px 16px 56px; } .projects-heading { align-items: stretch; flex-direction: column; } .projects-heading :deep(.arco-btn) { width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .project-card, .project-card__delete { transition: none; } }
+@media (max-width: 680px) { .projects-page { padding: 30px 16px 56px; } .projects-heading { align-items: stretch; flex-direction: column; } .projects-heading :deep(.arco-btn) { width: 100%; } .project-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .project-card { transition: none; } }
 </style>

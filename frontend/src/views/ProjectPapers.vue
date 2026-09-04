@@ -40,8 +40,7 @@
               <caption class="pa-sr-only">当前项目论文列表</caption>
               <thead>
                 <tr>
-                  <th scope="col">标题</th>
-                  <th scope="col">作者</th>
+                  <th scope="col">论文</th>
                   <th scope="col">年份</th>
                   <th scope="col">状态</th>
                   <th scope="col"><span class="pa-sr-only">操作</span></th>
@@ -50,14 +49,14 @@
               <tbody>
                 <tr v-for="item in filteredPapers" :key="item.id">
                   <td class="paper-title">
-                    <strong>{{ item.paper?.title || '论文信息待同步' }}</strong>
+                    <strong :title="item.paper?.title || undefined">{{ item.paper?.title || '论文信息待同步' }}</strong>
+                    <span v-if="item.paper?.authors" class="paper-authors" :title="item.paper.authors">{{ item.paper.authors }}</span>
                     <span v-if="item.paper?.venue">{{ item.paper.venue }}</span>
                   </td>
-                  <td>{{ item.paper?.authors || '—' }}</td>
                   <td>{{ item.paper?.publication_year || '—' }}</td>
                   <td><span class="reading-status" :class="`status-${readingStatus(item)}`">{{ readingStatusLabel(item) }}</span></td>
                   <td class="paper-action">
-                    <a-button size="small" :disabled="!item.paper" @click="openReader(item)">{{ item.paper ? '打开 Reader' : '等待解析' }}</a-button>
+                    <a-button size="small" :disabled="!item.paper" @click="openReader(item)">{{ item.paper ? readerActionLabel(item) : '等待解析' }}</a-button>
                   </td>
                 </tr>
               </tbody>
@@ -98,7 +97,8 @@ const readingStatus = (item: ProjectPaperItem) => {
   return 'pending'
 }
 
-const readingStatusLabel = (item: ProjectPaperItem) => ({ pending: '待阅读', reading: '阅读中', completed: '已完成', skipped: '已跳过', failed: '解析失败' }[readingStatus(item)] || '待阅读')
+const readingStatusLabel = (item: ProjectPaperItem) => ({ pending: '未阅读', reading: '阅读中', completed: '已阅读', skipped: '已跳过', failed: '解析失败' }[readingStatus(item)] || '未阅读')
+const readerActionLabel = (item: ProjectPaperItem) => ({ pending: '开始阅读', reading: '继续阅读', completed: '查看', skipped: '查看', failed: '查看' }[readingStatus(item)] || '查看')
 
 const filteredPapers = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -133,31 +133,35 @@ onMounted(loadPage)
 </script>
 
 <style scoped>
-.project-page { max-width: 1320px; margin: 0 auto; padding: 24px 24px 48px; }
-.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.page-heading h1 { margin: 0; color: var(--pa-ink); font-size: 24px; letter-spacing: -0.02em; line-height: 1.25; text-wrap: balance; }
+.project-page { max-width: var(--pa-content-max); margin: 0 auto; padding: 28px 28px 56px; }
+.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.page-heading h1 { margin: 0; color: var(--pa-ink); font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; text-wrap: balance; }
 .page-heading p { margin: 5px 0 0; color: var(--pa-muted); font-size: 13px; line-height: 1.5; }
-.papers-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.papers-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .papers-toolbar :deep(.arco-input-wrapper) { max-width: 320px; }
 .papers-count { margin-left: auto; color: var(--pa-muted); font-size: 12px; }
-.paper-table-wrap { overflow-x: auto; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); }
-.paper-table { width: 100%; min-width: 760px; border-collapse: collapse; color: var(--pa-text); font-size: 13px; }
-.paper-table th { padding: 9px 12px; border-bottom: 1px solid var(--pa-border); background: var(--pa-surface-soft); color: var(--pa-muted); font-size: 11px; font-weight: 650; text-align: left; }
-.paper-table td { padding: 11px 12px; border-bottom: 1px solid var(--pa-border); vertical-align: middle; }
+.paper-table-wrap { overflow-x: auto; border: 1px solid var(--pa-border); border-radius: var(--pa-radius-md); background: var(--pa-surface); }
+.paper-table { width: 100%; min-width: 720px; border-collapse: collapse; color: var(--pa-text); font-size: 13px; }
+.paper-table th { padding: 10px 14px; border-bottom: 1px solid var(--pa-border); background: var(--pa-surface-soft); color: var(--pa-muted); font-size: 11px; font-weight: 650; text-align: left; }
+.paper-table td { padding: 12px 14px; border-bottom: 1px solid var(--pa-border); vertical-align: middle; }
 .paper-table tbody tr:last-child td { border-bottom: 0; }
-.paper-table tbody tr:hover { background: oklch(0.985 0.008 55); }
-.paper-title { min-width: 280px; }
-.paper-title strong { display: block; color: var(--pa-ink); font-size: 14px; line-height: 1.4; }
-.paper-title span { display: block; margin-top: 4px; color: var(--pa-muted); font-size: 12px; }
-.reading-status { display: inline-flex; min-width: 54px; justify-content: center; padding: 4px 8px; border-radius: 999px; font-size: 11px; }
+.paper-table tbody tr:hover { background: var(--pa-surface-soft); }
+.paper-table th:nth-child(2), .paper-table td:nth-child(2) { width: 88px; }
+.paper-table th:nth-child(3), .paper-table td:nth-child(3) { width: 100px; }
+.paper-table th:nth-child(4), .paper-table td:nth-child(4) { width: 112px; }
+.paper-title { min-width: 420px; }
+.paper-title strong { display: block; overflow: hidden; color: var(--pa-ink); font-size: 14px; font-weight: 650; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.paper-title span { display: block; margin-top: 4px; overflow: hidden; color: var(--pa-muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.paper-title .paper-authors { margin-top: 3px; }
+.reading-status { display: inline-flex; min-width: 64px; justify-content: center; padding: 4px 8px; border-radius: 999px; font-size: 11px; }
 .status-pending { background: var(--pa-surface-soft); color: var(--pa-muted); }
 .status-reading { background: var(--pa-primary-soft); color: var(--pa-primary-hover); }
-.status-completed { background: oklch(0.95 0.035 145); color: var(--pa-success); }
-.status-skipped, .status-failed { background: oklch(0.96 0.025 28); color: var(--pa-danger); }
+.status-completed { background: var(--pa-success-soft); color: var(--pa-success); }
+.status-skipped, .status-failed { background: var(--pa-danger-soft); color: var(--pa-danger); }
 .paper-action { white-space: nowrap; text-align: right; }
-.papers-empty { padding: 72px 24px; border: 1px dashed var(--pa-border); border-radius: 10px; background: var(--pa-surface); text-align: center; }
-.papers-empty h2 { margin: 0; font-size: 20px; }
+.papers-empty { padding: 72px 24px; border: 1px dashed var(--pa-border); border-radius: var(--pa-radius-lg); background: var(--pa-surface); text-align: center; }
+.papers-empty h2 { margin: 0; font-size: 18px; font-weight: 650; }
 .papers-empty p { margin: 10px 0 22px; color: var(--pa-muted); font-size: 14px; }
 .project-loading, .project-error { padding: 100px 32px; color: var(--pa-muted); text-align: center; }
-@media (max-width: 680px) { .project-page { padding: 18px 14px 36px; } .page-heading { align-items: flex-start; flex-direction: column; } .page-heading :deep(.arco-btn) { width: 100%; } .papers-toolbar { align-items: stretch; flex-wrap: wrap; } .papers-toolbar :deep(.arco-input-wrapper) { max-width: none; flex: 1 1 100%; } .papers-count { margin-left: 0; } }
+@media (max-width: 680px) { .project-page { padding: 24px 16px 40px; } .page-heading { align-items: flex-start; flex-direction: column; } .page-heading :deep(.arco-btn) { width: 100%; } .papers-toolbar { align-items: stretch; flex-wrap: wrap; } .papers-toolbar :deep(.arco-input-wrapper) { max-width: none; flex: 1 1 100%; } .papers-count { margin-left: 0; } }
 </style>

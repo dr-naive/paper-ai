@@ -39,8 +39,15 @@ def test_each_migrated_skill_has_at_least_five_eval_cases():
     root = Path(__file__).resolve().parents[1] / "app" / "harness" / "skills"
     tool_specs = build_standard_tool_runtime().specs()
     runtime = SkillRuntime(root, tool_specs)
-    for skill_id in ("paper_internal", "external_literature", "literature_research"):
-        runtime.load(skill_id)
+    for skill_id in ("paper_internal", "external_literature", "literature_research", "writing_evidence_generation"):
+        definition = runtime.load(skill_id)
         payload = yaml.safe_load((root / skill_id / "evals" / "cases.yaml").read_text(encoding="utf-8"))
         assert len(payload["cases"]) >= 5
         assert len({case["id"] for case in payload["cases"]}) == len(payload["cases"])
+        if skill_id == "writing_evidence_generation":
+            for case in payload["cases"]:
+                criterion_results = dict(zip(definition.completion.criteria, case["criteria"], strict=True))
+                report = runtime.evaluate_completion(
+                    skill_id, metadata=case["metadata"], criterion_results=criterion_results,
+                )
+                assert report.passed is case["expected_pass"], case["id"]

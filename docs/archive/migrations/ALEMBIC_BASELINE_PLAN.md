@@ -1,4 +1,4 @@
-# Alembic Baseline Plan
+# Archived Alembic Baseline Plan
 
 > Status: IMPLEMENTED / HISTORICAL IMPLEMENTATION RECORD
 >

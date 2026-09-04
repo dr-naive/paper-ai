@@ -16,6 +16,9 @@ from app.application.writing_service import (
     RewriteGenerator,
     WritingConflictError,
     WritingGenerateRequest,
+    WritingReviewDecision,
+    WritingReviewError,
+    WritingReviewer,
     WritingRewriteRequest,
     WritingService,
     build_edit_prompt,
@@ -185,6 +188,7 @@ async def test_citation_aware_rewrite_preserves_mapping_and_reverifies_claim():
         db,
         llm_client=llm,
         citation_service=verifier,
+        reviewer=SimpleNamespace(review=AsyncMock(return_value=WritingReviewDecision(verdict="pass"))),
     ).rewrite_selection(project_id="project-1", user_id="user-1", request=request)
 
     assert proposal.status == "ready"
@@ -363,6 +367,10 @@ async def test_generate_paragraph_uses_context_persists_evidence_and_returns_ver
         )
     )
     db, _document = _service_db()
+    progress_events = []
+
+    async def capture_progress(stage, data):
+        progress_events.append((stage, data))
 
     proposal = await WritingService(
         db,
@@ -370,10 +378,12 @@ async def test_generate_paragraph_uses_context_persists_evidence_and_returns_ver
         context_manager=context_manager,
         evidence_service=evidence_service,
         citation_service=verifier,
+        reviewer=SimpleNamespace(review=AsyncMock(return_value=WritingReviewDecision(verdict="pass"))),
     ).generate_paragraph(
         project_id="project-1",
         user_id="user-1",
         request=_generate_request(),
+        on_progress=capture_progress,
     )
 
     assert proposal.kind == "generate" and proposal.status == "ready"
@@ -390,6 +400,105 @@ async def test_generate_paragraph_uses_context_persists_evidence_and_returns_ver
     assert verify_call["citations"][0].paper_id == "paper-a"
     assert verify_call["citations"][0].evidence_id == "evidence-a"
     assert verify_call["allow_claim_adjustment"] is False
+    assert [stage for stage, _ in progress_events] == [
+        "context_started",
+        "context_ready",
+        "generation_started",
+        "proposal_generated",
+        "review_started",
+        "review_passed",
+        "evidence_persisted",
+        "verification_started",
+        "citation_verified",
+    ]
+    assert progress_events[-1][1]["verified_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_writing_reviewer_requests_exactly_one_repair_before_evidence_persistence():
+    placeholder = citation_placeholder("cite-1")
+    llm = SequencedLLM(
+        json.dumps({
+            "content": f"AI support always guarantees autonomy {placeholder}.",
+            "citations": [{"citation_key": "cite-1", "evidence_key": "E1", "claim_text": "AI support always guarantees autonomy."}],
+            "warnings": [],
+        }),
+        json.dumps({
+            "content": f"AI support is associated with learner autonomy {placeholder}.",
+            "citations": [{"citation_key": "cite-1", "evidence_key": "E1", "claim_text": "AI support is associated with learner autonomy."}],
+            "warnings": [],
+        }),
+    )
+    review = WritingReviewDecision(
+        verdict="repair", issue_codes=["unsupported_claim"],
+        repair_instruction="Replace the universal causal claim with the supported association.",
+    )
+    verification = CitationVerificationResult(
+        citation_key="cite-1", paper_id="paper-a", evidence_id="evidence-a",
+        status="verified", code="semantic_verified", reason="Supported",
+        claim_text="AI support is associated with learner autonomy.",
+        original_claim="AI support is associated with learner autonomy.",
+    )
+    evidence_service = SimpleNamespace(persist_used=AsyncMock(return_value=SimpleNamespace(id="evidence-a")))
+    progress_events = []
+
+    async def capture(stage, data):
+        progress_events.append((stage, data))
+
+    db, _document = _service_db()
+    proposal = await WritingService(
+        db,
+        llm_client=llm,
+        context_manager=SimpleNamespace(build_writing_context=AsyncMock(return_value=_writing_context())),
+        evidence_service=evidence_service,
+        citation_service=SimpleNamespace(verify_citations=AsyncMock(return_value=SimpleNamespace(results=[verification]))),
+        reviewer=SimpleNamespace(review=AsyncMock(return_value=review)),
+    ).generate_paragraph(
+        project_id="project-1", user_id="user-1", request=_generate_request(), on_progress=capture,
+    )
+
+    assert len(llm.calls) == 2
+    assert proposal.review is not None
+    assert proposal.review.status == "repaired" and proposal.review.repair_count == 1
+    assert "always guarantees" not in proposal.content
+    assert evidence_service.persist_used.await_args.kwargs["normalized_claim"].startswith("AI support is associated")
+    assert [stage for stage, _ in progress_events].count("review_repair_required") == 1
+    assert [stage for stage, _ in progress_events].count("review_repair_completed") == 1
+
+
+@pytest.mark.asyncio
+async def test_reviewer_repair_failure_stops_after_one_attempt():
+    placeholder = citation_placeholder("cite-1")
+    draft = ParagraphModelOutput.model_validate({
+        "content": f"AI support always guarantees autonomy {placeholder}.",
+        "citations": [{"citation_key": "cite-1", "evidence_key": "E1", "claim_text": "AI support always guarantees autonomy."}],
+        "warnings": [],
+    })
+    llm = SequencedLLM("not-json")
+    decision = WritingReviewDecision(
+        verdict="repair", issue_codes=["unsupported_claim"], repair_instruction="Use a supported association.",
+    )
+
+    with pytest.raises(WritingReviewError):
+        await ParagraphGenerator(llm).repair(_generate_request(), _writing_context(), draft, decision)
+
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_writing_reviewer_returns_typed_public_safe_decision():
+    llm = SequencedLLM(json.dumps({"verdict": "pass", "issue_codes": [], "repair_instruction": None}))
+    placeholder = citation_placeholder("cite-1")
+    draft = ParagraphModelOutput.model_validate({
+        "content": f"AI support is associated with autonomy {placeholder}.",
+        "citations": [{"citation_key": "cite-1", "evidence_key": "E1", "claim_text": "AI support is associated with autonomy."}],
+        "warnings": [],
+    })
+
+    decision = await WritingReviewer(llm).review(_generate_request(), _writing_context(), draft)
+
+    assert decision == WritingReviewDecision(verdict="pass")
+    assert "chain-of-thought" not in decision.model_dump_json()
 
 
 @pytest.mark.asyncio
@@ -496,6 +605,7 @@ async def test_unsupported_generated_citation_is_never_marked_verified():
         citation_service=SimpleNamespace(
             verify_citations=AsyncMock(return_value=SimpleNamespace(results=[result]))
         ),
+        reviewer=SimpleNamespace(review=AsyncMock(return_value=WritingReviewDecision(verdict="pass"))),
     )
 
     proposal = await service.generate_paragraph(

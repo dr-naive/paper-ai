@@ -155,15 +155,15 @@ onMounted(loadProject)
 </script>
 
 <style scoped>
-.project-page { max-width: 1320px; margin: 0 auto; padding: 24px 24px 48px; }
-.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.page-heading h1 { margin: 0; color: var(--pa-ink); font-size: 24px; letter-spacing: -0.02em; line-height: 1.25; text-wrap: balance; }
+.project-page { max-width: var(--pa-content-max); margin: 0 auto; padding: 28px 28px 56px; }
+.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.page-heading h1 { margin: 0; color: var(--pa-ink); font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; text-wrap: balance; }
 .page-heading p { margin: 5px 0 0; color: var(--pa-muted); font-size: 13px; line-height: 1.5; }
 .text-link { color: var(--pa-primary-hover); font-size: 13px; font-weight: 650; text-decoration: none; }
 .text-link:hover { text-decoration: underline; }
-.discover-layout { display: grid; gap: 12px; }
-.search-form-stack { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 12px; align-items: start; }
+.discover-layout { display: grid; gap: 16px; }
+.search-form-stack { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); gap: 16px; align-items: start; }
 .project-loading, .project-error { padding: 100px 32px; color: var(--pa-muted); text-align: center; }
 @media (max-width: 900px) { .search-form-stack { grid-template-columns: 1fr; } }
-@media (max-width: 680px) { .project-page { padding: 18px 14px 36px; } .page-heading { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 680px) { .project-page { padding: 24px 16px 40px; } .page-heading { align-items: flex-start; flex-direction: column; } }
 </style>

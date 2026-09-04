@@ -5,7 +5,8 @@
 > 本文档只记录当前代码中已经存在并完成验证的 API。
 > `docs/spec-v2/` 中出现的未来 endpoint、DTO 或 route 只是施工目标，在对应实现与测试完成前不得提前写入本文。
 >
-> 每个实施 Phase 如果新增、删除或修改真实 API，必须在同一 Phase 更新本文和 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`。
+> 每个实施 Phase 如果新增、删除或修改真实 API，必须在同一 Phase 更新本文和
+> `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`。
 
 本文档记录当前后端主要 API 路径，以及前端 API 客户端的调用关系。以后修改接口时，先同步这里，避免前后端路径漂移。
 
@@ -151,11 +152,17 @@ Evidence 创建仍复用既有 `EvidenceItem`。`POST /evidence` 现在要求 se
 
 `POST /api/v1/projects/{project_id}/writing/agent/rewrite` 提供 V1 selection rewrite proposal。请求包含 `document_id`、自由 `instruction`、带结构化 citation placeholder 的 `selected_text`、selection range、`section_path`、可选 `nearby_text/base_revision_id/citations`。服务端重新校验 Project/Document ownership；若 base revision 已变化则返回 `409 WRITING_DOCUMENT_CONFLICT`。响应只返回 `ready / partially_verified / verification_failed` proposal，不修改正文或创建 revision；用户显式接受后仍通过现有 editor transaction 与 revision endpoint 保存。
 
-Citation-aware rewrite 使用 `[[CITATION:<citation_key>]]` 作为内部不可变 placeholder，并要求 `citation_keys` 与输入 mapping 数量、顺序完全一致。返回内容保留原 `paper_id/evidence_id`，随后调用既有 `CitationVerificationService`；模型结构无效时只进行一次 repair，仍失败返回 `503 WRITING_REWRITE_ERROR`。Block 6A 不包含自动生成段落或新 Evidence 检索。
+Citation-aware rewrite 使用 `[[CITATION:<citation_key>]]` 作为内部不可变 placeholder，并要求 `citation_keys` 与输入 mapping 数量、顺序完全一致。返回内容保留原 `paper_id/evidence_id`，随后调用既有 `CitationVerificationService`；模型结构无效时只进行一次 repair，仍失败返回 `503 WRITING_REWRITE_ERROR`。Rewrite 不自动生成新 Evidence。
 
 `POST /api/v1/projects/{project_id}/writing/agent/generate` 提供 V1 单段 Evidence-backed generation。请求包含 `document_id`、自由 `instruction`、`section_path`、可选 `nearby_text/base_revision_id` 和 `citation_style`（`gbt7714 / apa / ieee`）。服务端固定执行现有 `ProjectContextManager → CandidatePaperSelector → ProjectEvidenceRetrievalService → EvidenceService → CitationVerificationService` 路径，只允许当前 Project 中已导入、已有可用 Paper Profile 且能通过既有 Hybrid Retrieval 取得来源定位的论文。
 
 模型只能从服务端提供的临时 `E1…En` Evidence 键中选择，并返回一个段落、结构化 `citation_key/evidence_key/claim_text` 以及正文 placeholder；服务端验证 claim 确实来自正文后，重新校验 Evidence 来源、持久化实际使用的 Evidence，再解析为真实 `paper_id/evidence_id` 并强制验证。响应是 `ready / partially_verified / verification_failed` proposal，不修改正文。`unsupported` citation 保持显式 warning，绝不标记为 verified。失败码包括 `NO_IMPORTED_PAPERS`、`NO_RELEVANT_PAPERS`、`NO_SUPPORTING_EVIDENCE`、`GENERATION_ERROR`、`VERIFICATION_ERROR` 和既有 `WRITING_DOCUMENT_CONFLICT`；模型结构失败只 repair 一次。
+
+段落草案在 Evidence 持久化前经过 bounded Writing Reviewer。Reviewer 只返回
+`pass / repair`、受限 issue codes 和修复指令，不返回推理过程；`repair` 最多触发一次额外
+生成，修复结果必须重新满足单段、Evidence key、claim 和 citation placeholder Schema，失败
+即返回 `503 WRITING_REVIEW_ERROR`。proposal 的 `review` 字段记录 `passed / repaired`、
+issue codes 和 `repair_count: 0 | 1`。
 
 前端调用文件：`frontend/src/api/projects.ts`。Project 页面 canonical routes 为：
 
@@ -214,6 +221,18 @@ revision。`verified`、`weak`、`unsupported` 等 Citation 状态保持结构�
 Router：`backend/app/api/executions.py`。接口受 `ENABLE_AGENT_RUNTIME_V2` 保护，所有执行按用户
 和 Project 所有权校验；事件可通过分页接口重放，也可通过 SSE 持续读取。
 
+V1 创建契约只接受 `agent_type: "writing_generate"`。请求同时包含用户可读的 `goal` 与类型化
+`input`（字段与 `WritingGenerateRequest` 一致）。服务端持久化输入、真实 Writing proposal、
+Citation Verification 结果和 Completion Gate 摘要；只有单段输出、结构化引用映射及无
+`unsupported` 引用同时成立时，执行才会进入 `completed`。公开事件仅包含阶段、计数和状态，
+不包含 prompt、模型原始响应或推理过程。
+
+`writing_generate` durable execution 会激活版本化
+`writing_evidence_generation` Skill，并持久化 `skill_activated`、Reviewer、一次有限修复和
+`skill_completion_evaluated` 事件。最终 `result_payload` 同时包含 `proposal`、
+`skill_completion` 与 `completion`；Skill completion 未通过时 Completion Gate 必须失败，执行
+不能进入 `completed`。
+
 | Method | Path | 用途 |
 | --- | --- | --- |
 | POST | `/api/v1/projects/{project_id}/executions` | 创建执行并排队（202） |
@@ -221,11 +240,23 @@ Router：`backend/app/api/executions.py`。接口受 `ENABLE_AGENT_RUNTIME_V2` �
 | GET | `/api/v1/executions` | 列出当前用户执行 |
 | GET | `/api/v1/executions/{execution_id}` | 获取执行状态 |
 | GET | `/api/v1/executions/{execution_id}/events` | 分页读取事件 |
+| GET | `/api/v1/executions/{execution_id}/trace` | 返回隐私安全的结构化执行链路报告 |
+| GET | `/api/v1/executions/{execution_id}/evaluation` | 返回确定性的执行质量评分与命名检查 |
 | GET | `/api/v1/executions/{execution_id}/stream` | SSE 读取事件并支持断点 `after` |
 | POST | `/api/v1/executions/{execution_id}/cancel` | 取消执行 |
 | POST | `/api/v1/executions/{execution_id}/pause` | 暂停执行 |
 | POST | `/api/v1/executions/{execution_id}/resume` | 恢复执行 |
 | POST | `/api/v1/executions/{execution_id}/approve` | 通过等待用户审批的执行 |
+
+Trace 报告由 PostgreSQL 中的 `AgentExecution + AgentEvent` 确定性投影，包含有序 stage
+span、耗时、暂停/恢复/取消转换、预算使用和 Completion Gate 质量摘要。报告只保留文档 ID、
+章节深度、是否存在邻近上下文等输入元数据，不返回 instruction、nearby text、prompt、模型
+原始输出、provider payload 或 chain-of-thought。
+
+Evaluation 使用版本化的确定性 rubric，检查终态、Completion Gate、Citation 支持、trace
+完整性、预算与耗时完整性。它不调用 LLM：完整 verified 结果可通过；weak 结果扣分但仍可通过；
+unsupported、Completion Gate 失败或结构异常不能通过；暂停、取消和未结束执行标记为
+`incomplete`。响应包含总分以及每项检查的 `earned/maximum/detail`，便于测试和面试演示。
 
 ## 路由兼容与未挂载接口
 
@@ -252,9 +283,9 @@ Papers、Writing。
 
 POST 请求体为 `{intent, filters?, max_results?}`：`intent.topic` 必填，`filters` 支持年份、语言、领域和出版物类型，`max_results` 为 1–10。响应包含 `execution_id`、结构化 `papers`、`result_count`、`search_rounds`、`provider` 和 `warnings`；摘要保留 Provider 返回的完整内容，不以文本解析替代结构化结果。
 
-检索使用 Semantic Scholar 的未认证公开路径作为主 Provider，Crossref 作为 metadata 补充/回退；Semantic Scholar API Key 是可选增强，不是 V1 启动条件。真实 Provider 的 401/403/429/超时会映射为有界错误或回退，不伪造论文。当前 Block 的测试：`backend/tests/test_discovery_workflow.py`、`backend/tests/test_discovery_router_structure.py`。
+检索使用 Semantic Scholar 的未认证公开路径作为主 Provider，Crossref 作为 metadata 补充/回退；Semantic Scholar API Key 是可选增强，不是 V1 启动条件。真实 Provider 的 401/403/429/超时会映射为有界错误或回退，不伪造论文。
 
-收藏请求必须提交经过校验的结构化论文 metadata；服务端按 `source + source_paper_id` 幂等保存到项目偏好 JSON，不创建 `ProjectPaper`。导入请求只接受 `source=arxiv`、合法 arXiv 标识及匹配的 approved locator / result id，不接受任意下载 URL；实际下载、解析、索引和 ProjectPaper 关联继续复用现有 `remote_paper_import` 与 Worker pipeline。Block 2C 测试：`backend/tests/test_discovery_favorites_import.py`、`backend/tests/test_remote_paper_import.py`。
+收藏请求必须提交经过校验的结构化论文 metadata；服务端按 `source + source_paper_id` 幂等保存到项目偏好 JSON，不创建 `ProjectPaper`。导入请求只接受 `source=arxiv`、合法 arXiv 标识及匹配的 approved locator / result id，不接受任意下载 URL；实际下载、解析、索引和 ProjectPaper 关联继续复用现有 `remote_paper_import` 与 Worker pipeline。
 
 ## 前端 Axios 约定
 
@@ -297,4 +328,5 @@ POST 请求体为 `{intent, filters?, max_results?}`：`intent.topic` 必填，`
 7. Backward compatibility
 8. 对应测试
 
-未来施工目标请查看 `docs/spec-v2/`，实施状态查看 `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md`。
+未来施工目标请查看 `docs/spec-v2/`，实施状态查看
+`docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`。

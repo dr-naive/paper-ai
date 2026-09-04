@@ -1,17 +1,18 @@
-# Architecture
+# PaperAI System Architecture
 
 > STATUS: CURRENT IMPLEMENTATION
-> 本文档描述 `agent-rearchitecture-v1` 分支当前已经落地并通过回归验证的主要架构事实。
-> `docs/spec-v2/` 仍是 V1 的产品/施工合同；实施状态以
-> `docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md` 为准。
+> 本文描述当前分支已经落地并通过回归验证的主要架构事实与长期边界。
+> 产品与功能合同位于 `docs/spec-v2/`；实施状态以
+> `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md` 为准。
 >
 > 本文不把未实现的未来 endpoint、UI 或 Agent 能力写成当前事实。
 > 历史方案和已移除的原型只在 `docs/archive/` 中保留。
 >
-> - `docs/spec-v2/02_TARGET_ARCHITECTURE.md`
-> - `docs/spec-v2/07_CODEX_IMPLEMENTATION_PLAN.md`
+> - `docs/spec-v2/product/PRODUCT_SCOPE.md`
+> - `docs/spec-v2/features/`
+> - `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
 >
-> 用于解释设计边界与施工顺序，不替代本文件对当前代码的描述。
+> 用于解释产品行为与施工顺序，不替代本文件对当前代码的描述。
 
 ---
 
@@ -271,7 +272,7 @@ backend/app/agent/
 
 这部分不等同于新的 Project Agent Runtime。
 
-V1 不因 Project 重构而重写成熟 PDF parse / Reader QA 基础。
+Project 功能不重写成熟的 PDF parse / Reader QA 基础。
 
 ---
 
@@ -440,7 +441,7 @@ ProjectPaper.analysis_card
 
 详细规则：
 
-`docs/spec-v2/03_PROJECT_CONTEXT_AND_EVIDENCE.md`
+`docs/spec-v2/features/PROJECT_CONTEXT_AND_EVIDENCE.md`
 
 ---
 
@@ -713,7 +714,7 @@ Schema 修改必须走 Alembic。
 
 ```text
 docs/spec-v2/
-= 当前 V1 施工合同
+= 当前产品、系统与功能合同
 
 docs/*.md
 = 长期维护 / 当前系统文档
@@ -727,7 +728,7 @@ docs/archive/
 实施状态只由：
 
 ```text
-docs/spec-v2/08_IMPLEMENTATION_PROGRESS.md
+docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md
 ```
 
 持续维护。

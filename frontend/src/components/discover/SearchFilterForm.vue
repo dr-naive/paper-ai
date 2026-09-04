@@ -5,7 +5,7 @@
         <p class="section-label">Structured filters</p>
         <h2 id="filter-title">筛选条件</h2>
       </div>
-      <span class="filter-note">强约束会原样传给支持它们的 Provider</span>
+      <span class="filter-note">支持这些条件的检索服务会按所选条件筛选</span>
     </div>
 
     <div class="filter-grid">
@@ -98,18 +98,18 @@ const submit = () => {
 </script>
 
 <style scoped>
-.filter-card { padding: 24px 26px 26px; border: 1px solid var(--pa-border); border-radius: 12px; background: var(--pa-surface); }
+.filter-card { padding: 20px; border: 1px solid var(--pa-border); border-radius: 10px; background: var(--pa-surface); }
 .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .section-label { margin: 0 0 6px; color: var(--pa-primary-hover); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.card-heading h2 { margin: 0; color: var(--pa-ink); font-size: 19px; line-height: 1.3; }
+.card-heading h2 { margin: 0; color: var(--pa-ink); font-size: 18px; font-weight: 650; line-height: 1.3; }
 .filter-note, .filter-footer span { color: var(--pa-muted); font-size: 12px; line-height: 1.5; }
 .filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .field-block--wide { grid-column: 1 / -1; }
-label { display: block; margin-bottom: 7px; color: var(--pa-text); font-size: 12px; font-weight: 650; }
-.native-field { box-sizing: border-box; width: 100%; min-height: 32px; padding: 5px 11px; border: 1px solid var(--pa-border); border-radius: 4px; background: var(--pa-surface); color: var(--pa-text); font: inherit; font-size: 13px; }
+label { display: block; margin-bottom: 7px; color: var(--pa-text); font-size: 12px; font-weight: 600; }
+.native-field { box-sizing: border-box; width: 100%; min-height: 36px; padding: 7px 11px; border: 1px solid var(--pa-border); border-radius: var(--pa-radius-sm); background: var(--pa-surface); color: var(--pa-text); font: inherit; font-size: 13px; }
 .native-field:focus { border-color: var(--pa-primary); outline: 2px solid color-mix(in srgb, var(--pa-primary) 22%, transparent); outline-offset: 1px; }
 .native-field:disabled { background: var(--pa-surface-soft); color: var(--pa-muted); cursor: not-allowed; }
 .filter-error { margin: 14px 0 0; color: var(--pa-danger); font-size: 12px; }
-.filter-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; }
-@media (max-width: 680px) { .filter-card { padding: 20px 18px; } .card-heading, .filter-footer { align-items: stretch; flex-direction: column; } .filter-grid { grid-template-columns: 1fr; gap: 14px; } .field-block--wide { grid-column: auto; } .filter-footer .arco-btn { width: 100%; } }
+.filter-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 20px; }
+@media (max-width: 680px) { .filter-card { padding: 18px; } .card-heading, .filter-footer { align-items: stretch; flex-direction: column; } .filter-grid { grid-template-columns: 1fr; gap: 14px; } .field-block--wide { grid-column: auto; } .filter-footer .arco-btn { width: 100%; } }
 </style>

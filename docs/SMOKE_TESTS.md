@@ -140,7 +140,7 @@ docker compose logs --tail 200 backend
 
 ## V1 Project 主链
 
-这是 Phase 9 之后仍应保持稳定的产品级 smoke；它不把旧 Research Map、Reading Plan、Evidence
+这是当前 V1 应持续保持稳定的产品级 smoke；它不把旧 Research Map、Reading Plan、Evidence
 Matrix、Experiment Design、Activity 或 Universal Project Chat 当作验收步骤。
 
 ### 1. Discover → Papers
@@ -192,7 +192,7 @@ docker compose run --rm --no-deps backend \
 如需检查旧 artifact 导出或 Agent tool trace，可单独运行上述脚本；失败时应先判断是否为兼容
 代码问题，不得把 Research Map 等非 V1 能力重新接回 canonical route。
 
-### 5. Block 9C optional proxy acceptance
+### 5. Optional proxy acceptance
 
 代理是可选增强，不是 V1 启动条件。默认直连即可完成 V1；只有在用户主动配置并希望验证宿主机代理时才执行以下检查：
 

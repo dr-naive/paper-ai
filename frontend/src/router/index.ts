@@ -63,7 +63,11 @@ const router = createRouter({
   history: createWebHistory(),
   routes,
   scrollBehavior(to) {
-    if (to.hash) return { el: to.hash, top: 20, behavior: 'smooth' }
+    if (to.hash) {
+      const reduceMotion = typeof window !== 'undefined'
+        && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      return { el: to.hash, top: 20, behavior: reduceMotion ? 'auto' : 'smooth' }
+    }
     return { top: 0 }
   },
 })

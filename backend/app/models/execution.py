@@ -28,6 +28,8 @@ class AgentExecution(Base):
     conversation_id = Column(String(36), nullable=True)
     agent_type = Column(String(80), nullable=False)
     goal = Column(Text, nullable=False)
+    input_payload = Column(JSON, nullable=False, default=dict)
+    result_payload = Column(JSON, nullable=True)
     status = Column(String(30), nullable=False, default="queued")
     current_stage = Column(String(100), nullable=True)
     active_skill = Column(String(120), nullable=True)
