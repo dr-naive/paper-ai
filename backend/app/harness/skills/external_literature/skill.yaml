@@ -1,0 +1,26 @@
+id: external_literature
+version: 1.0.0
+title: External Literature Search
+description: 使用受限网络检索发现外部候选论文，并把摘要信息视为待验证内容。
+allowed_tools:
+  - literature.search_external
+  - paper.get_metadata
+permissions:
+  network: true
+  write_project: false
+  write_memory: false
+  destructive: false
+budget:
+  max_tool_calls: 12
+  max_external_searches: 6
+  max_papers_to_read: 0
+  max_seconds: 600
+completion:
+  criteria:
+    - 返回候选论文及相关性依据
+    - 区分摘要初筛和全文证据
+    - 外部服务失败时提供可行动的降级说明
+  required_metadata:
+    - query
+    - candidate_count
+    - stopping_reason

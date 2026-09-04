@@ -44,14 +44,15 @@ PaperAI 是一个面向学术论文阅读的 AI 辅助系统。用户上传 PDF 
 .
 ├── backend/
 │   ├── app/
-│   │   ├── agent/      # 论文解析、摘要和问答 Agent
+│   │   ├── agent/      # 离线 pipeline（论文解析、摘要）+ 旧 QA fallback
 │   │   ├── api/        # 认证、论文、会话和分析接口
+│   │   ├── harness/    # Agent 运行时层（lead_agent、tools、skills）
 │   │   ├── llm/        # 大模型客户端
 │   │   ├── models/     # 数据模型
 │   │   ├── parsers/    # PDF、表格和图片解析
 │   │   ├── rag/        # 分块、向量库和检索
 │   │   ├── services/   # 文件与索引服务
-│   │   └── utils/      # 后台任务与状态管理
+│   │   └── utils/      # QA 工具函数、后台任务管理
 │   └── tests/          # 后端测试
 ├── frontend/
 │   ├── src/components/

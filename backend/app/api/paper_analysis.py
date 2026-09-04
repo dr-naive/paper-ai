@@ -7,10 +7,17 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.utils.qa_helpers import (
+    build_deterministic_citations,
+    calculate_evidence_confidence,
+    detect_metadata_intent,
+)
 from app.agent.qa_agent.enhanced_graph import run_enhanced_qa_agent
 from app.agent.summarizer.graph import run_summarizer_agent
 from app.api.dependencies import get_current_user_id
 from app.database import get_db
+from app.harness.agents.lead_agent import run_lead_agent
+from app.harness.tools.paper_internal import _get_paper_metadata_impl
 from app.llm.client import get_llm_client
 from app.models.paper import Paper, QAPair, Section
 from app.rag.knowledge_base import get_knowledge_base
@@ -37,18 +44,76 @@ async def ask_question(
     if not paper:
         raise HTTPException(status_code=404, detail="论文不存在")
 
+    # mode 默认 agent:走 lead_agent(自主选 tool + 全部 skill + critique 委派)
+    # mode=workflow: 退回原确定性 workflow(保留作为 fallback)
+    mode = data.get("mode", "agent")
+    if mode == "agent":
+        # request_id:客户端可传(用于断点续连重试),不传则生成新的
+        import uuid as _uuid
+        request_id = data.get("request_id") or _uuid.uuid4().hex
+        agent_result = await run_lead_agent(
+            db=db,
+            paper_id=paper_id,
+            question=question,
+            skill_names=None,  # None=全部已注册 skill(paper_internal/external/reading)
+            enable_critique=True,
+            user_id=user_id,
+            request_id=request_id,
+        )
+        # 用 enhanced_graph 的函数补齐 citations / confidence / intent,与原 workflow 对齐
+        chunks = agent_result.chunks
+        citations = build_deterministic_citations(agent_result.answer, chunks)
+        detected_intent = detect_metadata_intent(question)
+        # intent 分类:元数据问题标具体类型(authors/title/...),否则标 "general"
+        intent_label = detected_intent or "general"
+        evidence_confidence = calculate_evidence_confidence(
+            agent_result.answer, citations, chunks, intent=detected_intent
+        )
+        # 元数据类问题 intent_confidence=1.0(检测到具体类型),其他 0.8
+        intent_confidence = 1.0 if detected_intent else 0.8
+        count_result = await db.execute(
+            select(func.count()).select_from(QAPair).where(QAPair.paper_id == paper_id)
+        )
+        qa_pair = QAPair(
+            paper_id=paper_id,
+            order_index=(count_result.scalar() or 0) + 1,
+            question=question,
+            answer=agent_result.answer,
+            chunk_context="\n\n".join(chunk.get("content", "") for chunk in chunks[:3]),
+            relevance_score=evidence_confidence,
+        )
+        db.add(qa_pair)
+        await db.commit()
+        return {
+            "answer": agent_result.answer,
+            "intent": intent_label,
+            "sources": [c.get("section", "") for c in citations],
+            "citations": citations,
+            "follow_up_questions": [],
+            "intent_confidence": intent_confidence,
+            "evidence_confidence": evidence_confidence,
+            "confidence": evidence_confidence,
+            "confidence_type": "agent_evidence",
+            "qa_id": str(qa_pair.id),
+            "agent_trace": {
+                "iterations": agent_result.trace.iterations,
+                "tool_calls": agent_result.trace.tool_calls,
+                "total_ms": agent_result.trace.total_ms,
+                "success": agent_result.success,
+                # 应用内 tracing:LLM token 用量累计
+                "llm_calls": agent_result.trace.llm_calls,
+                "input_tokens": agent_result.trace.input_tokens,
+                "output_tokens": agent_result.trace.output_tokens,
+                "total_tokens": agent_result.trace.total_tokens,
+            },
+        }
+
+    # 默认路径:原确定性 workflow(行为不变)
     exact_chunks = await get_exact_table_chunks(db, paper_id, question)
     semantic_chunks = await get_knowledge_base().query(paper_id, question, top_k=5)
     chunks = merge_retrieval_chunks(exact_chunks, semantic_chunks, top_k=5)
-    metadata = {
-        "title": paper.title,
-        "authors": paper.authors,
-        "abstract": paper.abstract,
-        "keywords": paper.keywords or [],
-        "venue": paper.venue,
-        "publication_year": paper.publication_year,
-        "doi": paper.doi,
-    }
+    # 元数据通过 harness tool 统一入口(行为等价于原手动拼 dict)
+    metadata = json.loads(await _get_paper_metadata_impl(db, paper_id))
     qa_result = await run_enhanced_qa_agent(paper_id, question, chunks, metadata)
     count_result = await db.execute(
         select(func.count()).select_from(QAPair).where(QAPair.paper_id == paper_id)

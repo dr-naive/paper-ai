@@ -35,9 +35,13 @@
               <span class="username">{{ currentUser?.username }}</span>
             </button>
             <template #content>
-              <a-doption @click="$router.push('/papers')">
+              <a-doption @click="$router.push('/library')">
                 <template #icon><icon-file /></template>
-                我的论文
+                本地论文库
+              </a-doption>
+              <a-doption @click="$router.push('/projects')">
+                <template #icon><icon-folder /></template>
+                研究项目
               </a-doption>
               <a-doption v-if="currentUser?.role === 'admin'" @click="$router.push('/admin')">
                 <template #icon><icon-dashboard /></template>
@@ -235,6 +239,7 @@ import {
   IconDashboard,
   IconExport,
   IconFile,
+  IconFolder,
   IconPlus,
   IconSwap,
 } from '@arco-design/web-vue/es/icon'

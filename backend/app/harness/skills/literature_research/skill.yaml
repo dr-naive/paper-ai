@@ -1,0 +1,33 @@
+id: literature_research
+version: 1.0.0
+title: Literature Research
+description: 围绕明确研究主题组合原子检索工具，形成跨论文、有来源且标明缺口的初步调研。
+allowed_tools:
+  - literature.search_external
+  - project.list_papers
+  - project.search_content
+  - paper.get_metadata
+  - paper.get_outline
+  - paper.search_content
+permissions:
+  network: true
+  write_project: false
+  write_memory: false
+  destructive: false
+budget:
+  max_tool_calls: 40
+  max_external_searches: 6
+  max_papers_to_read: 15
+  max_seconds: 1800
+completion:
+  criteria:
+    - 包含代表性论文
+    - 包含主题或方法聚类
+    - 关键结论具有证据
+    - 明确未解决问题和覆盖缺口
+  required_metadata:
+    - representative_paper_ids
+    - theme_clusters
+    - source_ids
+    - open_questions
+    - stopping_reason

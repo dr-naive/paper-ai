@@ -1,6 +1,20 @@
 name: paperai
 
 services:
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-paperai-local}@db:5432/paperai
+      - DEBUG=${DEBUG:-true}
+      - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?请在 .env 中设置 DEFAULT_ADMIN_PASSWORD}
+      - ENABLE_AGENT_RUNTIME_V2=${ENABLE_AGENT_RUNTIME_V2:-true}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   backend:
     build: ./backend
     container_name: paperai-backend
@@ -20,6 +34,7 @@ services:
       - DEBUG=${DEBUG:-true}
       - SECRET_KEY=${SECRET_KEY:-paperai-local-dev-secret-key-123456}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:?请在 .env 中设置 DEFAULT_ADMIN_PASSWORD}
+      - ENABLE_AGENT_RUNTIME_V2=${ENABLE_AGENT_RUNTIME_V2:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:5173", "http://127.0.0.1:5173"]}
       - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
@@ -36,9 +51,20 @@ services:
       - VECTOR_STORE_PATH=/app/data/vectorstore
       - FILE_STORAGE_PATH=/app/data/papers
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-52428800}
+      # ====== LLM Tracing(零侵入,未设置 key 时完全不生效) ======
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-PaperAI}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - LANGFUSE_PROJECT=${LANGFUSE_PROJECT:-PaperAI}
     volumes:
       - paperai_data:/app/data
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
@@ -78,9 +104,20 @@ services:
       - VECTOR_STORE_PATH=/app/data/vectorstore
       - FILE_STORAGE_PATH=/app/data/papers
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-52428800}
+      # ====== LLM Tracing(worker 同步启用) ======
+      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-false}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-PaperAI}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - LANGFUSE_PROJECT=${LANGFUSE_PROJECT:-PaperAI}
     volumes:
       - paperai_data:/app/data
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:

@@ -1,7 +1,7 @@
 <template>
   <div class="paper-reader">
     <!-- 顶部工具栏 -->
-    <ProductHeader edge back-to="/papers" back-label="我的论文">
+    <ProductHeader edge back-to="/library" back-label="我的论文">
       <div class="paper-title-bar">
         <h2 class="paper-title">{{ paper?.title || '加载中...' }}</h2>
         <span class="paper-authors">{{ paper?.authors }}</span>
@@ -240,11 +240,46 @@
                           重新生成
                         </button>
                       </div>
+                      <!-- Agent 过程 -->
+                      <div v-if="qa.agentTrace" class="qa-agent-trace">
+                        <button
+                          type="button"
+                          class="qa-agent-trace-header"
+                          :aria-expanded="qa.agentTraceExpanded"
+                          @click="qa.agentTraceExpanded = !qa.agentTraceExpanded"
+                        >
+                          <span class="qa-agent-trace-title">Agent 过程</span>
+                          <span class="qa-agent-trace-summary">
+                            {{ qa.agentTrace.iterations || 0 }} 轮 · {{ (qa.agentTrace.tool_calls || []).length }} 次工具调用 · {{ qa.agentTrace.total_tokens || 0 }} tokens
+                          </span>
+                          <span>{{ qa.agentTraceExpanded ? '收起' : '展开' }}</span>
+                        </button>
+                        <div v-show="qa.agentTraceExpanded" class="qa-agent-trace-content">
+                          <div class="qa-agent-trace-stats">
+                            <span>迭代: {{ qa.agentTrace.iterations || 0 }}</span>
+                            <span>LLM 调用: {{ qa.agentTrace.llm_calls || 0 }}</span>
+                            <span>耗时: {{ ((qa.agentTrace.total_ms || 0) / 1000).toFixed(1) }}s</span>
+                            <span>Tokens: {{ qa.agentTrace.total_tokens || 0 }}</span>
+                          </div>
+                          <div v-if="(qa.agentTrace.tool_calls || []).length" class="qa-agent-trace-tools">
+                            <div
+                              v-for="(tc, ti) in qa.agentTrace.tool_calls"
+                              :key="ti"
+                              class="qa-agent-trace-tool"
+                              :class="{ ok: tc.ok !== false, fail: tc.ok === false }"
+                            >
+                              <span class="qa-agent-trace-tool-name">{{ tc.name }}</span>
+                              <span class="qa-agent-trace-tool-args">{{ tc.args }}</span>
+                              <span v-if="tc.elapsed_ms" class="qa-agent-trace-tool-time">{{ (tc.elapsed_ms / 1000).toFixed(2) }}s</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                       <!-- 引用溯源 -->
                       <div v-if="qa.citations && qa.citations.length" class="qa-citations">
                         <div class="citation-title">
                           <span>引用溯源</span>
-                          <span class="citation-hint">点击引用可定位到原文</span>
+                          <span class="citation-hint">当前论文可直接定位，跨论文引用会打开来源论文</span>
                         </div>
                         <button
                           v-for="(cite, ci) in visibleCitations(qa)"
@@ -252,10 +287,11 @@
                           type="button"
                           class="citation-item"
                           :class="{ active: activeCitationKey === citationKey(qa.id, ci) }"
-                          :aria-label="`定位引用：${cite.section || '原文引用'}`"
-                          @click="locateInPdf(cite, citationKey(qa.id, ci))"
+                          :aria-label="`查看引用：${cite.paper_title || cite.section || '原文引用'}`"
+                          @click="handleCitationClick(cite, citationKey(qa.id, ci))"
                         >
                           <div class="citation-header">
+                            <span v-if="cite.paper_title" class="citation-paper">{{ cite.paper_title }}</span>
                             <a-tag size="small" color="arcoblue">{{ cite.section }}</a-tag>
                             <span v-if="cite.position" class="citation-position">{{ cite.position }}</span>
                             <span
@@ -618,7 +654,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconRefresh, IconDelete, IconEdit } from '@arco-design/web-vue/es/icon'
 import type PdfViewerComponent from '@/components/PdfViewer.vue'
@@ -637,6 +673,7 @@ import {
 import type { AskStreamHandlers } from '@/api/paper'
 
 const route = useRoute()
+const router = useRouter()
 const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
 const paperId = route.params.id as string
 const paper = ref<any>(null)
@@ -905,6 +942,13 @@ const switchSession = async (sessionId: string) => {
       })
     }
     await recoverActiveAnswer(sessionId)
+    const requestedPrompt = String(route.query.prompt || '')
+    if (requestedPrompt && !question.value) {
+      question.value = requestedPrompt
+      await router.replace({ query: { ...route.query, prompt: undefined } })
+      await nextTick()
+      questionInputRef.value?.focus?.()
+    }
   } catch (error) {
     Message.error('加载会话失败')
   }
@@ -1173,6 +1217,17 @@ const locateInPdf = async (cite: any, key: string) => {
   Message.warning('未在 PDF 中找到匹配的引用原文')
 }
 
+const handleCitationClick = async (cite: any, key: string) => {
+  const sourcePaperId = String(cite?.paper_id || '')
+  if (sourcePaperId && sourcePaperId !== paperId) {
+    const target = router.resolve({ name: 'PaperReader', params: { id: sourcePaperId } })
+    window.open(target.href, '_blank', 'noopener,noreferrer')
+    Message.info(`已打开来源论文：${cite.paper_title || sourcePaperId}`)
+    return
+  }
+  await locateInPdf(cite, key)
+}
+
 const loadSections = async () => {
   sectionsLoading.value = true
   try {
@@ -1234,9 +1289,48 @@ const answerStageLabel = (stage = '') => {
     organize_citations: '整理引用',
     persist_message: '保存回答',
     worker: '后台处理',
-    queue: '任务排队'
+    queue: '任务排队',
+    loading_context: '读取论文',
+    agent: 'Agent 分析',
+    agent_thinking: 'Agent 分析',
+    generating: '生成回答',
+    persisting: '保存回答'
   }
   return labels[stage] || ''
+}
+
+/** 把技术错误消息转译成用户可读的友好消息 */
+const friendlyErrorMessage = (error: any): string => {
+  if (error?.name === 'AbortError') return '回答已停止'
+  const msg = (error?.message || '').toLowerCase()
+  if (!msg) return '回答生成失败，请稍后重试'
+  // 网络类
+  if (msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('network request failed'))
+    return '网络连接失败，请检查网络后重试'
+  if (msg.includes('timeout') || msg.includes('timed out'))
+    return '请求超时，请稍后重试或简化问题'
+  // HTTP 状态码
+  if (msg.includes('401') || msg.includes('unauthorized'))
+    return '登录已过期，请重新登录'
+  if (msg.includes('403') || msg.includes('forbidden'))
+    return '没有权限，请重新登录'
+  if (msg.includes('429') || msg.includes('rate limit'))
+    return '请求过于频繁，请稍等片刻再试'
+  if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('504'))
+    return '服务器繁忙，请稍后重试'
+  // AI 服务类
+  if (msg.includes('connection error') || msg.includes('connect error'))
+    return 'AI 服务连接失败，请稍后重试'
+  if (msg.includes('overloaded') || msg.includes('service unavailable'))
+    return 'AI 服务繁忙，请稍后重试'
+  if (msg.includes('quota'))
+    return 'AI 服务配额已用尽，请联系管理员'
+  if (msg.includes('content filter'))
+    return '问题内容被安全策略拦截，请调整后重试'
+  if (msg.includes('context length') || msg.includes('maximum context'))
+    return '对话过长，请尝试新建会话或简化问题'
+  // 通用兜底
+  return error?.message || '回答生成失败，请稍后重试'
 }
 
 const recoverActiveAnswer = async (sessionId: string) => {
@@ -1307,7 +1401,9 @@ const askQuestion = async (
     errorStage: '',
     thinking: '',
     thinkingExpanded: enableThinking,
-    thinkingStreaming: false
+    thinkingStreaming: false,
+    agentTrace: null as any,
+    agentTraceExpanded: false
   }
   qaHistory.value.push(pendingMessageData)
   // Mutate the reactive proxy stored in the array, not the original raw object.
@@ -1417,6 +1513,9 @@ const askQuestion = async (
       },
       onDone: data => {
         streamDoneData = data
+        if (data.agent_trace) {
+          pendingMessage.agentTrace = data.agent_trace
+        }
         if (displayedOffset >= receivedAnswer.length) {
           resolveTyping?.()
           resolveTyping = null
@@ -1492,9 +1591,7 @@ const askQuestion = async (
     pendingMessage.thinking = receivedReasoning
     pendingMessage.thinkingStreaming = false
     pendingMessage.streaming = false
-    pendingMessage.streamError = error?.name === 'AbortError'
-      ? '回答已停止'
-      : (error?.message || '回答生成失败，请重试')
+    pendingMessage.streamError = friendlyErrorMessage(error)
     pendingMessage.errorStage = answerStageLabel(error?.stage)
     if (error?.retriable === false) forgetActiveTask(sessionId)
     if (!question.value) question.value = normalizedQuestion
@@ -2327,6 +2424,87 @@ watch(interpretType, () => {
   color: var(--pa-muted);
 }
 
+/* Agent 过程 */
+.qa-agent-trace {
+  margin-top: 10px;
+  border: 1px solid oklch(0.88 0.03 250);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.qa-agent-trace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--pa-info-soft);
+  border: none;
+  font-size: 12px;
+  color: var(--pa-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.qa-agent-trace-header:hover {
+  background: oklch(0.95 0.02 250);
+}
+.qa-agent-trace-title {
+  font-weight: 600;
+  color: var(--pa-text-primary);
+}
+.qa-agent-trace-summary {
+  flex: 1;
+  text-align: left;
+  font-size: 11px;
+  color: var(--pa-text-tertiary);
+}
+.qa-agent-trace-content {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.qa-agent-trace-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 6px;
+  color: var(--pa-text-secondary);
+}
+.qa-agent-trace-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qa-agent-trace-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.qa-agent-trace-tool.ok {
+  background: oklch(0.95 0.03 145);
+}
+.qa-agent-trace-tool.fail {
+  background: oklch(0.95 0.04 25);
+}
+.qa-agent-trace-tool-name {
+  font-weight: 600;
+  color: var(--pa-text-primary);
+  white-space: nowrap;
+}
+.qa-agent-trace-tool-args {
+  flex: 1;
+  color: var(--pa-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+}
+.qa-agent-trace-tool-time {
+  color: var(--pa-text-tertiary);
+  white-space: nowrap;
+}
+
 /* 引用溯源 */
 .qa-citations {
   margin-top: 10px;
@@ -2396,6 +2574,16 @@ watch(interpretType, () => {
 .citation-position {
   font-size: 11px;
   color: var(--pa-muted);
+}
+
+.citation-paper {
+  max-width: min(320px, 48vw);
+  overflow: hidden;
+  color: var(--pa-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .citation-located {

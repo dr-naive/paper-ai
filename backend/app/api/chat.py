@@ -14,20 +14,13 @@ import re
 import time
 import uuid
 
-from app.database import AsyncSessionLocal, get_db
+from app.database import get_db
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
 from app.models.paper import Paper, Section
 from app.api.auth import decode_token
 from app.api.dependencies import get_current_user_id
-from app.agent.qa_agent.enhanced_graph import (
-    build_deterministic_citations,
-    generate_follow_up_questions,
-)
-from app.agent.qa_agent.workflow import (
-    build_answer_prompt,
-)
 from app.agent.summarizer.graph import run_summarizer_agent
-from app.llm.client import get_llm_client
+from app.harness.agents.interpret_agent import run_interpret_agent
 from app.config import settings
 from app.job_queue import enqueue_job
 from app.redis_client import get_async_redis, get_json, set_json
@@ -45,6 +38,8 @@ class _AnswerTask:
     question: str
     enable_thinking: bool = False
     trace_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # 项目对话模式:非空时 worker 会把 project_id 透传给 stream_lead_agent
+    project_id: str = ""
     status: str = "running"
     stage: str = "queued"
     stage_message: str = "正在准备回答"
@@ -63,6 +58,14 @@ _ANSWER_TASK_PREFIX = "paperai:answer-task:"
 _ANSWER_DEDUPE_PREFIX = "paperai:answer-dedupe:"
 
 
+def _fallback_session_title(question: str) -> str:
+    """从问题文本生成简短会话标题(截断 + 去空白)。"""
+    text = (question or "").strip().replace("\n", " ")
+    if not text:
+        return "新对话"
+    return text[:30] + ("…" if len(text) > 30 else "")
+
+
 def _answer_task_key(task_id: str) -> str:
     return f"{_ANSWER_TASK_PREFIX}{task_id}"
 
@@ -73,6 +76,7 @@ def _answer_dedupe_key(task: _AnswerTask) -> str:
         task.session_id,
         task.question,
         "1" if task.enable_thinking else "0",
+        task.project_id or "",
     ])
     return f"{_ANSWER_DEDUPE_PREFIX}{hashlib.sha256(identity.encode()).hexdigest()}"
 
@@ -85,6 +89,7 @@ def _answer_task_data(task: _AnswerTask) -> dict:
         "question": task.question,
         "enable_thinking": task.enable_thinking,
         "trace_id": task.trace_id,
+        "project_id": task.project_id,
         "status": task.status,
         "stage": task.stage,
         "stage_message": task.stage_message,
@@ -107,6 +112,7 @@ def _answer_task_from_data(data: dict) -> Optional[_AnswerTask]:
             question=str(data["question"]),
             enable_thinking=bool(data.get("enable_thinking", False)),
             trace_id=str(data.get("trace_id") or data["task_id"]),
+            project_id=str(data.get("project_id") or ""),
             status=str(data.get("status", "failed")),
             stage=str(data.get("stage", "failed")),
             stage_message=str(data.get("stage_message", "")),
@@ -156,7 +162,7 @@ async def _load_answer_task(task_id: str) -> Optional[_AnswerTask]:
 
 def _decode_sse_event(block: str) -> tuple[str, dict]:
     event = "message"
-    data_lines = []
+    data_lines: list[str] = []
     for line in block.splitlines():
         if line.startswith("event:"):
             event = line[6:].strip()
@@ -169,6 +175,12 @@ async def _consume_answer_events(
     task: _AnswerTask,
     source: AsyncIterator[str],
 ) -> None:
+    """Compatibility consumer for in-process event producers.
+
+    Production answers are normally consumed by the queue worker now.  Keeping
+    this small adapter makes the resumable stream contract reusable by tests and
+    by deployments that still execute an answer producer in the API process.
+    """
     last_persisted_at = 0.0
     try:
         async for block in source:
@@ -176,9 +188,6 @@ async def _consume_answer_events(
             if event == "status":
                 task.stage = payload.get("stage", task.stage)
                 task.stage_message = payload.get("message", task.stage_message)
-                if task.stage == "organizing_citations":
-                    # Keep this short stage observable without delaying generation.
-                    await asyncio.sleep(0.12)
             elif event == "answer_delta":
                 task.answer += payload.get("text", "")
             elif event == "reasoning_delta":
@@ -195,11 +204,9 @@ async def _consume_answer_events(
             elif event == "error":
                 task.status = "failed"
                 task.error = payload.get("message", "回答生成失败")
-            # Persist token streams in small batches so Redis durability does not
-            # add one network round trip to every model token.
+
             now = time.monotonic()
-            is_delta = event in {"answer_delta", "reasoning_delta"}
-            if not is_delta or now - last_persisted_at >= 0.2:
+            if event not in {"answer_delta", "reasoning_delta"} or now - last_persisted_at >= 0.2:
                 await _save_answer_task(task)
                 last_persisted_at = now
         if task.status == "running":
@@ -308,58 +315,21 @@ def _sse_event(event: str, data: dict) -> str:
 
 
 def _streaming_prompt(question: str, chunks: list, history_context: str) -> str:
-    """Compatibility wrapper; the unified workflow owns the actual prompt."""
+    """Backward-compatible prompt helper retained for tests and extensions.
+
+    Answer execution now lives in the harness agent, but callers that used the
+    former chat helper should continue to receive the canonical grounded prompt.
+    """
+    from app.agent.qa_agent.workflow import build_answer_prompt
+
     return build_answer_prompt(question, chunks, history_context)
 
 
 def _citations_from_streamed_answer(answer: str, chunks: list) -> list:
+    """Build deterministic citations through the shared QA helper."""
+    from app.utils.qa_helpers import build_deterministic_citations
+
     return build_deterministic_citations(answer, chunks)
-
-
-def _fallback_session_title(question: str) -> str:
-    return question[:20] + ("..." if len(question) > 20 else "")
-
-
-async def _generate_followups_background(
-    message_id: str,
-    question: str,
-    answer: str,
-    intent: str = "general",
-) -> None:
-    """Generate follow-up questions after the main answer has been returned."""
-    try:
-        followups = await asyncio.wait_for(
-            generate_follow_up_questions(question, answer or "", intent or "general"),
-            timeout=25,
-        )
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(ChatMessage).where(ChatMessage.id == message_id))
-            message = result.scalar_one_or_none()
-            if not message:
-                return
-            message.follow_up_questions = followups
-            await db.commit()
-        logger.info("后台追问生成完成 message_id=%s count=%d", message_id, len(followups))
-    except Exception as e:
-        logger.error("后台追问生成失败 message_id=%s: %s", message_id, e)
-
-
-async def _generate_title_background(session_id: str, question: str, answer: str) -> None:
-    """Generate a concise session title without blocking the answer response."""
-    try:
-        title = _fallback_session_title(question)
-
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
-            session = result.scalar_one_or_none()
-            if not session:
-                return
-            session.title = title
-            session.updated_at = datetime.utcnow()
-            await db.commit()
-        logger.info("后台会话标题生成完成 session_id=%s title=%s", session_id, title)
-    except Exception as e:
-        logger.error("后台会话标题生成失败 session_id=%s: %s", session_id, e)
 
 
 # ==================== 对话会话管理 ====================
@@ -370,13 +340,14 @@ async def list_recent_messages(
     authorization: str = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return recent persisted QA turns across the user's papers."""
+    """Return recent persisted QA turns across the user's sessions."""
     user_id = await get_current_user_id(authorization, db)
+    # LEFT JOIN Paper:项目模式 session.paper_id 可能为 NULL,但仍需返回消息
     result = await db.execute(
         select(ChatMessage, ChatSession, Paper)
         .join(ChatSession, ChatMessage.session_id == ChatSession.id)
-        .join(Paper, ChatSession.paper_id == Paper.id)
-        .where(ChatSession.user_id == user_id, Paper.user_id == user_id)
+        .outerjoin(Paper, ChatSession.paper_id == Paper.id)
+        .where(ChatSession.user_id == user_id)
         .order_by(ChatMessage.created_at.desc())
         .limit(limit)
     )
@@ -384,8 +355,9 @@ async def list_recent_messages(
         "items": [{
             "id": message.id,
             "session_id": session.id,
-            "paper_id": paper.id,
-            "paper_title": paper.title,
+            "paper_id": paper.id if paper else None,
+            "paper_title": paper.title if paper else None,
+            "project_id": session.project_id,
             "question": message.question,
             "answer_preview": re.sub(r"\s+", " ", message.answer or "")[:160],
             "created_at": message.created_at.isoformat() if message.created_at else None,
@@ -396,22 +368,25 @@ async def list_recent_messages(
 @router.get("/sessions")
 async def list_sessions(
     paper_id: Optional[str] = None,
+    project_id: Optional[str] = None,
     skip: int = 0,
     limit: int = 20,
     authorization: str = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
-    """获取用户的对话会话列表"""
+    """获取用户的对话会话列表(可按 paper_id 或 project_id 过滤)"""
     user_id = await get_current_user_id(authorization, db)
-    
+
     query = select(ChatSession).filter(ChatSession.user_id == user_id)
     if paper_id:
         query = query.filter(ChatSession.paper_id == paper_id)
-    
+    if project_id:
+        query = query.filter(ChatSession.project_id == project_id)
+
     query = query.order_by(ChatSession.updated_at.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     sessions = result.scalars().all()
-    
+
     # 使用子查询获取消息数量，避免延迟加载问题
     session_ids = [s.id for s in sessions]
     message_counts = {}
@@ -423,12 +398,13 @@ async def list_sessions(
         )
         for sid, cnt in count_result:
             message_counts[sid] = cnt
-    
+
     return {
         "items": [
             {
                 "id": s.id,
                 "paper_id": s.paper_id,
+                "project_id": s.project_id,
                 "title": s.title,
                 "message_count": message_counts.get(s.id, 0),
                 "created_at": s.created_at.isoformat() if s.created_at else None,
@@ -446,33 +422,50 @@ async def create_session(
     authorization: str = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
-    """创建新的对话会话"""
+    """创建新的对话会话。
+
+    支持两种模式:
+    - 单论文模式:传 paper_id(向后兼容)
+    - 项目模式:传 project_id(可选同时传 paper_id 作占位;若不传,worker 会从项目文档库选一篇)
+    """
     user_id = await get_current_user_id(authorization, db)
-    
-    paper_id = data.get("paper_id")
-    if not paper_id:
-        raise HTTPException(status_code=400, detail="paper_id 不能为空")
-    
-    # 验证论文存在且属于该用户
-    result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
-    paper = result.scalar_one_or_none()
-    if not paper:
-        raise HTTPException(status_code=404, detail="论文不存在")
-    
+
+    paper_id = data.get("paper_id") or ""
+    project_id = data.get("project_id") or ""
+
+    if not paper_id and not project_id:
+        raise HTTPException(status_code=400, detail="paper_id 和 project_id 至少传一个")
+
+    # 校验 paper_id(若提供)
+    if paper_id:
+        result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
+        paper = result.scalar_one_or_none()
+        if not paper:
+            raise HTTPException(status_code=404, detail="论文不存在")
+
+    # 校验 project_id(若提供)
+    if project_id:
+        from app.models.project import ResearchProject
+        proj = await db.get(ResearchProject, project_id)
+        if proj is None or proj.user_id != user_id:
+            raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
+
     title = data.get("title", "新对话")
-    
+
     session = ChatSession(
         user_id=user_id,
-        paper_id=paper_id,
+        paper_id=paper_id or None,
+        project_id=project_id or None,
         title=title
     )
     db.add(session)
     await db.commit()
     await db.refresh(session)
-    
+
     return {
         "id": session.id,
         "paper_id": session.paper_id,
+        "project_id": session.project_id,
         "title": session.title,
         "created_at": session.created_at.isoformat() if session.created_at else None
     }
@@ -527,6 +520,7 @@ async def get_session_messages(
         "session_id": session_id,
         "title": session.title,
         "paper_id": session.paper_id,
+        "project_id": session.project_id,
         "messages": [
             {
                 "id": m.id,
@@ -620,12 +614,15 @@ async def ask_in_session(
     question = str(data.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
+    # 从 session 读取 project_id(项目模式),透传给 worker
+    project_id = str(session.project_id) if getattr(session, "project_id", None) else ""
     task = _AnswerTask(
         task_id=str(uuid.uuid4()),
         session_id=session_id,
         user_id=user_id,
         question=question,
         enable_thinking=bool(data.get("enable_thinking", False)),
+        project_id=project_id,
     )
     _answer_tasks[task.task_id] = task
     await _save_answer_task(task)
@@ -638,6 +635,7 @@ async def ask_in_session(
             "question": question,
             "enable_thinking": task.enable_thinking,
             "trace_id": task.trace_id,
+            "project_id": project_id,
         },
         job_id=task.task_id,
     )
@@ -686,13 +684,16 @@ async def stream_ask_in_session(
             ChatSession.user_id == user_id,
         )
     )
-    if not result.scalar_one_or_none():
+    session = result.scalar_one_or_none()
+    if session is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     question = str(data.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
     enable_thinking = bool(data.get("enable_thinking", False))
+    # 从 session 读取 project_id(项目模式),透传给 worker
+    project_id = str(session.project_id) if getattr(session, "project_id", None) else ""
 
     active_task = next(
         (
@@ -701,6 +702,7 @@ async def stream_ask_in_session(
             and task.user_id == user_id
             and task.question == question
             and task.enable_thinking == enable_thinking
+            and task.project_id == project_id
             and task.status == "running"
         ),
         None,
@@ -719,6 +721,7 @@ async def stream_ask_in_session(
             user_id=user_id,
             question=question,
             enable_thinking=enable_thinking,
+            project_id=project_id,
         )
         active_task = candidate
         try:
@@ -757,6 +760,7 @@ async def stream_ask_in_session(
                     "question": question,
                     "enable_thinking": enable_thinking,
                     "trace_id": active_task.trace_id,
+                    "project_id": project_id,
                     "dedupe_key": _answer_dedupe_key(active_task),
                 },
                 job_id=active_task.task_id,
@@ -1053,9 +1057,15 @@ async def generate_interpret(
     authorization: str = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
-    """生成或重新生成深度解读（带缓存）"""
-    user_id = await get_current_user_id(authorization, db)
+    """生成或重新生成深度解读(带缓存)。
     
+    底层通过 harness 层的 interpret_agent 执行:
+    - 复用 paper_internal skill 的 search_paper_content / lookup_table_data tools
+    - agent 产出带 [S1][S2] 引用的结构化 JSON,经 build_deterministic_citations 生成可点击 citations
+    - 返回结构与旧版兼容:{paper_id, type, cached, data, message},并额外附加 citations/chunks/agent_trace
+    """
+    user_id = await get_current_user_id(authorization, db)
+
     if interpret_type not in ("concept", "compare", "key_info"):
         raise HTTPException(status_code=400, detail="无效的解读类型")
     
@@ -1064,115 +1074,70 @@ async def generate_interpret(
     paper = result.scalar_one_or_none()
     if not paper:
         raise HTTPException(status_code=404, detail="论文不存在")
-    
-    # 获取章节数据
-    sections_result = await db.execute(
-        select(Section).where(Section.paper_id == paper_id).order_by(Section.order_index)
-    )
-    sections = sections_result.scalars().all()
-    
-    sections_data = []
-    if sections:
-        sections_data = [
-            {"title": s.section_title, "content": s.content or "", "order_index": s.order_index}
-            for s in sections
-        ]
-    elif paper.full_text:
-        paragraphs = [p.strip() for p in paper.full_text.split('\n\n') if p.strip()]
-        sections_data = [
-            {"title": f"段落 {i+1}", "content": p, "order_index": i}
-            for i, p in enumerate(paragraphs[:100])
-        ]
-    
-    if not sections_data:
-        raise HTTPException(status_code=400, detail="论文内容为空")
-    
-    import json
-    llm = get_llm_client()
-    text = "\n\n".join([f"## {s['title']}\n{s['content'][:2000]}" for s in sections_data[:10]])
-    
-    prompts = {
-        "concept": f"""
-        请分析以下论文内容，提取并解释其中的关键概念和技术术语。
-        
-        返回 JSON 格式：
-        {{
-            "concepts": [
-                {{"name": "概念名称", "explanation": "通俗解释（100字以内）", "context": "在论文中的作用"}}
-            ]
-        }}
-        
-        论文内容：
-        {text[:8000]}
-        """,
-        "compare": f"""
-        请分析以下论文内容，对比论文中提到的不同方法、模型或实验设置。
-        
-        返回 JSON 格式：
-        {{
-            "comparisons": [
-                {{"item_a": "方法A", "item_b": "方法B", "difference": "主要差异", "advantage": "各自优势"}}
-            ]
-        }}
-        
-        论文内容：
-        {text[:8000]}
-        """,
-        "key_info": f"""
-        请分析以下论文内容，提取最关键的信息点。
-        
-        返回 JSON 格式：
-        {{
-            "key_formulas": ["关键公式或算法描述"],
-            "key_figures": ["关键图表说明"],
-            "key_findings": ["关键发现"],
-            "takeaways": ["值得关注的要点"]
-        }}
-        
-        论文内容：
-        {text[:8000]}
-        """
-    }
-    
-    prompt = prompts.get(interpret_type, prompts["concept"])
-    
+
+    # 通过 harness/interpret_agent 生成结构化解读(复用 paper_internal tools + citations)
     try:
-        response = await llm.agenerate([prompt], json_mode=True, enable_thinking=False)
-        text_result = response.generations[0][0].text.strip()
-        if "```json" in text_result:
-            text_result = text_result.split("```json")[1].split("```")[0]
-        result_data = json.loads(text_result.strip())
-        
-        # 更新或创建缓存
-        cache_result = await db.execute(
-            select(InterpretCache).where(
-                InterpretCache.paper_id == paper_id,
-                InterpretCache.user_id == user_id,
-                InterpretCache.interpret_type == interpret_type
-            )
+        import uuid as _uuid
+        request_id = (data or {}).get("request_id") or _uuid.uuid4().hex
+        interpret_result = await run_interpret_agent(
+            db=db,
+            paper_id=paper_id,
+            interpret_type=interpret_type,
+            user_id=user_id,
+            request_id=request_id,
         )
-        cache = cache_result.scalar_one_or_none()
-        
-        if cache:
-            cache.data = result_data
-        else:
-            cache = InterpretCache(
-                user_id=user_id,
-                paper_id=paper_id,
-                interpret_type=interpret_type,
-                data=result_data
-            )
-            db.add(cache)
-        
-        await db.commit()
-        
-        return {
-            "paper_id": paper_id,
-            "type": interpret_type,
-            "cached": True,
-            "data": result_data,
-            "message": "解读已生成并缓存"
-        }
     except Exception as e:
-        logger.error(f"❌ 深度解读失败：{e}")
-        raise HTTPException(status_code=500, detail=f"解读失败：{str(e)}")
+        logger.exception("interpret agent 执行失败")
+        raise HTTPException(status_code=500, detail=f"解读失败: {type(e).__name__}: {e}")
+
+    if not interpret_result.success or not interpret_result.data:
+        raise HTTPException(
+            status_code=500,
+            detail=f"解读失败: {interpret_result.failure_reason or 'agent 未产出有效结果'}",
+        )
+
+    result_data = interpret_result.data
+
+    # 更新或创建缓存(与旧路径兼容:InterpretCache.data 存同一字典结构)
+    cache_result = await db.execute(
+        select(InterpretCache).where(
+            InterpretCache.paper_id == paper_id,
+            InterpretCache.user_id == user_id,
+            InterpretCache.interpret_type == interpret_type
+        )
+    )
+    cache = cache_result.scalar_one_or_none()
+    if cache:
+        cache.data = result_data
+    else:
+        cache = InterpretCache(
+            user_id=user_id,
+            paper_id=paper_id,
+            interpret_type=interpret_type,
+            data=result_data,
+        )
+        db.add(cache)
+    await db.commit()
+
+    # 返回结构:与旧路径完全兼容 + 附加 harness 增强字段(citations/chunks/agent_trace)
+    resp: dict[str, Any] = {
+        "paper_id": paper_id,
+        "type": interpret_type,
+        "cached": True,
+        "data": result_data,
+        "message": "解读已生成并缓存",
+        # === harness 增强:带引用 ===
+        "citations": interpret_result.citations,
+        "chunks": interpret_result.chunks,
+        "agent_trace": {
+            "iterations": interpret_result.trace.iterations,
+            "tool_calls": interpret_result.trace.tool_calls,
+            "total_ms": interpret_result.trace.total_ms,
+            "success": interpret_result.success,
+            "llm_calls": interpret_result.trace.llm_calls,
+            "input_tokens": interpret_result.trace.input_tokens,
+            "output_tokens": interpret_result.trace.output_tokens,
+            "total_tokens": interpret_result.trace.total_tokens,
+        },
+    }
+    return resp

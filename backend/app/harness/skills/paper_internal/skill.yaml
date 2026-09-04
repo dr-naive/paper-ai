@@ -1,0 +1,26 @@
+id: paper_internal
+version: 1.0.0
+title: Paper Internal Research
+description: 从用户有权访问的单篇论文中读取元数据、结构和可定位正文证据。
+allowed_tools:
+  - paper.get_metadata
+  - paper.get_outline
+  - paper.search_content
+permissions:
+  network: false
+  write_project: false
+  write_memory: false
+  destructive: false
+budget:
+  max_tool_calls: 20
+  max_external_searches: 0
+  max_papers_to_read: 1
+  max_seconds: 600
+completion:
+  criteria:
+    - 回答建立在论文内容或元数据上
+    - 正文事实保留可定位来源
+    - 信息不足时明确说明
+  required_metadata:
+    - paper_id
+    - source_ids

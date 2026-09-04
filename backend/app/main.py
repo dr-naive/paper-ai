@@ -33,7 +33,7 @@ def is_allowed_origin(origin: str) -> bool:
 async def lifespan(app: FastAPI):
     logger.info(f"🚀 启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     await init_db()
-    logger.info("✅ 数据库初始化完成")
+    logger.info("✅ 数据库迁移版本校验完成")
     from app.api.auth import ensure_default_admin
     await ensure_default_admin()
     logger.info("✅ 默认管理员账户已就绪")
@@ -68,6 +68,8 @@ from app.api.papers import router as papers_router
 from app.api.paper_analysis import router as paper_analysis_router
 from app.api.chat import router as chat_router
 from app.api.admin import router as admin_router
+from app.api.projects import router as projects_router
+from app.api.executions import router as executions_router
 
 # 导入所有模型，确保 SQLAlchemy 能发现它们
 from app.models.user import User
@@ -84,12 +86,17 @@ from app.models.paper import (
     TableStructure,
 )
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
+# 项目/写作产物模型:import 后 Base.metadata.create_all 会自动建表
+from app.models.project import ResearchProject, ProjectPaper, WritingArtifact
+from app.models.execution import AgentExecution, AgentEvent, ToolCall
 
 app.include_router(auth_router)
 app.include_router(papers_router)
 app.include_router(paper_analysis_router)
 app.include_router(chat_router)
 app.include_router(admin_router)
+app.include_router(projects_router)
+app.include_router(executions_router)
 
 
 @app.get("/")

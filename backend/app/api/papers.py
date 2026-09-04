@@ -1346,6 +1346,12 @@ def recover_incomplete_paper_tasks() -> int:
     """Schedule persisted tasks after application startup; return scheduled count."""
     from app.utils.task_manager import TaskStatus, list_tasks
 
+    try:
+        asyncio.get_running_loop()
+        can_schedule = True
+    except RuntimeError:
+        can_schedule = False
+
     scheduled = 0
     for task in list_tasks({TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.READY}):
         if task.status == TaskStatus.READY:
@@ -1356,6 +1362,12 @@ def recover_incomplete_paper_tasks() -> int:
                 status="completed",
                 message="论文正文可用；图表增强因服务重启中断",
                 details=details,
+            )
+            continue
+        if not can_schedule:
+            logger.warning(
+                "跳过论文任务恢复：当前线程没有运行中的事件循环 (task_id=%s)",
+                task.task_id,
             )
             continue
         spawn_background_task(

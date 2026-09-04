@@ -69,6 +69,9 @@ class Paper(Base):
     chat_sessions = relationship("ChatSession", back_populates="paper", cascade="all, delete-orphan")
     summary_caches = relationship("SummaryCache", back_populates="paper", cascade="all, delete-orphan")
     interpret_caches = relationship("InterpretCache", back_populates="paper", cascade="all, delete-orphan")
+    project_papers = relationship(
+        "ProjectPaper", back_populates="paper", cascade="all, delete-orphan"
+    )
 
 
 class Section(Base):

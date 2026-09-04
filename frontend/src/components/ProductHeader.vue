@@ -174,11 +174,22 @@ const router = useRouter()
 }
 
 @media (max-width: 760px) {
-  .product-header { padding-inline: 14px; }
+  .product-header { min-height: 60px; padding-inline: 14px; flex-wrap: wrap; }
   .product-header--edge { padding-left: 4px; }
   .product-header__leading { margin-right: 8px; }
   .product-header__brand :deep(.brand-mark__name) { display: none; }
   .product-header__divider { margin-inline: 8px; }
+  .product-header__context {
+    max-width: min(42vw, 220px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .product-header__actions {
+    width: 100%;
+    margin: 8px 0 0;
+    justify-content: flex-end;
+  }
 }
 
 @media (pointer: coarse) {

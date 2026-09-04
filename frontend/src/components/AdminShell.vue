@@ -51,6 +51,7 @@ const navigation = [
   { label: '运行概览', icon: '⌂', path: '/admin', hash: '' },
   { label: 'AI 使用', icon: '◫', path: '/admin', hash: '#ai-usage' },
   { label: '质量评测', icon: '✓', path: '/admin', hash: '#evaluations' },
+  { label: '链路追踪', icon: '⟶', path: '/admin/traces', hash: '' },
   { label: '用户与权限', icon: '♙', path: '/admin/users', hash: '' },
 ]
 const storedUser = computed(() => {

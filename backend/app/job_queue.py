@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 QUEUE_KEY = "paperai:jobs:waiting"
 PROCESSING_KEY = "paperai:jobs:processing"
 DEAD_LETTER_KEY = "paperai:jobs:failed"
+# 延迟重试队列(sorted set): score = 重试时间戳,到期后搬回主队列
+RETRY_KEY = "paperai:jobs:retry"
+# 指数退避:基础延迟 10s,倍率 2 → 10s → 20s → 40s
+RETRY_BASE_DELAY = 10.0
+RETRY_BACKOFF_MULTIPLIER = 2.0
+# 最大重试次数(不含首次),超过则进死信队列
+MAX_RETRY_ATTEMPTS = 3
 
 
 @dataclass
@@ -82,25 +89,51 @@ async def acknowledge_job(raw: str) -> None:
     await get_async_redis().lrem(PROCESSING_KEY, 1, raw)
 
 
-async def fail_or_retry_job(job: WorkerJob, raw: str, max_attempts: int = 2) -> None:
+async def fail_or_retry_job(job: WorkerJob, raw: str, max_attempts: int = MAX_RETRY_ATTEMPTS) -> None:
+    """任务失败后指数退避重试,超过 max_attempts 进死信队列。
+    
+    重试不立即入队,而是写入 RETRY_KEY(sorted set),score=重试时间戳。
+    worker 每次取任务前调 drain_retry_queue() 把到期任务搬回主队列。
+    """
     client = get_async_redis()
     await client.lrem(PROCESSING_KEY, 1, raw)
     job.attempts += 1
     if job.attempts <= max_attempts:
-        await client.lpush(QUEUE_KEY, job.dumps())
+        # 指数退避:10s → 20s → 40s
+        delay = RETRY_BASE_DELAY * (RETRY_BACKOFF_MULTIPLIER ** (job.attempts - 1))
+        retry_at = time.time() + delay
+        await client.zadd(RETRY_KEY, {job.dumps(): retry_at})
         logger.warning(
-            "Worker 任务重试 job_id=%s type=%s attempts=%d",
-            job.id,
-            job.type,
-            job.attempts,
+            "Worker 任务延迟重试 job_id=%s type=%s attempts=%d %.0fs 后重试",
+            job.id, job.type, job.attempts, delay,
         )
     else:
         await client.lpush(DEAD_LETTER_KEY, job.dumps())
         logger.error(
-            "Worker 任务进入失败队列 job_id=%s type=%s",
-            job.id,
-            job.type,
+            "Worker 任务进入死信队列 job_id=%s type=%s attempts=%d",
+            job.id, job.type, job.attempts,
         )
+
+
+async def drain_retry_queue() -> int:
+    """把延迟重试队列里到期的任务搬回主队列。worker 每次取任务前调用。
+    
+    Returns: 搬回的任务数
+    """
+    client = get_async_redis()
+    now = time.time()
+    moved = 0
+    # zrangebyscore 取出 score <= now 的任务(已到期)
+    due_jobs = await client.zrangebyscore(RETRY_KEY, 0, now, start=0, num=10)
+    for raw in due_jobs:
+        # 从 sorted set 删除(原子操作,防止重复搬移)
+        removed = await client.zrem(RETRY_KEY, raw)
+        if removed:
+            await client.lpush(QUEUE_KEY, raw)
+            moved += 1
+    if moved:
+        logger.info("延迟重试队列搬回 %d 个任务到主队列", moved)
+    return moved
 
 
 async def recover_processing_jobs() -> int:

@@ -230,3 +230,203 @@ async def admin_dashboard(
             ],
         },
     }
+
+
+# ==================== 链路追踪:列表 + 详情 ====================
+
+@router.get("/traces")
+async def list_traces(
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,          # completed / failed
+    user_id: str | None = None,
+    min_total_ms: float | None = None,  # 只看慢请求,如 min_total_ms=5000
+    max_age_days: int = 7,
+):
+    """链路追踪列表:最近 N 天的 AnswerTrace,支持按状态/用户/耗时筛选。
+
+    带分位数统计(P50/P90/P95 first_token_ms + total_ms),免看日志即可发现长尾问题。
+    """
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=max(1, max_age_days))
+
+    where = [AnswerTrace.recorded_at >= cutoff]
+    if status:
+        where.append(AnswerTrace.status == status)
+    if user_id:
+        where.append(AnswerTrace.user_id == user_id)
+    if min_total_ms:
+        where.append(AnswerTrace.total_ms >= min_total_ms)
+
+    total = (await db.execute(
+        select(func.count()).select_from(AnswerTrace).where(*where)
+    )).scalar() or 0
+
+    rows = (await db.execute(
+        select(
+            AnswerTrace.trace_id,
+            AnswerTrace.task_id,
+            AnswerTrace.user_id,
+            AnswerTrace.session_id,
+            AnswerTrace.status,
+            AnswerTrace.total_ms,
+            AnswerTrace.first_token_ms,
+            AnswerTrace.retrieval_ms,
+            AnswerTrace.thinking_tokens,
+            AnswerTrace.answer_tokens,
+            AnswerTrace.model_calls,
+            AnswerTrace.retry_count,
+            AnswerTrace.citation_count,
+            AnswerTrace.recorded_at,
+            User.username,
+        )
+        .join(User, User.id == AnswerTrace.user_id, isouter=True)
+        .where(*where)
+        .order_by(AnswerTrace.recorded_at.desc())
+        .limit(min(max(1, page_size), 100))
+        .offset(max(0, (page - 1) * page_size))
+    )).all()
+
+    # 分位数统计(同一个 where 条件下的全量数据)
+    percentile_cols = (
+        select(
+            AnswerTrace.first_token_ms,
+            AnswerTrace.total_ms,
+        )
+        .where(*where)
+        .order_by(AnswerTrace.recorded_at.asc())
+    )
+    percentile_rows = [(r.first_token_ms, r.total_ms) for r in (await db.execute(percentile_cols)).all()]
+
+    def _pct(values: list[float], p: float) -> float | None:
+        vals = sorted(v for v in values if v is not None)
+        if not vals:
+            return None
+        idx = min(len(vals) - 1, int(round((len(vals) - 1) * p)))
+        return round(float(vals[idx]), 2)
+
+    first_tokens = [ft for ft, _ in percentile_rows]
+    totals = [t for _, t in percentile_rows]
+
+    items = []
+    for row in rows:
+        items.append({
+            "trace_id": row.trace_id,
+            "task_id": row.task_id,
+            "user_id": row.user_id,
+            "username": row.username,
+            "session_id": row.session_id,
+            "status": row.status,
+            "total_ms": row.total_ms and round(float(row.total_ms), 2),
+            "first_token_ms": row.first_token_ms and round(float(row.first_token_ms), 2),
+            "retrieval_ms": row.retrieval_ms and round(float(row.retrieval_ms), 2),
+            "thinking_tokens": int(row.thinking_tokens or 0),
+            "answer_tokens": int(row.answer_tokens or 0),
+            "model_calls": int(row.model_calls or 0),
+            "retry_count": int(row.retry_count or 0),
+            "citation_count": int(row.citation_count or 0),
+            "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+        })
+
+    return {
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+        "stats": {
+            "count": len(percentile_rows),
+            "first_token_ms": {
+                "p50": _pct(first_tokens, 0.5),
+                "p90": _pct(first_tokens, 0.9),
+                "p95": _pct(first_tokens, 0.95),
+            },
+            "total_ms": {
+                "p50": _pct(totals, 0.5),
+                "p90": _pct(totals, 0.9),
+                "p95": _pct(totals, 0.95),
+            },
+        },
+    }
+
+
+@router.get("/traces/{trace_id}")
+async def get_trace_detail(
+    trace_id: str,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """单条 trace 详情:DB AnswerTrace + Redis agent_trace(含 tool_calls 明细)。
+
+    失败时带 failure_stage + 失败原因,免看日志即可定位问题。
+    """
+    from app.redis_utils import get_json
+    from app.worker import ANSWER_TRACE_PREFIX
+
+    row = (await db.execute(
+        select(
+            AnswerTrace,
+            User.username,
+        )
+        .join(User, User.id == AnswerTrace.user_id, isouter=True)
+        .where(AnswerTrace.trace_id == trace_id)
+    )).one_or_none()
+    if row is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="trace 不存在")
+
+    trace, username = row
+
+    # 从 Redis 取 agent_trace(含 tool_calls 明细 + intent_analysis + fast_path)
+    redis_payload = await get_json(f"{ANSWER_TRACE_PREFIX}{trace_id}")
+
+    # 会话 + 问题/回答内容(调试失败时最需要)
+    session_title = None
+    question = None
+    answer = None
+    if trace.session_id:
+        msg_row = (await db.execute(
+            select(ChatSession.title, ChatMessage.question, ChatMessage.answer)
+            .join(ChatMessage, ChatMessage.session_id == ChatSession.id, isouter=True)
+            .where(ChatSession.id == trace.session_id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(1)
+        )).one_or_none()
+        if msg_row:
+            session_title, question, answer = msg_row
+
+    def _fmt(val, digits=2):
+        return None if val is None else round(float(val), digits)
+
+    return {
+        # AnswerTrace 字段
+        "trace_id": trace.trace_id,
+        "task_id": trace.task_id,
+        "user": {"id": trace.user_id, "username": username},
+        "session": {"id": trace.session_id, "title": session_title},
+        "status": trace.status,
+        "total_ms": _fmt(trace.total_ms),
+        "first_token_ms": _fmt(trace.first_token_ms),
+        "retrieval_ms": _fmt(trace.retrieval_ms),
+        "thinking_tokens": int(trace.thinking_tokens or 0),
+        "answer_tokens": int(trace.answer_tokens or 0),
+        "citation_count": int(trace.citation_count or 0),
+        "model_calls": int(trace.model_calls or 0),
+        "retry_count": int(trace.retry_count or 0),
+        "used_second_pass": bool(trace.used_second_pass),
+        "recorded_at": trace.recorded_at.isoformat() if trace.recorded_at else None,
+        # 对话内容
+        "question": question,
+        "answer": answer and (answer[:4000] + ("…" if len(answer) > 4000 else "")),
+        # Redis 里的 agent_trace 明细
+        "retrieval_query": redis_payload.get("retrieval_query") if redis_payload else None,
+        "retrieval_top_k": redis_payload.get("retrieval_top_k") if redis_payload else None,
+        "intent": redis_payload.get("intent") if redis_payload else None,
+        "iterations": redis_payload.get("iterations") if redis_payload else None,
+        "tool_calls": redis_payload.get("tool_calls") if redis_payload else None,
+        "intent_analysis": redis_payload.get("intent_analysis") if redis_payload else None,
+        "fast_path": redis_payload.get("fast_path") if redis_payload else None,
+        "failure_stage": redis_payload.get("failure_stage") if redis_payload else None,
+        "worker_retry_count": redis_payload.get("worker_retry_count") if redis_payload else None,
+    }

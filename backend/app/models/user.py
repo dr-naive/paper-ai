@@ -36,6 +36,9 @@ class User(Base):
     chat_sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     summary_caches = relationship("SummaryCache", back_populates="user", cascade="all, delete-orphan")
     interpret_caches = relationship("InterpretCache", back_populates="user", cascade="all, delete-orphan")
+    research_projects = relationship(
+        "ResearchProject", back_populates="user", cascade="all, delete-orphan"
+    )
     
     def to_dict(self):
         return {

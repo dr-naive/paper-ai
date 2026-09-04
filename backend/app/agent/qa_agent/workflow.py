@@ -15,7 +15,7 @@ from typing import Any, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.qa_agent.enhanced_graph import (
+from app.utils.qa_helpers import (
     build_deterministic_citations,
     calculate_evidence_confidence,
     detect_metadata_intent,

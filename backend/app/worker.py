@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import asyncio as _aio
 import json
 import logging
 import signal
@@ -12,18 +13,27 @@ from typing import Any
 from sqlalchemy import select
 
 from app.agent.qa_agent.enhanced_graph import generate_follow_up_questions
-from app.agent.qa_agent.workflow import QAWorkflowState, UnifiedQAWorkflow
+from app.agent.qa_agent.workflow import QAWorkflowState
 from app.config import settings
 from app.database import AsyncSessionLocal, close_db, init_db
+from app.harness.agents.lead_agent import run_lead_agent, stream_lead_agent
 from app.job_queue import (
     WorkerJob,
     acknowledge_job,
+    drain_retry_queue,
     fail_or_retry_job,
     recover_processing_jobs,
     reserve_job,
 )
 from app.models.chat import AnswerTrace, ChatMessage
-from app.redis_client import close_redis, get_async_redis, initialize_redis, set_json
+# 显式 import 所有模型类,确保 SQLAlchemy mapper 在 worker 启动时完成注册
+# (worker 不走 main.py,需自己触发 model 注册,否则 relationship("ResearchProject") 会失败)
+from app.models.user import User  # noqa: F401
+from app.models.paper import Paper, Section, Image, Note, Table, TableStructure  # noqa: F401
+from app.models.project import ResearchProject, ProjectPaper, WritingArtifact  # noqa: F401
+from app.models.execution import AgentExecution, AgentEvent, ToolCall, TERMINAL_EXECUTION_STATUSES  # noqa: F401
+from app.application.execution_service import append_event, get_control, set_control, set_status
+from app.redis_client import close_redis, get_async_redis, get_json, initialize_redis, set_json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +42,37 @@ ANSWER_TASK_PREFIX = "paperai:answer-task:"
 ANSWER_CANCEL_PREFIX = "paperai:answer-cancel:"
 WORKER_HEARTBEAT_KEY = "paperai:worker:heartbeat"
 ANSWER_TRACE_PREFIX = "paperai:answer-trace:"
+READING_EXECUTION_PREFIX = "paperai:reading-execution:"
+READING_EXECUTION_TTL = 7 * 24 * 60 * 60
+
+
+async def handle_agent_execution_v2(job: WorkerJob) -> None:
+    execution_id = str(job.payload["execution_id"])
+    async with AsyncSessionLocal() as db:
+        item = await db.get(AgentExecution, execution_id)
+        if item is None or item.status in TERMINAL_EXECUTION_STATUSES:
+            return
+        if await get_control(execution_id) == "pause":
+            return
+        await set_status(db, item, "running", stage="planning")
+        await append_event(db, item, "execution_started", "Agent 执行已启动", stage="planning")
+        for stage, message in (("planning", "正在制定执行计划"), ("working", "正在执行任务"), ("finalizing", "正在整理结果")):
+            control = await get_control(execution_id)
+            if control == "cancel":
+                await set_status(db, item, "cancelled", stage="cancelled", error_code="EXECUTION_CANCELLED", error_message="用户取消")
+                await append_event(db, item, "execution_cancelled", "执行已取消", stage="cancelled")
+                await set_control(execution_id, None)
+                return
+            if control == "pause":
+                await set_status(db, item, "paused", stage=stage)
+                return
+            item.current_stage = stage
+            await db.commit()
+            await append_event(db, item, "stage_changed", message, stage=stage)
+            await asyncio.sleep(0.2)
+        await set_status(db, item, "completed", stage="completed")
+        await append_event(db, item, "execution_completed", "执行已完成", stage="completed", data={"result": "mock_agent_completed"})
+        await set_control(execution_id, None)
 
 
 async def _load_answer_data(task_id: str) -> dict[str, Any]:
@@ -87,13 +128,13 @@ async def _persist_answer_trace(
                 "user_id": user_id,
                 "session_id": str(trace_payload.get("session_id") or ""),
                 "status": str(trace_payload.get("status") or "completed"),
-                "thinking_tokens": int(trace_payload.get("thinking_tokens") or 0),
-                "answer_tokens": int(trace_payload.get("answer_tokens") or 0),
+                "thinking_tokens": int(trace_payload.get("input_tokens") or trace_payload.get("thinking_tokens") or 0),
+                "answer_tokens": int(trace_payload.get("output_tokens") or trace_payload.get("answer_tokens") or 0),
                 "total_ms": trace_payload.get("total_ms"),
                 "first_token_ms": trace_payload.get("first_token_ms"),
                 "retrieval_ms": trace_payload.get("retrieval_ms"),
                 "citation_count": int(trace_payload.get("citation_count") or 0),
-                "model_calls": int(trace_payload.get("model_calls") or 0),
+                "model_calls": int(trace_payload.get("llm_calls") or trace_payload.get("model_calls") or 0),
                 "retry_count": int(trace_payload.get("worker_retry_count") or 0),
                 "used_second_pass": bool(
                     trace_payload.get("retrieval_second_pass")
@@ -131,8 +172,18 @@ async def handle_chat_answer(job: WorkerJob) -> None:
     last_saved = 0.0
     try:
         async with AsyncSessionLocal() as db:
-            workflow = UnifiedQAWorkflow(state, db)
-            async for event, event_payload in workflow.stream():
+            # 走 harness agent 流式路径(替代原 UnifiedQAWorkflow)
+            # project_id:项目对话模式时非空,stream_lead_agent 会注入项目上下文与 project_* tool
+            project_id = str(payload.get("project_id") or "")
+            async for event, event_payload in stream_lead_agent(
+                db=db,
+                session_id=str(payload["session_id"]),
+                user_id=str(payload["user_id"]),
+                question=str(payload["question"]),
+                enable_thinking=bool(payload.get("enable_thinking", False)),
+                project_id=project_id,
+                request_id=str(payload.get("trace_id") or task_id),
+            ):
                 if await _answer_cancelled(task_id):
                     task_data.update({
                         "status": "stopped",
@@ -162,27 +213,47 @@ async def handle_chat_answer(job: WorkerJob) -> None:
                         "stage": "completed",
                         "stage_message": "回答完成",
                         "result": event_payload,
-                        "trace_id": state.trace_id,
+                        "trace_id": event_payload.get("trace_id", state.trace_id),
                     })
+                    # 从 done payload 提取 agent 产出的关键信息
+                    state.message_id = event_payload.get("message_id", "")
+                    state.intent = event_payload.get("intent", "general")
+                    state.answer = task_data.get("answer", "")
+                    state.citations = event_payload.get("sources", [])
+                    state.evidence_confidence = event_payload.get("evidence_confidence", 0.0)
+                    # 从 agent_trace 提取链路追踪指标,写入 state.trace 供 AnswerTrace 持久化
+                    agent_trace = event_payload.get("agent_trace") or {}
+                    state.trace["total_ms"] = agent_trace.get("total_ms")
+                    state.trace["llm_calls"] = agent_trace.get("llm_calls", 0)
+                    state.trace["total_tokens"] = agent_trace.get("total_tokens", 0)
+                    state.trace["input_tokens"] = agent_trace.get("input_tokens", 0)
+                    state.trace["output_tokens"] = agent_trace.get("output_tokens", 0)
+                    state.trace["iterations"] = agent_trace.get("iterations", 0)
+                    state.trace["tool_calls"] = agent_trace.get("tool_calls", [])
+                    state.trace["first_token_ms"] = agent_trace.get("first_token_ms")
+                    state.trace["retrieval_ms"] = agent_trace.get("retrieval_ms")
+                    state.trace["status"] = "completed"
                 elif event == "error":
                     task_data.update({
                         "status": "failed",
-                        "stage": event_payload.get("stage", "workflow"),
+                        "stage": event_payload.get("stage", "agent"),
                         "stage_message": "回答失败",
                         "error": event_payload.get("message", "回答处理失败"),
                     })
                 now = time.monotonic()
-                if event not in {"answer_delta", "reasoning_delta"} or now - last_saved >= 0.2:
+                if event not in {"answer_delta", "reasoning_delta"} or now - last_saved >= 0.05:
                     await _save_answer_data(task_id, task_data)
                     last_saved = now
         await _save_answer_data(task_id, task_data)
+        # 追问生成 + trace 持久化 放后台 task,不阻塞 worker 线程释放
+        # (用户已看完全部答案,这些是辅助功能,不应占用 worker 导致下个请求排队)
         if state.message_id:
-            await _generate_followups(
+            _aio.create_task(_generate_followups(
                 state.message_id,
                 state.question,
                 state.answer,
                 state.intent,
-            )
+            ))
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -227,11 +298,12 @@ async def handle_chat_answer(job: WorkerJob) -> None:
             trace_payload,
             settings.REDIS_ANSWER_TASK_TTL_SECONDS,
         )
-        await _persist_answer_trace(
+        # AnswerTrace DB 持久化放后台,不阻塞 worker 线程释放
+        _aio.create_task(_persist_answer_trace(
             trace_payload,
             task_id=task_id,
             user_id=state.user_id,
-        )
+        ))
         task_data["trace_id"] = state.trace_id
         task_data.setdefault("result", {})["trace_id"] = state.trace_id
         task_data["result"]["trace"] = trace_payload
@@ -261,10 +333,159 @@ async def handle_paper_process(job: WorkerJob) -> None:
     )
 
 
+async def handle_arxiv_import(job: WorkerJob) -> None:
+    """Run the standard PDF pipeline, then attach a successful import to its project."""
+    from app.api.papers import _schedule_process_paper
+
+    payload = job.payload
+    project_id = str(payload["project_id"])
+    paper_id = str(payload["paper_id"])
+    arxiv_id = str(payload["arxiv_id"])
+
+    async def update_import(status: str, error: str = "") -> None:
+        async with AsyncSessionLocal() as db:
+            project = await db.get(ResearchProject, project_id)
+            if project is None:
+                return
+            preferences = dict(project.preferences or {})
+            imports = [dict(item) for item in preferences.get("paper_imports") or []]
+            for item in imports:
+                if item.get("paper_id") == paper_id:
+                    item.update({"status": status, "error": error, "updated_at": time.time()})
+            preferences["paper_imports"] = imports
+            project.preferences = preferences
+            await db.commit()
+
+    await update_import("processing")
+    await _schedule_process_paper(
+        paper_id, str(payload["file_path"]), str(payload["user_id"]), None,
+        {}, time.perf_counter(), dict(payload.get("initial_counts") or {}),
+    )
+    async with AsyncSessionLocal() as db:
+        paper = await db.get(Paper, paper_id)
+        project = await db.get(ResearchProject, project_id)
+        if paper is None:
+            await update_import("failed", "PDF 解析失败")
+            return
+        paper.source_url = str(payload["source_url"])
+        if project is not None and project.user_id == str(payload["user_id"]):
+            existing = (await db.execute(select(ProjectPaper).where(
+                ProjectPaper.project_id == project_id, ProjectPaper.paper_id == paper_id,
+            ))).scalars().first()
+            if existing is None:
+                db.add(ProjectPaper(
+                    project_id=project_id, paper_id=paper_id, role=str(payload.get("role") or "related"),
+                    tags=list(payload.get("tags") or []), notes=str(payload.get("notes") or ""),
+                    reading_priority=int(payload.get("reading_priority") or 3),
+                ))
+        await db.commit()
+    await update_import("ready")
+    logger.info("arXiv 导入完成 project_id=%s arxiv_id=%s paper_id=%s", project_id, arxiv_id, paper_id)
+
+
+async def handle_project_reading_execution(job: WorkerJob) -> None:
+    payload = job.payload
+    task_id = str(payload["task_id"])
+    project_id = str(payload["project_id"])
+    user_id = str(payload["user_id"])
+    key = f"{READING_EXECUTION_PREFIX}{task_id}"
+    task = await get_json(key)
+    if not isinstance(task, dict):
+        raise LookupError(f"精读任务不存在 task_id={task_id}")
+    task.update({"status": "running", "updated_at": time.time()})
+    await set_json(key, task, READING_EXECUTION_TTL)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            project = await db.get(ResearchProject, project_id)
+            if project is None or project.user_id != user_id:
+                raise LookupError("项目不存在或无访问权限")
+            rows = (await db.execute(
+                select(ProjectPaper, Paper)
+                .join(Paper, Paper.id == ProjectPaper.paper_id)
+                .where(ProjectPaper.project_id == project_id, Paper.user_id == user_id)
+            )).all()
+            pending = [
+                (pp, paper) for pp, paper in rows
+                if (pp.reading_plan or {}).get("status") in {"pending", "reading", "failed"}
+            ]
+            pending.sort(key=lambda row: int((row[0].reading_plan or {}).get("order") or 9999))
+            pending = pending[: int(task.get("max_items") or 10)]
+            task["total"] = int(task.get("completed") or 0) + len(pending)
+
+            for pp, paper in pending:
+                latest = await get_json(key)
+                if isinstance(latest, dict):
+                    task = latest
+                if task.get("control") == "pause":
+                    task.update({"status": "paused", "current_paper_id": None, "updated_at": time.time()})
+                    await set_json(key, task, READING_EXECUTION_TTL)
+                    return
+
+                plan = dict(pp.reading_plan or {})
+                plan.update({"status": "reading", "updated_at": time.time()})
+                pp.reading_plan = plan
+                await db.commit()
+                task.update({
+                    "status": "running",
+                    "current_paper_id": str(paper.id),
+                    "current_paper_title": paper.title,
+                    "updated_at": time.time(),
+                })
+                await set_json(key, task, READING_EXECUTION_TTL)
+
+                focus = "；".join(plan.get("focus") or []) or "核心方法、实验与局限"
+                questions = "；".join(plan.get("questions") or []) or "论文的核心贡献、证据和局限是什么？"
+                prompt = (
+                    "你正在执行项目精读队列中的单篇任务。"
+                    f"请只精读当前论文《{paper.title}》。阅读重点：{focus}。"
+                    f"需要回答：{questions}。"
+                    "必须先用 search_paper_content 查找证据，再调用 project_save_paper_card 保存结构化卡片，"
+                    "并用 project_append_memory 记录至少一条带 paper_id、page、source_id 的关键发现。"
+                    "不要生成领域综述，也不要修改阅读计划。"
+                )
+                result = await run_lead_agent(
+                    db=db,
+                    paper_id=str(paper.id),
+                    question=prompt,
+                    user_id=user_id,
+                    project_id=project_id,
+                    request_id=f"reading-{task_id}-{paper.id}",
+                    enable_critique=False,
+                )
+                await db.refresh(pp)
+                if not result.success or not (pp.analysis_card or {}).get("summary"):
+                    failed_plan = dict(pp.reading_plan or plan)
+                    failed_plan.update({"status": "failed", "updated_at": time.time()})
+                    pp.reading_plan = failed_plan
+                    await db.commit()
+                    raise RuntimeError(result.trace.failure_reason or f"论文 {paper.id} 未生成阅读卡片")
+
+                results = list(task.get("results") or [])
+                results.append({"paper_id": str(paper.id), "paper_title": paper.title, "status": "completed"})
+                task.update({
+                    "completed": int(task.get("completed") or 0) + 1,
+                    "results": results,
+                    "current_paper_id": None,
+                    "updated_at": time.time(),
+                })
+                await set_json(key, task, READING_EXECUTION_TTL)
+
+        task.update({"status": "completed", "current_paper_id": None, "updated_at": time.time()})
+        await set_json(key, task, READING_EXECUTION_TTL)
+    except Exception as exc:
+        task.update({"status": "failed", "error": str(exc), "current_paper_id": None, "updated_at": time.time()})
+        await set_json(key, task, READING_EXECUTION_TTL)
+        raise
+
+
 async def dispatch_job(job: WorkerJob) -> None:
     handlers = {
         "chat_answer": handle_chat_answer,
         "paper_process": handle_paper_process,
+        "arxiv_import": handle_arxiv_import,
+        "project_reading_execution": handle_project_reading_execution,
+        "agent_execution_v2": handle_agent_execution_v2,
     }
     handler = handlers.get(job.type)
     if handler is None:
@@ -301,6 +522,8 @@ async def worker_loop() -> None:
     heartbeat_task = asyncio.create_task(_heartbeat(stop_event))
     try:
         while not stop_event.is_set():
+            # 先把延迟重试队列里到期的任务搬回主队列
+            await drain_retry_queue()
             # Keep the blocking wait below the shared Redis client's socket
             # timeout so an empty queue is a normal poll, not a disconnect.
             reserved = await reserve_job(timeout_seconds=1)

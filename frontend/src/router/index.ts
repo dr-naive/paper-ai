@@ -7,12 +7,22 @@ const routes: RouteRecordRaw[] = [
   { path: '/guide', name: 'Guide', component: () => import('@/views/Guide.vue') },
   { path: '/login', name: 'Login', component: () => import('@/views/Login.vue') },
   { path: '/register', name: 'Register', component: () => import('@/views/Register.vue') },
-  { path: '/papers', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
+  { path: '/papers', name: 'PaperWorkbench', component: () => import('@/views/ResearchProjectList.vue') },
+  { path: '/library', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
   { path: '/paper/:id', name: 'PaperReader', component: () => import('@/views/PaperReader.vue') },
+  { path: '/projects', name: 'ResearchProjects', component: () => import('@/views/ResearchProjectList.vue') },
+  { path: '/project/:id', name: 'ProjectWorkspace', component: () => import('@/views/ProjectWorkspace.vue') },
+  { path: '/project/:id/chat', name: 'ProjectChat', component: () => import('@/views/ProjectChat.vue') },
   {
     path: '/admin',
     name: 'AdminDashboard',
     component: () => import('@/views/AdminDashboard.vue'),
+    meta: { requiresAdmin: true },
+  },
+  {
+    path: '/admin/traces',
+    name: 'AdminTraces',
+    component: () => import('@/views/AdminTraces.vue'),
     meta: { requiresAdmin: true },
   },
   {

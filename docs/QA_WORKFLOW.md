@@ -1,5 +1,10 @@
 # 统一论文问答工作流
 
+> **注意**: 当前默认问答路径已切换至 agent 路径（`harness/agents/lead_agent.py` 的 `stream_lead_agent`），
+> 支持 ReAct loop、意图分析、多意图分解和深度控制。下文描述的 `UnifiedQAWorkflow` 作为 fallback 保留
+> （通过 `paper_analysis.py` 的 `mode=workflow` 触发）。工具函数（引用构建、意图检测、置信度计算）
+> 已提取至 `app/utils/qa_helpers.py`，供新旧路径共用。
+
 同步问答、流式问答和论文分析兼容入口共用
 `UnifiedQAWorkflow`。节点通过共享的 `QAWorkflowState` 传递数据，通过统一事件协议向
 SSE、Redis 任务层和普通 HTTP 接口输出状态。

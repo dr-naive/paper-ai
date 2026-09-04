@@ -48,6 +48,20 @@ class LLMClient:
         if len(value) <= 8:
             return "***"
         return f"{value[:4]}...{value[-4:]}"
+
+    def bind_tools(self, tools):
+        """返回一个绑定了 tools 的 ChatOpenAI 实例,支持 tool calling。
+
+        用于 agent 的 ReAct loop:LLM 根据用户问题自主决定调用哪个 tool。
+        qwen/deepseek 的 OpenAI 兼容接口都支持 function calling,无需新依赖。
+
+        Args:
+            tools: LangChain BaseTool 实例列表(如 make_paper_internal_tools 返回值)
+
+        Returns:
+            RunnableBinding,可像 ChatOpenAI 一样调用 .ainvoke / .astream
+        """
+        return self.client.bind_tools(tools)
     
     async def agenerate(
         self,
@@ -265,3 +279,77 @@ def get_llm_client() -> LLMClient:
     if _llm_client is None:
         _llm_client = LLMClient()
     return _llm_client
+
+
+# ====== LLM 调用指数退避重试(应用层,不依赖 tenacity) ======
+
+# 可重试的 HTTP 状态码 / 关键词(429 限流、5xx 服务端错误、超时)
+_RETRYABLE_KEYWORDS = (
+    "429", "rate limit", "rate_limit",
+    "502", "503", "504",
+    "timeout", "timed out", "connection error",
+    "overloaded", "service unavailable",
+)
+# 不可重试的关键词(400 参数错误、401 鉴权失败等)
+_NON_RETRYABLE_KEYWORDS = (
+    "400", "401", "403", "404",
+    "invalid api key", "authentication",
+    "invalid_request", "bad request",
+)
+
+
+def is_retryable_error(exc: Exception) -> bool:
+    """判断 LLM 调用异常是否值得重试。
+    
+    重试:429 限流、5xx 服务器错误、超时、连接错误
+    不重试:400 参数错误、401 鉴权失败、内容审核拦截
+    """
+    import asyncio as _aio
+    import httpx as _httpx
+    # 超时类直接重试
+    if isinstance(exc, (_aio.TimeoutError, TimeoutError, _httpx.ReadTimeout, _httpx.WriteTimeout, _httpx.ConnectTimeout)):
+        return True
+    # 连接错误直接重试
+    if isinstance(exc, (_httpx.ConnectError, _httpx.ReadError, _httpx.RemoteProtocolError)):
+        return True
+    # 按错误消息判断
+    exc_str = str(exc).lower()
+    # 先检查不可重试关键词(优先级高)
+    for kw in _NON_RETRYABLE_KEYWORDS:
+        if kw in exc_str:
+            return False
+    # 再检查可重试关键词
+    for kw in _RETRYABLE_KEYWORDS:
+        if kw in exc_str:
+            return True
+    # 未知错误默认不重试(避免对不可恢复的错误浪费重试)
+    return False
+
+
+async def invoke_with_retry(
+    llm_runnable,
+    messages,
+    *,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+):
+    """带指数退避的 LLM 调用。仅重试可恢复错误,最大 max_retries 次。
+    
+    退避策略:base_delay * 2^attempt(1s → 2s → 4s)
+    """
+    import asyncio as _aio
+    last_exc = None
+    for attempt in range(max_retries + 1):  # 0..max_retries,首次 attempt=0 不算重试
+        try:
+            return await llm_runnable.ainvoke(messages)
+        except Exception as exc:
+            last_exc = exc
+            if not is_retryable_error(exc) or attempt == max_retries:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "LLM 调用失败(第 %d/%d 次重试),%ss 后重试: %s: %s",
+                attempt + 1, max_retries, delay, type(exc).__name__, exc,
+            )
+            await _aio.sleep(delay)
+    raise last_exc  # 理论上不会到这里

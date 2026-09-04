@@ -12,7 +12,10 @@ class ChatSession(Base):
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    paper_id = Column(String(36), ForeignKey("papers.id", ondelete="CASCADE"), nullable=False)
+    paper_id = Column(String(36), ForeignKey("papers.id", ondelete="CASCADE"), nullable=True)
+    project_id = Column(
+        String(36), ForeignKey("research_projects.id", ondelete="CASCADE"), nullable=True
+    )
     title = Column(String(200), default="新对话")  # 会话标题，默认取第一个问题
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -20,10 +23,12 @@ class ChatSession(Base):
     __table_args__ = (
         Index('idx_chat_sessions_user', user_id),
         Index('idx_chat_sessions_paper', paper_id),
+        Index('idx_chat_sessions_project', project_id),
     )
     
     user = relationship("User", back_populates="chat_sessions")
     paper = relationship("Paper", back_populates="chat_sessions")
+    project = relationship("ResearchProject", back_populates="chat_sessions")
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.order_index")
 
 

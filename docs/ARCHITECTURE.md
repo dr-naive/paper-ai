@@ -26,14 +26,16 @@ PaperAI 是前后端分离应用：
 - `app.api.auth.router`，前缀 `/api/auth`
 - `app.api.papers.router`，前缀 `/api/v1/papers`
 - `app.api.chat.router`，前缀 `/api/v1/chat`
+- `app.api.paper_analysis.router`，前缀 `/api/v1/papers`（问答、解读、摘要）
 
 ## 后端模块
 
 `backend/app/api/`
 
 - `auth.py`：注册、登录、JWT 签发、当前用户读取。
-- `papers.py`：论文上传、列表、详情、PDF 文件、章节、任务状态、删除、问答、解读、结构化摘要。
-- `chat.py`：对话会话、会话消息、会话内问答、摘要缓存、解读缓存。
+- `papers.py`：论文上传、列表、详情、PDF 文件、章节、任务状态、删除。
+- `chat.py`：对话会话、会话消息、流式问答、摘要缓存、解读缓存。
+- `paper_analysis.py`：论文问答（agent 路径 + 旧 workflow fallback）、解读、结构化摘要。
 
 `backend/app/models/`
 
@@ -41,13 +43,28 @@ PaperAI 是前后端分离应用：
 - `paper.py`：论文、章节、问答、表格、图片；遗留的笔记/文件夹模型未挂载为业务 API。
 - `chat.py`：聊天会话、聊天消息、摘要缓存、解读缓存。
 
-`backend/app/agent/`
+`backend/app/harness/`（Agent 运行时层，与 API 网关解耦）
+
+- `agents/lead_agent.py`：主 Agent，ReAct loop + 意图分析 + 多意图分解 + 流式输出。
+- `agents/interpret_agent.py`：解读 Agent，调用 search_paper_content tool 并生成带 [Sx] 引用的结构化解读。
+- `agents/critique_subagent.py`：批判性分析子 Agent（审稿意见、创新性评估）。
+- `skills/registry.py`：Skill 注册与 tool 加载。
+- `tools/paper_internal.py`：论文内部检索 tool（元数据、正文、表格）。
+- `tools/external_literature.py`：外部文献检索 tool（arXiv API、Semantic Scholar API）。
+- `tools/reading_assistant.py`：阅读辅助 tool（阅读进度、术语定义）。
+
+`backend/app/agent/`（离线处理 pipeline + 旧 QA fallback）
 
 - `paper_parser/graph.py`：论文元信息抽取、章节解析、解析结果整理。
-- `qa_agent/graph.py`：基础论文问答 Agent。
-- `qa_agent/enhanced_graph.py`：增强论文问答 Agent，包含意图识别、元信息回答、答案生成和后续问题生成。
+- `qa_agent/enhanced_graph.py`：追问生成（`generate_follow_up_questions`）和旧 QA fallback 入口（`run_enhanced_qa_agent`）。工具函数已迁移至 `utils/qa_helpers.py`。
+- `qa_agent/workflow.py`：确定性 QA workflow（`UnifiedQAWorkflow`），作为 agent 路径的 fallback。
 - `summarizer/graph.py`：结构化摘要 Agent，抽取概览、方法、实验、贡献。
-- `state.py`：Agent 状态类型。
+- `state.py`：Agent 状态类型（`QAAgentState`、`PaperParserState`、`SummarizerState`）。
+
+`backend/app/utils/`
+
+- `qa_helpers.py`：QA 工具函数（意图检测、引用构建、置信度计算），供 harness 和 api 层共用。
+- `background_tasks.py`、`task_manager.py`：后台任务管理。
 
 `backend/app/rag/knowledge_base.py`
 
