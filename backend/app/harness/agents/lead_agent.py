@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.harness.agents.critique_subagent import run_critique_subagent
 from app.harness.agents.routing import ExecutionMode, decide_agent_route
 from app.harness.skills.registry import SkillRegistry
-from app.harness.runtime.task_context import account
+from app.harness.runtime.task_context import account, observe_agent_tool
 from app.llm.client import get_llm_client, invoke_with_retry
 
 logger = logging.getLogger(__name__)
@@ -648,10 +649,10 @@ async def run_lead_agent(
         logger.info("lead_agent 迭代 %d/%d,question=%s", iteration, max_iterations, question[:50])
 
         try:
-            # The worker owns the durable budget counter.  The contextvar is
-            # unset for legacy calls, so this keeps the old path unchanged.
-            await account('model_call', {'iteration': iteration})
             if on_token is not None:
+                # Streaming does not use invoke_with_retry, so account for
+                # this model call at the Lead Agent boundary.
+                await account('model_call', {'iteration': iteration})
                 # 流式模式:用 astream,边接收边推送 content 增量
                 from langchain_core.messages import AIMessageChunk
                 full_chunk: Optional[AIMessageChunk] = None
@@ -710,6 +711,13 @@ async def run_lead_agent(
             }
             trace.tool_calls.append(tool_trace_entry)
 
+            tool_call_id_for_trace = uuid.uuid4().hex
+            await observe_agent_tool('started', {
+                'call_id': tool_call_id_for_trace,
+                'tool_name': tool_name,
+                'arguments': tool_args,
+            })
+
             if task_scope is not None:
                 try:
                     task_scope.check(tool_name, tool_args, len(trace.tool_calls))
@@ -717,6 +725,12 @@ async def run_lead_agent(
                 except PermissionError as exc:
                     tool_trace_entry['error_code'] = str(exc)
                     await task_scope.checkpoint('scope_rejected', {'code': str(exc), 'tool': tool_name})
+                    await observe_agent_tool('finished', {
+                        'call_id': tool_call_id_for_trace,
+                        'status': 'failed',
+                        'error_code': 'SKILL_TOOL_FORBIDDEN' if 'SKILL_TOOL_FORBIDDEN' in str(exc) else 'TOOL_CONTEXT_FORBIDDEN',
+                        'result_summary': str(exc),
+                    })
                     messages.append(ToolMessage(content=str(exc), tool_call_id=tool_call_id))
                     continue
             if tool_name not in tool_map:
@@ -768,11 +782,25 @@ async def run_lead_agent(
                                 pass
                 except Exception as exc:
                     tool_result = f"工具执行失败: {type(exc).__name__}: {exc}"
+                    tool_trace_entry['error_code'] = (
+                        'TOOL_INPUT_INVALID'
+                        if 'validation' in type(exc).__name__.lower() or 'invalid' in str(exc).lower()
+                        else 'TOOL_EXECUTION_FAILED'
+                    )
                     logger.exception("lead_agent 调用 tool %s 失败", tool_name)
 
             tool_trace_entry["elapsed_ms"] = round(
                 (time.perf_counter() - tool_started_at) * 1000, 3
             )
+            await observe_agent_tool('finished', {
+                'call_id': tool_call_id_for_trace,
+                'status': 'completed' if tool_trace_entry['ok'] else 'failed',
+                'error_code': tool_trace_entry.get('error_code') or (
+                    'TOOL_NOT_FOUND' if tool_name not in tool_map else None
+                ),
+                'result_summary': str(tool_result)[:2000],
+                'duration_ms': tool_trace_entry['elapsed_ms'],
+            })
             messages.append(
                 ToolMessage(content=str(tool_result), tool_call_id=tool_call_id)
             )

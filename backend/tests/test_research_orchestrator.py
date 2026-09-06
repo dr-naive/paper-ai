@@ -368,19 +368,28 @@ def test_additive_migration_preserves_historical_execution():
         spec = importlib.util.spec_from_file_location('migration', Path(__file__).parents[1] / 'alembic/versions/0007_research_tasks.py')
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
+        observability_spec = importlib.util.spec_from_file_location(
+            'observability_migration',
+            Path(__file__).parents[1] / 'alembic/versions/0008_agent_runtime_observability.py',
+        )
+        observability_migration = importlib.util.module_from_spec(observability_spec)
+        observability_spec.loader.exec_module(observability_migration)
         def apply(conn, operation):
             with Operations.context(MigrationContext.configure(conn)):
                 operation()
         try:
             async with db_engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(apply, observability_migration.downgrade)
                 await conn.run_sync(apply, migration.downgrade)
                 await conn.execute(text("INSERT INTO users (id, username, email, password_hash) VALUES ('u', 'u', 'u@example.invalid', 'x')"))
                 await conn.execute(text("INSERT INTO agent_executions (id, user_id, agent_type, goal, input_payload, status, runtime_version, max_tool_calls, max_model_calls, max_tokens, max_seconds, tool_call_count, model_call_count, input_tokens, output_tokens, created_at, updated_at) VALUES ('old', 'u', 'writing_generate', 'old goal', '{}', 'paused', 'v2', 30, 20, 100000, 1800, 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
                 await conn.run_sync(apply, migration.upgrade)
+                await conn.run_sync(apply, observability_migration.upgrade)
                 row = (await conn.execute(text("SELECT status, plan_version, plan, input_payload FROM agent_executions WHERE id='old'"))).one()
                 assert row.status == 'paused' and row.plan_version == 0 and row.plan is None and row.input_payload == {}
                 assert await conn.scalar(text('SELECT count(*) FROM research_tasks')) == 0
+                assert await conn.scalar(text('SELECT count(*) FROM model_calls')) == 0
         finally:
             await db_engine.dispose()
             async with admin.begin() as conn:

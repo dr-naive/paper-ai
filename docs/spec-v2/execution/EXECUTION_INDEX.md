@@ -19,14 +19,88 @@ Do not read all active specifications by default. Do not read
 
 ## Current Phase
 
-Phase 24 — Project Execution Lifecycle Closure.
+Phase 25 — Agent Evaluation & Observability.
 
 ## Current Implementation Block
 
-LIFE-1 — close legacy project Reading/Writing lifecycles into GoalExecution.
+EVAL-OBS-1 — add internal Agent Runtime evaluation and observability on the
+existing GoalExecution/ResearchTask/Worker path.
 
-LIFE-1 status: COMPLETE. The acceptance gate passed locally; no next block is
-selected. Read the completed boundary below when extending this lifecycle.
+EVAL-OBS-1 status: COMPLETE. This block adds task/skill/model/tool trace
+correlation, deterministic runtime metrics, failure taxonomy, duplicate-action
+observation, and an extension to the existing evaluation dashboard. It does
+not add a user-facing Agent Center, a second runtime, an LLM judge, or a new
+execution lifecycle.
+
+## EVAL-OBS-1 Reading Boundary
+
+- `backend/app/models/execution.py`
+- `backend/app/harness/runtime/tool_runtime.py`
+- `backend/app/harness/runtime/task_context.py`
+- `backend/app/harness/runtime/task_scope.py`
+- `backend/app/harness/runtime/skill_runtime.py`
+- `backend/app/harness/agents/lead_agent.py`
+- `backend/app/llm/client.py`
+- `backend/app/application/research_task_worker.py`
+- `backend/app/application/research_task_executors.py`
+- `backend/app/application/research_orchestrator.py`
+- `backend/app/research/task_contracts.py`
+- `backend/alembic/versions/0008_agent_runtime_observability.py`
+- `backend/evals/agent_runtime_metrics.py`
+- `backend/evals/run_agent_runtime_report.py`
+- `backend/evals/build_dashboard.py`
+- `backend/tests/test_agent_runtime_observability.py`
+- `backend/tests/test_database_migrations.py`
+- `backend/tests/test_eval_dashboard.py`
+- `backend/tests/test_execution_runtime.py`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Acceptance boundary:
+
+- Existing `AgentExecution` remains the single execution lifecycle and old
+  rows remain readable; `ToolCall` gains nullable task/skill correlation and
+  `ModelCall` is added as a durable, prompt-free call trace.
+- ResearchTask Lead Agent calls are observable through the existing worker
+  context; instant legacy paths may remain uninstrumented.
+- The generic report reads real PostgreSQL rows and computes execution, task,
+  tool, model, budget, duplicate and deterministic failure metrics without a
+  quality score or LLM judge.
+- The existing Writing evaluator and dashboard remain compatible; the
+  dashboard gains an internal Agent Runtime section only.
+- Deterministic fixtures cover persistence, aggregation, slices, retries,
+  duplicate detection, failure taxonomy, empty data, migration compatibility
+  and the current Writing evaluator regression.
+
+## LIFE-1 Reading Boundary
+
+- `backend/app/api/projects.py`
+- `backend/app/api/executions.py`
+- `backend/app/application/reading_execution_service.py`
+- `backend/app/application/research_orchestrator.py`
+- `backend/app/application/research_planning.py`
+- `backend/app/application/research_task_worker.py`
+- `backend/app/application/research_task_executors.py`
+- `backend/app/worker.py`
+- `backend/app/harness/agents/lead_agent.py`
+- `backend/app/api/chat.py`
+- `backend/app/api/documents.py`
+- `backend/app/application/writing_service.py`
+- `backend/tests/test_research_orchestrator.py`
+- `backend/tests/test_execution_runtime.py`
+- `backend/tests/test_project_contracts.py`
+- `backend/tests/test_project_router_structure.py`
+- `backend/tests/test_agent_routing.py`
+- `frontend/src/api/executions.ts`
+- `frontend/src/api/projects.ts`
+- `frontend/src/stores/executions.ts`
+- `frontend/src/components/GlobalTaskCenter.vue`
+- `frontend/src/components/project/WritingDocumentEditor.vue`
+- `frontend/src/views/ProjectPapers.vue`
+- related frontend tests
+- `docs/API.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
 
 ## LIFE-1 Reading Boundary
 

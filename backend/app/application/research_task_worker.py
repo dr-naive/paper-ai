@@ -1,19 +1,42 @@
 """Existing WorkerJob handler for one persisted business task."""
 import asyncio
 import hashlib
+from datetime import datetime
 from sqlalchemy import select, text
 from app.database import AsyncSessionLocal, engine
-from app.models.execution import AgentExecution, ResearchTask
+from app.models.execution import AgentExecution, ModelCall, ResearchTask, ToolCall
 from app.models.project import ResearchProject
 from app.research.task_contracts import TaskResult, TaskError, transition, transition_execution, TERMINAL
 from app.application.research_orchestrator import ResearchOrchestrator
 from app.application.execution_service import append_event, get_control, save_checkpoint
 
-from app.harness.runtime.task_context import current_task_id, current_task_progress
+from app.harness.runtime.task_context import (
+    current_agent_tool_observer,
+    current_model_call_observer,
+    current_task_id,
+    current_task_progress,
+    current_task_skill_id,
+)
 
 
 class TaskInterrupted(Exception):
     pass
+
+
+_KNOWN_RUNTIME_ERROR_CODES = (
+    'TOOL_INPUT_INVALID', 'TOOL_TIMEOUT', 'TOOL_EXECUTION_FAILED',
+    'TOOL_CONTEXT_FORBIDDEN', 'SKILL_TOOL_FORBIDDEN',
+    'SKILL_TOOL_BUDGET_EXCEEDED', 'SKILL_EXTERNAL_SEARCH_BUDGET_EXCEEDED',
+    'SKILL_PAPER_BUDGET_EXCEEDED', 'TASK_SKILL_BUDGET_EXCEEDED',
+    'TOOL_BUDGET_EXCEEDED', 'MODEL_BUDGET_EXCEEDED',
+    'TOKEN_BUDGET_EXCEEDED', 'TIME_BUDGET_EXCEEDED',
+)
+
+
+def _runtime_error_code(exc: Exception) -> str:
+    message = str(exc)
+    return next((code for code in _KNOWN_RUNTIME_ERROR_CODES if code in message),
+                getattr(exc, 'code', None) or type(exc).__name__)
 
 
 async def run_task(job):
@@ -106,8 +129,86 @@ async def _execute(job):
             if stage == 'scope_rejected':
                 await append_event(db, execution, 'task_scope_rejected', '操作超出当前任务范围，已拒绝', data=data)
 
+        model_rows = {}
+        model_call_index = execution.model_call_count
+
+        async def observe_model_call(stage, data):
+            """Persist prompt-free model traces for this ResearchTask only."""
+            nonlocal model_call_index
+            call_id = data.get('call_id')
+            if not call_id:
+                return
+            if stage == 'started':
+                model_call_index += 1
+                row = ModelCall(
+                    id=call_id,
+                    execution_id=execution.id,
+                    task_id=task.task_id,
+                    skill_id=task.skill_id,
+                    call_index=model_call_index,
+                    model=str(data.get('model') or 'unknown'),
+                    provider=data.get('provider'),
+                    purpose=str(data.get('purpose') or 'agent_model_call'),
+                    status='running',
+                    started_at=datetime.utcnow(),
+                )
+                model_rows[call_id] = row
+                db.add(row)
+                await db.flush()
+                return
+            row = model_rows.get(call_id)
+            if row is None:
+                return
+            row.status = str(data.get('status') or 'failed')
+            row.input_tokens = data.get('input_tokens')
+            row.output_tokens = data.get('output_tokens')
+            row.duration_ms = data.get('duration_ms')
+            row.error_code = data.get('error_code')
+            row.completed_at = datetime.utcnow()
+            await db.commit()
+
+        tool_rows = {}
+        tool_step_index = execution.tool_call_count
+
+        async def observe_agent_tool(stage, data):
+            """Persist Lead Agent tool traces through the existing ToolCall table."""
+            nonlocal tool_step_index
+            call_id = data.get('call_id')
+            if not call_id:
+                return
+            if stage == 'started':
+                tool_step_index += 1
+                row = ToolCall(
+                    id=call_id,
+                    execution_id=execution.id,
+                    task_id=task.task_id,
+                    skill_id=task.skill_id,
+                    step_index=tool_step_index,
+                    tool_name=str(data.get('tool_name') or 'unknown'),
+                    tool_version='lead-agent',
+                    arguments=data.get('arguments') or {},
+                    side_effect_level='none',
+                    status='running',
+                    started_at=datetime.utcnow(),
+                )
+                tool_rows[call_id] = row
+                db.add(row)
+                await db.flush()
+                return
+            row = tool_rows.get(call_id)
+            if row is None:
+                return
+            row.status = 'completed' if data.get('status') == 'completed' else 'failed'
+            row.result_summary = str(data.get('result_summary') or '')[:2000]
+            row.error_code = data.get('error_code')
+            row.completed_at = datetime.utcnow()
+            await db.commit()
+
         token = current_task_id.set(task.task_id)
+        skill_token = current_task_skill_id.set(task.skill_id)
         progress_token = current_task_progress.set(progress)
+        model_observer_token = current_model_call_observer.set(observe_model_call)
+        tool_observer_token = current_agent_tool_observer.set(observe_agent_tool)
         try:
             result = await asyncio.wait_for(TaskExecutors(db, execution, task, progress).execute(), execution.max_seconds)
         except TaskInterrupted:
@@ -138,11 +239,14 @@ async def _execute(job):
             await db.refresh(execution)
             await db.refresh(task)
             result = TaskResult(task_id=task.task_id, status='failed', output_refs=task.output_refs or [],
-                error=TaskError(code=getattr(exc, 'code', type(exc).__name__), message=str(exc)[:1000],
+                error=TaskError(code=_runtime_error_code(exc), message=str(exc)[:1000],
                                 retryable=not isinstance(exc, (ValueError, PermissionError, LookupError))))
         finally:
             current_task_id.reset(token)
+            current_task_skill_id.reset(skill_token)
             current_task_progress.reset(progress_token)
+            current_model_call_observer.reset(model_observer_token)
+            current_agent_tool_observer.reset(tool_observer_token)
         await orchestrator.complete(execution, task, result)
         if task.status == 'retrying':
             raise RuntimeError(task.error_code or 'TASK_RETRY')

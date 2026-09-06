@@ -61,11 +61,22 @@ def test_runtime_head_points_to_evidence_verification_revision():
 def test_runtime_head_points_to_execution_io_revision():
     revision = BACKEND_DIR / "alembic" / "versions" / "0006_execution_io_add_execution_input_and_result.py"
     source = revision.read_text(encoding="utf-8")
-    assert ALEMBIC_HEAD_REVISION == "0007_research_tasks"
+    assert ALEMBIC_HEAD_REVISION == "0008_agent_runtime_observability"
     assert 'revision: str = "0006_execution_io"' in source
     assert 'down_revision: Union[str, None] = "0005_evidence_verification"' in source
     assert '"input_payload"' in source
     assert '"result_payload"' in source
+
+
+def test_agent_runtime_observability_migration_is_additive():
+    revision = BACKEND_DIR / "alembic" / "versions" / "0008_agent_runtime_observability.py"
+    source = revision.read_text(encoding="utf-8")
+    assert 'revision: str = "0008_agent_runtime_observability"' in source
+    assert 'down_revision: Union[str, None] = "0007_research_tasks"' in source
+    assert 'op.add_column("tool_calls"' in source
+    assert '"task_id"' in source and '"skill_id"' in source
+    assert 'op.create_table(' in source and '"model_calls"' in source
+    assert 'ondelete="SET NULL"' in source
 
 
 def test_schema_check_loads_every_current_model_family():

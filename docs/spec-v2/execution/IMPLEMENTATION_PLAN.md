@@ -2,6 +2,41 @@
 
 Status: COMPLETE
 
+## Phase 25 — Agent Evaluation & Observability
+
+EVAL-OBS-1 is one coherent internal engineering block. Reuse the existing
+AgentExecution, ResearchTask, ToolCall, Redis Queue, Worker, checkpoint,
+retry, trace and Skill Runtime paths. Add only the durable correlation and
+metrics needed to answer how the current runtime actually executes: which
+tasks succeed, which tools fail or repeat, how model calls and budgets behave,
+and where deterministic failure categories occur.
+
+The block must keep old executions readable, preserve the existing Writing
+evaluator, avoid chain-of-thought and full prompts, avoid an LLM judge and
+avoid any product-facing Agent Center or Tool/Skill UI. The report is a
+developer/evaluation artifact and the existing dashboard is extended rather
+than duplicated.
+
+Acceptance: migration `0008_agent_runtime_observability`; nullable ToolCall
+task/skill correlation; durable ResearchTask ModelCall trace; deterministic
+runtime report and failure taxonomy; duplicate-action observation; dashboard
+Agent Runtime section; and focused persistence, aggregation, migration,
+retry, blocked/waiting, budget, dashboard and Writing-evaluator regression
+tests. Record actual coverage and any uninstrumented paths in
+`IMPLEMENTATION_PROGRESS.md`.
+
+## Current Phase
+
+Phase 25 — Agent Evaluation & Observability.
+
+## Current Implementation Block
+
+EVAL-OBS-1 — completed. Backend `348 passed`, frontend `79 passed`, frontend
+typecheck/lint/build passed, targeted Ruff passed, migration head
+`0008_agent_runtime_observability` and schema preflight passed. The local
+database report command produced an explicit empty task sample; no real model
+credentials were used.
+
 ## Phase 24 — Project Execution Lifecycle Closure
 
 LIFE-1 is one coherent block: route project Reading and Writing through the
@@ -20,14 +55,6 @@ LIFE-1 acceptance result: COMPLETE. Backend `339 passed`, frontend `79 passed`,
 frontend typecheck/lint/build passed, targeted backend Ruff passed, and no
 database migration was required. See `IMPLEMENTATION_PROGRESS.md` for the
 actual compatibility boundaries and remaining risks.
-
-## Current Phase
-
-Phase 24 — Project Execution Lifecycle Closure.
-
-## Current Implementation Block
-
-LIFE-1 — completed; no next block selected.
 
 ## Phase 23 — Goal-driven Research Orchestration
 

@@ -28,7 +28,21 @@ def percentile(values: list[float], quantile: float) -> float:
     return round(ordered[lower] * (1 - weight) + ordered[upper] * weight, 2)
 
 
-def load_dashboard_data(reports_dir: Path, dataset_path: Path) -> dict[str, Any]:
+def load_agent_runtime_report(reports_dir: Path, report_path: Path | None = None) -> dict[str, Any] | None:
+    """Load the newest internal Agent Runtime report when one is available."""
+    candidate = report_path
+    if candidate is None:
+        reports = sorted(reports_dir.glob("agent_runtime_*.json"))
+        candidate = reports[-1] if reports else None
+    if candidate is None or not candidate.exists():
+        return None
+    report = json.loads(candidate.read_text(encoding="utf-8"))
+    report["source_file"] = candidate.name
+    return report
+
+
+def load_dashboard_data(reports_dir: Path, dataset_path: Path,
+                        agent_runtime_report: Path | None = None) -> dict[str, Any]:
     dataset = {
         row["id"]: row
         for line in dataset_path.read_text(encoding="utf-8").splitlines()
@@ -82,6 +96,7 @@ def load_dashboard_data(reports_dir: Path, dataset_path: Path) -> dict[str, Any]
         },
         "runs": runs,
         "e2e": e2e,
+        "agent_runtime": load_agent_runtime_report(reports_dir, agent_runtime_report),
     }
 
 
@@ -159,6 +174,11 @@ def render_html(data: dict[str, Any]) -> str:
       <div class="panel-head"><h2>端到端回答与引用</h2></div>
       <div id="e2eMetrics" class="metrics" style="padding:16px;margin:0"></div>
     </section>
+    <section id="agentRuntimePanel" class="panel" hidden>
+      <div class="panel-head"><h2>Agent Runtime 运行观测</h2><span id="agentRuntimeSource" class="meta"></span></div>
+      <div id="agentRuntimeMetrics" class="metrics" style="padding:16px;margin:0"></div>
+      <div id="agentRuntimeDetails" style="padding:0 16px 16px"></div>
+    </section>
     <section id="metrics" class="metrics" aria-label="核心指标"></section>
     <section class="panel"><div class="panel-head"><h2>版本对比</h2></div><div id="comparison" class="table-wrap"></div></section>
     <section class="panel"><div class="panel-head"><h2>切片表现</h2></div><div id="slices" class="table-wrap"></div></section>
@@ -182,6 +202,26 @@ def render_html(data: dict[str, Any]) -> str:
       const items=[['有效回答率',pct(s.valid_answer_rate)],['生成超时率',pct(s.timeout_rate)],['要点覆盖代理',pct(s.claim_coverage_proxy)],['引用原文支持率',pct(s.citation_precision)],['Gold 证据覆盖率',pct(s.citation_recall)],['页码一致率',pct(s.page_accuracy)],['拒答准确率',pct(s.abstention_accuracy)],['过度拒答率',pct(s.over_abstention_rate)],['无证据数字率',pct(s.unsupported_number_rate)],['关键幻觉率',pct(s.critical_hallucination_rate)],['P50 端到端',`${{num(s.p50_latency_ms)}} ms`],['P95 端到端',`${{num(s.p95_latency_ms)}} ms`]];
       document.querySelector('#e2ePanel').hidden=false;
       document.querySelector('#e2eMetrics').innerHTML=items.map(([label,value])=>`<div class="metric"><span>${{label}}</span><strong>${{value}}</strong></div>`).join('');
+    }}
+    function renderAgentRuntime() {{
+      const report = DATA.agent_runtime;
+      if (!report) return;
+      const s = report.summary || {{}}, b = s.budget || {{}};
+      const failure = report.failures && report.failures.failure_reason_distribution || {{}};
+      const items = [
+        ['Task Success Rate', pct(s.task_success_rate)],
+        ['Tool Failure Rate', pct(s.failure_rate)],
+        ['重复调用率', pct(s.duplicate_rate)],
+        ['平均调用/任务', num(s.calls_per_task)],
+        ['平均 Token/任务', num((s.avg_input_tokens_per_task || 0) + (s.avg_output_tokens_per_task || 0))],
+        ['平均预算使用率', pct(b.avg_token_utilization)],
+      ];
+      document.querySelector('#agentRuntimePanel').hidden = false;
+      document.querySelector('#agentRuntimeSource').textContent = report.source_file || '';
+      document.querySelector('#agentRuntimeMetrics').innerHTML = items.map(([label,value]) => `<div class="metric"><span>${{label}}</span><strong>${{value}}</strong></div>`).join('');
+      const failureRows = Object.entries(failure).map(([name,count]) => `<tr><td>${{esc(name)}}</td><td class="num">${{count}}</td></tr>`).join('');
+      const details = (report.failures && report.failures.details || []).slice(0, 30).map(item => `<tr><td>${{esc(item.reason)}}</td><td>${{esc(item.execution_id)}}</td><td>${{esc(item.task_id || '—')}}</td><td>${{esc(item.trace_id || '—')}}</td><td>${{esc(item.error_code || '—')}}</td></tr>`).join('');
+      document.querySelector('#agentRuntimeDetails').innerHTML = `<h3>失败分类</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>次数</th></tr></thead><tbody>${{failureRows || '<tr><td colspan="2">暂无失败记录</td></tr>'}}</tbody></table></div><h3>失败追踪（最多 30 条）</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>Execution</th><th>Task</th><th>Trace</th><th>错误码</th></tr></thead><tbody>${{details || '<tr><td colspan="5">暂无可下钻记录</td></tr>'}}</tbody></table></div>`;
     }}
 
     function renderMetrics(run) {{
@@ -210,14 +250,15 @@ def render_html(data: dict[str, Any]) -> str:
     function render() {{ const run=DATA.runs[Number(runSelect.value)]; renderMetrics(run); renderSlices(run); renderCases(run); }}
     runSelect.addEventListener('change', render); statusFilter.addEventListener('change', () => renderCases(DATA.runs[Number(runSelect.value)]));
     runSelect.addEventListener('change', () => {{ statusFilter.value='all'; }});
-    renderComparison(); render();
+    renderComparison(); renderAgentRuntime(); render();
   </script>
 </body>
 </html>"""
 
 
-def build_dashboard(reports_dir: Path, dataset_path: Path, output: Path) -> None:
-    data = load_dashboard_data(reports_dir, dataset_path)
+def build_dashboard(reports_dir: Path, dataset_path: Path, output: Path,
+                    agent_runtime_report: Path | None = None) -> None:
+    data = load_dashboard_data(reports_dir, dataset_path, agent_runtime_report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render_html(data), encoding="utf-8")
 
@@ -227,8 +268,12 @@ def main() -> int:
     parser.add_argument("--reports-dir", default="evals/reports")
     parser.add_argument("--dataset", default="evals/datasets/paperqa_v1.jsonl")
     parser.add_argument("--output", default="evals/reports/dashboard.html")
+    parser.add_argument("--agent-runtime-report", help="指定内部 Agent Runtime 报告 JSON")
     args = parser.parse_args()
-    build_dashboard(Path(args.reports_dir), Path(args.dataset), Path(args.output))
+    build_dashboard(
+        Path(args.reports_dir), Path(args.dataset), Path(args.output),
+        Path(args.agent_runtime_report) if args.agent_runtime_report else None,
+    )
     print(f"评测面板已生成：{args.output}")
     return 0
 

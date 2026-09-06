@@ -25,6 +25,26 @@
 
 `silver` 是 AI 生成且通过程序硬校验的候选样本；`verified` 是人工确认过的 Gold 样本。Silver 可用于开发调试和扩充覆盖面，最终质量报告应优先使用 verified 样本。
 
+## Agent Runtime 运行观测
+
+Agent Runtime 报告读取 PostgreSQL 中已有的 `AgentExecution`、`ResearchTask`、
+`ToolCall` 和任务范围内的 `ModelCall`，只计算确定性运行事实，不做 LLM 评审，
+不读取完整提示词或推理内容。报告包含 Execution/Task/Skill/Executor 切片、
+Tool/Model 延迟与调用量、预算使用、同一任务内的重复成功工具调用及失败分类。
+
+在 `backend/` 目录运行：
+
+```bash
+python -m evals.run_agent_runtime_report \
+  --limit 1000 \
+  --output evals/reports/agent_runtime_manual.json
+```
+
+也支持 `--since`、重复传入 `--task-type` 和 `--skill-id`。默认输出为
+`evals/reports/agent_runtime_<timestamp>.json`，`sample_size` 会明确记录实际样本量。
+现有静态面板会自动加载最新的 `agent_runtime_*.json`；也可以用
+`--agent-runtime-report` 指定报告文件。
+
 ## 1. 查看当前可用于评测的论文
 
 在 `backend/` 目录运行：

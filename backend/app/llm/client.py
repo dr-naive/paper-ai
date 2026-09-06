@@ -336,6 +336,7 @@ async def invoke_with_retry(
     *,
     max_retries: int = 3,
     base_delay: float = 1.0,
+    purpose: str = "agent_model_call",
 ):
     """带指数退避的 LLM 调用。仅重试可恢复错误,最大 max_retries 次。
     
@@ -344,14 +345,49 @@ async def invoke_with_retry(
     import asyncio as _aio
     last_exc = None
     for attempt in range(max_retries + 1):  # 0..max_retries,首次 attempt=0 不算重试
+        call_id = uuid.uuid4().hex
+        call_started = time.perf_counter()
+        model_name = getattr(llm_runnable, "model_name", None)
+        bound = getattr(llm_runnable, "bound", None)
+        model_name = model_name or getattr(bound, "model_name", None) or getattr(bound, "model", None) or "unknown"
+        provider = getattr(settings, "LLM_PROVIDER", None)
+        from app.harness.runtime.task_context import observe_model_call
+        await observe_model_call("started", {
+            "call_id": call_id,
+            "call_index": attempt + 1,
+            "model": str(model_name),
+            "provider": provider,
+            "purpose": purpose,
+        })
         try:
             from app.harness.runtime.task_context import account
             await account('model_call')
             response = await llm_runnable.ainvoke(messages)
-            await account('token_usage', (getattr(response, 'response_metadata', None) or {}).get('token_usage', {}))
+            usage = (getattr(response, 'response_metadata', None) or {}).get('token_usage', {})
+            await observe_model_call("finished", {
+                "call_id": call_id,
+                "status": "completed",
+                "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+                "output_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+                "duration_ms": round((time.perf_counter() - call_started) * 1000),
+            })
+            await account('token_usage', usage)
             return response
         except Exception as exc:
             last_exc = exc
+            message = str(exc).upper()
+            if "BUDGET_EXCEEDED" in message:
+                error_code = next((code for code in (
+                    "MODEL_BUDGET_EXCEEDED", "TOKEN_BUDGET_EXCEEDED", "TIME_BUDGET_EXCEEDED",
+                ) if code in message), "MODEL_BUDGET_EXCEEDED")
+            else:
+                error_code = "MODEL_CALL_TIMEOUT" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else "MODEL_CALL_FAILED"
+            await observe_model_call("finished", {
+                "call_id": call_id,
+                "status": "failed",
+                "error_code": error_code,
+                "duration_ms": round((time.perf_counter() - call_started) * 1000),
+            })
             if not is_retryable_error(exc) or attempt == max_retries:
                 raise
             delay = base_delay * (2 ** attempt)

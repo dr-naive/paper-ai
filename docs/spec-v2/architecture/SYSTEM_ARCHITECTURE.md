@@ -236,6 +236,12 @@ ResearchTask 则必须传入 `TaskScope`：只加载当前 Skill 的工具，只
 在每次 ToolCall 前检查权限与预算，并以结构化 TaskResult 返回。Goal 场景下 Lead Agent 不规划
 整个 Execution、不创建无关 Task，也不推进生命周期。
 
+ResearchTask 的 Lead Agent 调用由 Worker 上下文关联到当前 `task_id` 和
+`skill_id`。每次模型调用只记录无提示词的 `ModelCall` 元数据（模型、用途、
+token、状态、耗时和错误码）；工具调用继续复用 `ToolCall`，任务执行时补充
+可空的任务/Skill 关联。即时旧路径可以没有这两类关联，但不得把完整提示词、
+原始推理或密钥写入观测数据。
+
 ### Tool Runtime
 
 现有 Tool Runtime 是 V1 复用资产。
@@ -497,6 +503,9 @@ ResearchExecution (AgentExecution)
 | Skill | Task 的输入、产物、Tool 白名单、预算和 completion criteria 约束 |
 | Tool | 原子、类型化、权限分类、超时和 ownership 校验的操作 |
 | Artifact / Evidence | 可被后续任务通过结构化引用复用的项目产物 |
+| ModelCall | ResearchTask 范围内的无提示词模型调用事实记录 |
+| ToolCall | 原子工具调用事实记录；可关联 ResearchTask/Skill，不是业务任务 |
+| Agent Runtime 报告 | 从 PostgreSQL Execution/Task/ToolCall/ModelCall 聚合的开发评测产物 |
 
 第一版任务类型只包括 `DISCOVER`、`IMPORT_PAPER`、`READ_PAPER`、`BUILD_EVIDENCE`、
 `WRITE_SECTION`、`AUDIT_DRAFT`；ToolCall 不拆成 ResearchTask。确定性搜索过滤、导入、解析/索引、
@@ -506,6 +515,20 @@ Workflow/Service/Deterministic executor 负责，Agent 只处理语义判断、�
 恢复从 PostgreSQL 中的 Plan 与 Task 状态继续，绝不因为重启重新规划；重复 queue 消息通过稳定
 task/artifact ID、Project advisory lock 和输出复用保持幂等。用户确认论文列表时，等待输入、schema、
 候选上下文和对应 Task 均保存在当前 Execution 上，响应后恢复同一链路。
+
+### 15.2 Agent Evaluation & Observability
+
+内部观测不改变上述生命周期，也不新增 Agent Runtime。`backend/evals` 的通用
+报告只做确定性聚合：Execution/Task 成功与失败率、Skill/Executor/Task 类型
+切片、Tool/Model 延迟与调用量、预算使用、同一 ResearchTask 内的重复成功
+ToolCall，以及可由错误码直接映射的失败分类。重试后的失败调用不会被误报为
+重复动作；没有稳定证据的分类记为 `UNKNOWN`。
+
+报告包含样本量和可下钻的 `execution_id`、`task_id`、`trace_id`，不包含完整
+prompt、chain-of-thought、认证信息或原始 Provider payload。现有 Writing
+`execution_trace_report()` / `evaluate_execution_trace()` 仍是 Writing 专用评估
+入口，Agent Runtime 报告只扩展运行事实，不替换或复制它。现有静态评测面板
+仅增加开发/评测用 Agent Runtime 区块，不进入产品导航。
 
 ### 项目级 Goal 与即时交互边界
 

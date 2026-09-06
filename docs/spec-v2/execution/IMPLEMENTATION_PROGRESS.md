@@ -4,19 +4,123 @@ Status: COMPLETE
 
 ## Current State
 
-Current Phase: Phase 24 — Project Execution Lifecycle Closure
+Current Phase: Phase 25 — Agent Evaluation & Observability
 
-Current Implementation Block: LIFE-1
+Current Implementation Block: EVAL-OBS-1
 
 Current Block Status: COMPLETE
 
-Last Completed Phase: Phase 24 — Project Execution Lifecycle Closure
+Baseline commit: `f579d0e` (`完善项目阅读写作执行链路`).
 
-Last Completed Implementation Block: LIFE-1 — Project Reading/Writing
-Lifecycle Closure
+Target migration: `0008_agent_runtime_observability`.
 
-Last Completed Implementation Commit: 当前本地提交 — 完善项目阅读写作执行链路。
-Baseline commit was `90cedc1`; exact commit ID is the current Git HEAD.
+End state: EVAL-OBS-1 is complete in the local worktree; the final local
+commit is recorded by Git after this ledger update. No remote push was made.
+
+Actual files changed:
+
+- `backend/alembic/versions/0008_agent_runtime_observability.py`
+- `backend/app/models/execution.py`
+- `backend/app/infrastructure/db/migrations.py`
+- `backend/app/application/research_task_worker.py`
+- `backend/app/harness/runtime/task_context.py`
+- `backend/app/harness/runtime/tool_runtime.py`
+- `backend/app/harness/agents/lead_agent.py`
+- `backend/app/llm/client.py`
+- `backend/evals/agent_runtime_metrics.py`
+- `backend/evals/run_agent_runtime_report.py`
+- `backend/evals/build_dashboard.py`
+- `backend/evals/README.md`
+- `backend/tests/test_agent_runtime_observability.py`
+- `backend/tests/test_database_migrations.py`
+- `backend/tests/test_research_orchestrator.py`
+- `backend/tests/test_eval_dashboard.py`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Database changes: additive Alembic migration `0008_agent_runtime_observability`
+adds nullable `tool_calls.task_id` and `tool_calls.skill_id`, a nullable task
+foreign key with `SET NULL`, a task-step index, and durable `model_calls` with
+execution/task/Skill correlation, call index, model/provider/purpose, token
+counts, status, timestamps, duration, error code and optional prompt version.
+Historical ToolCall and AgentExecution rows remain readable. The current
+database reports `0008_agent_runtime_observability (head)` and schema preflight
+`compatible: true`.
+
+Core call-chain changes: the existing ResearchTask Worker sets task/Skill
+ContextVars; task-scoped `invoke_with_retry` records prompt-free ModelCall
+start/finish events; the Lead Agent records its existing tool dispatches into
+the existing ToolCall table with task/Skill correlation; the generic
+ToolRuntime persists rejected attempts and authoritative context fields. The
+new CLI reads these existing PostgreSQL tables and produces deterministic
+runtime metrics. ResearchOrchestrator, Queue, WorkerJob, TaskResult and the
+Writing evaluator lifecycle were not replaced.
+
+Metrics and coverage: the report includes execution status/duration rates,
+task success/partial/failure/retry and slices by task type/Skill/executor,
+Tool success/failure/timeout/input-invalid/latency/calls-per-task,
+Model calls/tokens/errors/latency, budget utilization and near-budget task
+lists, same-task duplicate successful actions, stable failure taxonomy and
+execution/task/trace drilldown. The tested taxonomy covers argument error,
+timeout, tool failure, scope violation, budget exceeded, duplicate action,
+incomplete task and `UNKNOWN`. The live empty sample had
+`UNKNOWN=0`; deterministic fixtures cover non-zero classifications.
+
+Three target chains: existing deterministic integration coverage for
+`READ_PAPERS`, `WRITE_SECTION` and `DISCOVER_AND_IMPORT` remains green through
+the Orchestrator test scenarios (`adapter_read`, `adapter_write`,
+`adapter_build`, `adapter_discover`) and the complete backend suite. This
+observability block adds no new Goal lifecycle or product entry point.
+
+Reused old capabilities: AgentExecution cumulative counters, ResearchTask,
+Redis Queue/WorkerJob retry and dead-letter behavior, checkpoint/recovery,
+TaskScope, Skill Runtime, existing Lead Agent, Writing workflow, Writing
+trace evaluator, existing static evaluation dashboard and schema preflight.
+
+Deleted/deprecated logic: none. No PaperQA/Citation evaluator, old execution
+state, Goal lifecycle, RAG or product UI was removed.
+
+Tests and checks:
+
+- backend complete suite: `348 passed`;
+- focused observability/migration/dashboard/runtime tests: `20 passed`;
+- targeted backend Ruff: passed;
+- frontend complete suite: `79 passed` across 19 files;
+- frontend typecheck and lint: passed;
+- frontend production build and backend/worker/frontend image builds: passed;
+- real report command: generated JSON with sample size
+  `executions=5, tasks=0, tool_calls=0, model_calls=0, failure_records=0`;
+- migration current and schema preflight: passed.
+
+Uncovered paths and remaining risks: instant Reader/Chat and legacy
+`LLMClient.agenerate` workflow calls may remain without fine-grained ModelCall
+rows by design; their existing AgentExecution counters remain available.
+The local database had no ResearchTask trace rows, so live provider/model
+behavior and real Lead Agent trace volume were not validated. External model
+credentials were not used. No frontend Agent Runtime product UI was added.
+
+Required report command: `cd backend && python -m evals.run_agent_runtime_report`.
+
+Exact next action: none for EVAL-OBS-1. A future block may instrument the
+remaining compatible `agenerate` paths if their trace coverage becomes a
+requirement. Remote push still requires a separate Chinese description and
+explicit user approval.
+
+## Completed Block — EVAL-OBS-1
+
+Goal achieved: the first internal Agent Evaluation & Observability block is
+complete without adding a second Agent Runtime, user Agent Center, LLM judge,
+chain-of-thought storage or a parallel execution lifecycle.
+
+Last Completed Phase: Phase 25 — Agent Evaluation & Observability
+
+Last Completed Implementation Block: EVAL-OBS-1 — Agent Evaluation &
+Observability
+
+Last Completed Implementation Commit: 当前本地提交 — 完成 Agent 运行评测与观测。
+Baseline commit was `f579d0e`; exact local commit ID is the current Git HEAD.
 
 ## Completed Block — LIFE-1
 

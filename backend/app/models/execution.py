@@ -56,6 +56,7 @@ class AgentExecution(Base):
 
     events = relationship("AgentEvent", back_populates="execution", cascade="all, delete-orphan")
     tool_calls = relationship("ToolCall", back_populates="execution", cascade="all, delete-orphan")
+    model_calls = relationship("ModelCall", back_populates="execution", cascade="all, delete-orphan")
     research_tasks = relationship("ResearchTask", back_populates="execution", cascade="all, delete-orphan")
 
 
@@ -83,11 +84,16 @@ class ToolCall(Base):
     __tablename__ = "tool_calls"
     __table_args__ = (
         Index("idx_tool_calls_execution_step", "execution_id", "step_index"),
+        Index("idx_tool_calls_task_step", "task_id", "step_index"),
         UniqueConstraint("execution_id", "idempotency_key", name="uq_tool_calls_execution_idempotency"),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     execution_id = Column(String(36), ForeignKey("agent_executions.id", ondelete="CASCADE"), nullable=False)
+    # Nullable keeps historical instant-agent ToolCall rows compatible.  The
+    # ResearchTask worker supplies these values for task-scoped execution.
+    task_id = Column(String(36), ForeignKey("research_tasks.task_id", ondelete="SET NULL"), nullable=True)
+    skill_id = Column(String(120), nullable=True)
     step_index = Column(Integer, nullable=False)
     tool_name = Column(String(160), nullable=False)
     tool_version = Column(String(40), nullable=False, default="v1")
@@ -103,6 +109,7 @@ class ToolCall(Base):
     idempotency_key = Column(String(160), nullable=True)
 
     execution = relationship("AgentExecution", back_populates="tool_calls")
+    task = relationship("ResearchTask", back_populates="tool_calls")
 
 
 # Semantic aliases, deliberately the same mapper/table and status column.
@@ -138,3 +145,36 @@ class ResearchTask(Base):
     completed_at = Column(DateTime, nullable=True)
 
     execution = relationship("AgentExecution", back_populates="research_tasks")
+    tool_calls = relationship("ToolCall", back_populates="task")
+    model_calls = relationship("ModelCall", back_populates="task")
+
+
+class ModelCall(Base):
+    """Durable, prompt-free model call trace for task-scoped execution."""
+
+    __tablename__ = "model_calls"
+    __table_args__ = (
+        Index("idx_model_calls_execution_started", "execution_id", "started_at"),
+        Index("idx_model_calls_task_started", "task_id", "started_at"),
+        Index("idx_model_calls_skill_status", "skill_id", "status"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    execution_id = Column(String(36), ForeignKey("agent_executions.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(String(36), ForeignKey("research_tasks.task_id", ondelete="SET NULL"), nullable=True)
+    skill_id = Column(String(120), nullable=True)
+    call_index = Column(Integer, nullable=False)
+    model = Column(String(160), nullable=False, default="unknown")
+    provider = Column(String(80), nullable=True)
+    purpose = Column(String(120), nullable=False, default="agent_model_call")
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    status = Column(String(30), nullable=False, default="running")
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    error_code = Column(String(80), nullable=True)
+    prompt_version = Column(String(120), nullable=True)
+
+    execution = relationship("AgentExecution", back_populates="model_calls")
+    task = relationship("ResearchTask", back_populates="model_calls")
