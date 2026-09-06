@@ -17,8 +17,8 @@ import uuid
 from app.database import get_db
 from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCache
 from app.models.paper import Paper, Section
-from app.api.auth import decode_token
 from app.api.dependencies import get_current_user_id
+from app.application.project_execution_entrypoint import classify_instant_interaction
 from app.agent.summarizer.graph import run_summarizer_agent
 from app.harness.agents.interpret_agent import run_interpret_agent
 from app.config import settings
@@ -616,6 +616,8 @@ async def ask_in_session(
         raise HTTPException(status_code=400, detail="问题不能为空")
     # 从 session 读取 project_id(项目模式),透传给 worker
     project_id = str(session.project_id) if getattr(session, "project_id", None) else ""
+    if getattr(session, "paper_id", None) and not project_id:
+        classify_instant_interaction("paper_chat")
     task = _AnswerTask(
         task_id=str(uuid.uuid4()),
         session_id=session_id,
@@ -694,6 +696,8 @@ async def stream_ask_in_session(
     enable_thinking = bool(data.get("enable_thinking", False))
     # 从 session 读取 project_id(项目模式),透传给 worker
     project_id = str(session.project_id) if getattr(session, "project_id", None) else ""
+    if getattr(session, "paper_id", None) and not project_id:
+        classify_instant_interaction("paper_chat")
 
     active_task = next(
         (
@@ -939,6 +943,7 @@ async def generate_summary(
 ):
     """生成或重新生成结构化摘要（带缓存）"""
     user_id = await get_current_user_id(authorization, db)
+    classify_instant_interaction("paper_summary")
     
     # 验证论文
     result = await db.execute(select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id))
@@ -1065,6 +1070,7 @@ async def generate_interpret(
     - 返回结构与旧版兼容:{paper_id, type, cached, data, message},并额外附加 citations/chunks/agent_trace
     """
     user_id = await get_current_user_id(authorization, db)
+    classify_instant_interaction("paper_interpretation")
 
     if interpret_type not in ("concept", "compare", "key_info"):
         raise HTTPException(status_code=400, detail="无效的解读类型")

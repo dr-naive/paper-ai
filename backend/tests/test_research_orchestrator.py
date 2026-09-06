@@ -75,6 +75,19 @@ def test_plan_ids_stable_and_ownership_checked():
         builder.build('e', GoalInput(goal_type='READ_PAPERS', paper_ids=['foreign']), state)
 
 
+def test_legacy_writing_generate_resolves_to_the_same_write_section_goal():
+    from app.application.research_planning import GoalResolver
+
+    goal = GoalResolver().resolve('writing_generate', {
+        'document_id': 'doc', 'instruction': '写一段研究现状', 'section_path': ['引言'],
+        'nearby_text': '上下文', 'citation_style': 'gbt7714', 'base_revision_id': 'rev',
+    }, '兼容入口')
+
+    assert goal.goal_type == 'WRITE_SECTION'
+    assert goal.document_id == 'doc'
+    assert goal.instruction == '写一段研究现状'
+
+
 def test_state_machine_cannot_revive_cancelled_or_complete_blocked():
     item = SimpleNamespace(status='cancelled')
     with pytest.raises(ValueError):

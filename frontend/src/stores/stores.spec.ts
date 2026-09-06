@@ -56,7 +56,9 @@ describe('workspace stores', () => {
   it('streams only non-terminal executions', () => {
     const store = useExecutionsStore()
     expect(store.shouldStream({ status: 'running' } as any)).toBe(true)
-    expect(store.shouldStream({ status: 'waiting_user' } as any)).toBe(true)
+    expect(store.shouldStream({ status: 'waiting_user' } as any)).toBe(false)
+    expect(store.shouldStream({ status: 'blocked' } as any)).toBe(false)
+    expect(store.shouldStream({ status: 'paused' } as any)).toBe(false)
     expect(store.shouldStream({ status: 'completed' } as any)).toBe(false)
     expect(store.shouldStream({ status: 'failed' } as any)).toBe(false)
   })

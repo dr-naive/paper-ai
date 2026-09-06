@@ -8,6 +8,16 @@ const routerPush = vi.hoisted(() => vi.fn())
 const routeState = vi.hoisted(() => ({ params: { projectId: 'project-1' } }))
 const getProject = vi.hoisted(() => vi.fn())
 const listProjectPapers = vi.hoisted(() => vi.fn())
+const executionStore = vi.hoisted(() => ({
+  projectExecutions: vi.fn().mockReturnValue([]),
+  loadProject: vi.fn().mockResolvedValue(undefined),
+  createResearch: vi.fn().mockResolvedValue({ id: 'execution-1', project_id: 'project-1', status: 'queued', input_payload: { goal_type: 'READ_PAPERS' }, updated_at: '2026-09-06T00:00:00Z' }),
+  loadEvents: vi.fn().mockResolvedValue(undefined),
+  startStream: vi.fn().mockResolvedValue(undefined),
+  stopStream: vi.fn(),
+  shouldStream: vi.fn().mockReturnValue(false),
+  act: vi.fn().mockResolvedValue(undefined),
+}))
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
@@ -17,6 +27,7 @@ vi.mock('@/api/projects', async () => {
   const actual = await vi.importActual<typeof import('@/api/projects')>('@/api/projects')
   return { ...actual, getProject, listProjectPapers }
 })
+vi.mock('@/stores/executions', () => ({ useExecutionsStore: () => executionStore }))
 
 const project: ResearchProject = {
   id: 'project-1', user_id: 'user-1', title: '检索研究', research_topic: '比较检索策略',
@@ -57,15 +68,32 @@ describe('ProjectPapers navigation context', () => {
     routerPush.mockReset()
     getProject.mockReset().mockResolvedValue(project)
     listProjectPapers.mockReset().mockResolvedValue({ items: [paper], total: 1 })
+    executionStore.projectExecutions.mockReset().mockReturnValue([])
+    executionStore.loadProject.mockClear()
+    executionStore.createResearch.mockClear()
   })
 
   it('opens the local upload flow in the current project instead of leaving for the library', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.get('.page-heading button').trigger('click')
+    await wrapper.get('.page-heading__actions button:last-child').trigger('click')
     expect(wrapper.get('.upload-modal-stub').text()).toContain('project-1')
     expect(routerPush).not.toHaveBeenCalledWith('/library')
+  })
+
+  it('starts project Reading through a READ_PAPERS GoalExecution', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('.page-heading__actions button:first-child').trigger('click')
+    await flushPromises()
+
+    expect(executionStore.createResearch).toHaveBeenCalledWith('project-1', expect.objectContaining({
+      agent_type: 'research_goal',
+      input: expect.objectContaining({ goal_type: 'READ_PAPERS', paper_ids: ['paper-1'] }),
+    }))
+    expect(executionStore.loadEvents).toHaveBeenCalledWith('execution-1')
   })
 
   it('enters the semantic project Reader route and keeps the project id in params', async () => {

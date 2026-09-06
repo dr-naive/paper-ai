@@ -1,9 +1,12 @@
-"""Compatibility projection for the existing reading-executions HTTP contract."""
+"""Compatibility adapter for the existing project Reading HTTP contract."""
 from uuid import uuid4
+
 from sqlalchemy import select
+
+from app.application.execution_service import execution_dict
+from app.application.project_execution_entrypoint import initialize_project_goal, is_project_goal_execution
 from app.models.execution import AgentExecution
 from app.models.project import ProjectPaper
-from app.application.research_orchestrator import ResearchOrchestrator
 
 
 async def start_reading(db, project_id, user_id, max_items):
@@ -18,24 +21,41 @@ async def start_reading(db, project_id, user_id, max_items):
             'instruction': '分析核心贡献、方法、实验、证据与局限'}, status='queued')
     db.add(execution)
     await db.commit()
-    await ResearchOrchestrator(db).initialize(execution)
+    await initialize_project_goal(db, execution)
     return await reading_projection(db, execution)
 
 
 async def find_reading(db, execution_id, project_id, user_id):
     item = await db.get(AgentExecution, execution_id)
-    if item and item.project_id == project_id and item.user_id == user_id and (item.plan or {}).get('goal', {}).get('goal_type') == 'READ_PAPERS':
+    if item and item.project_id == project_id and item.user_id == user_id and is_project_goal_execution(item) \
+            and (item.plan or {}).get('goal', {}).get('goal_type') == 'READ_PAPERS':
         return item
     return None
 
 
 async def reading_projection(db, execution):
+    from app.application.research_orchestrator import ResearchOrchestrator
+
     tasks = await ResearchOrchestrator(db).tasks(execution.id)
-    results = [{'paper_id': next(r['artifact_id'] for r in t.input_refs if r['artifact_type'] == 'paper'),
-                'status': 'completed'} for t in tasks if t.status == 'completed']
+    results = []
+    for task in tasks:
+        paper_ref = next((r for r in task.input_refs if r.get('artifact_type') == 'paper'), None)
+        if paper_ref and task.status == 'completed':
+            results.append({'paper_id': paper_ref['artifact_id'], 'status': 'completed'})
     current = next((t for t in tasks if t.status == 'running'), None)
-    return {'task_id': execution.id, 'project_id': execution.project_id, 'user_id': execution.user_id,
-        'status': execution.status, 'control': 'pause' if execution.status == 'paused' else 'run',
-        'total': len(tasks), 'completed': len(results), 'results': results,
-        'current_paper_id': next((r['artifact_id'] for r in current.input_refs if r['artifact_type'] == 'paper'), None) if current else None,
-        'error': execution.error_message, 'created_at': execution.created_at.timestamp(), 'updated_at': execution.updated_at.timestamp()}
+    current_paper = next((r for r in (current.input_refs if current else []) if r.get('artifact_type') == 'paper'), None)
+    payload = execution_dict(execution)
+    payload.update({
+        'task_id': execution.id,
+        'control': 'pause' if execution.status == 'paused' else 'run',
+        'total': len(tasks),
+        'completed': len(results),
+        'results': results,
+        'current_paper_id': current_paper.get('artifact_id') if current_paper else None,
+        'error': execution.error_message,
+        # Preserve the old reading-executions timestamp shape while exposing
+        # the full GoalExecution progress/blocker/result projection above.
+        'created_at': execution.created_at.timestamp(),
+        'updated_at': execution.updated_at.timestamp(),
+    })
+    return payload

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id
 from app.application.execution_service import append_event, evaluate_execution_trace, event_envelope, execution_dict, execution_trace_report, set_control, set_status
+from app.application.project_execution_entrypoint import initialize_project_goal, is_project_goal_execution
 from app.application.writing_service import WritingGenerateRequest
 from app.config import settings
 from app.database import AsyncSessionLocal, get_db
@@ -23,6 +24,7 @@ from app.models.execution import AgentEvent, AgentExecution, TERMINAL_EXECUTION_
 from app.models.project import ResearchProject
 
 router = APIRouter(prefix="/api/v1", tags=["agent-executions"])
+STREAM_STOP_STATUSES = TERMINAL_EXECUTION_STATUSES | {"waiting_user", "blocked", "paused"}
 
 
 async def current_user_id(authorization: str | None = Header(None), db: AsyncSession = Depends(get_db)) -> str:
@@ -76,22 +78,17 @@ async def create_execution(project_id: str, body: ExecutionCreate, db: AsyncSess
     await db.commit()
     await db.refresh(item)
     try:
-        if body.agent_type == "research_goal":
-            # Goal executions are planned and dispatched through the durable
-            # ResearchTask graph.  The incumbent writing execution remains on
-            # its existing WorkerJob contract for backwards compatibility.
-            await ResearchOrchestrator(db).initialize(item)
-        else:
-            await append_event(db, item, "execution_queued", "执行已排队", stage=item.status)
-            await enqueue_job("agent_execution_v2", {"execution_id": item.id}, job_id=item.id)
+        # Both the new goal input and the legacy writing_generate input use
+        # the same durable GoalExecution lifecycle.  The latter is only an
+        # API compatibility shape; it is not a second worker workflow.
+        await initialize_project_goal(db, item)
     except (ValueError, LookupError) as exc:
         await db.rollback()
         await db.delete(item)
         await db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if body.agent_type == "research_goal":
-        await append_event(db, item, "execution_plan_created", "执行计划已保存", stage=item.status,
-                           data={"plan_version": item.plan_version})
+    await append_event(db, item, "execution_plan_created", "执行计划已保存", stage=item.status,
+                       data={"plan_version": item.plan_version})
     return execution_dict(item)
 
 
@@ -175,7 +172,7 @@ async def stream_events(execution_id: str, after: int = Query(0, ge=0), db: Asyn
             for row in rows:
                 cursor = row.seq
                 yield f"id: {row.seq}\nevent: {row.event_type}\ndata: {json.dumps(event_envelope(row), ensure_ascii=False)}\n\n"
-            if status in TERMINAL_EXECUTION_STATUSES and not rows:
+            if status in STREAM_STOP_STATUSES and not rows:
                 break
             if not rows:
                 yield ": keepalive\n\n"
@@ -186,8 +183,10 @@ async def stream_events(execution_id: str, after: int = Query(0, ge=0), db: Asyn
 async def control(execution_id: str, action: str, db: AsyncSession, user_id: str) -> dict[str, Any]:
     require_runtime()
     item = await owned_execution(db, execution_id, user_id)
-    if item.plan_version:
+    if is_project_goal_execution(item):
         try:
+            if not item.plan_version:
+                await initialize_project_goal(db, item)
             await ResearchOrchestrator(db).control(item, action)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

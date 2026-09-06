@@ -1,4 +1,5 @@
 import request from './index'
+import type { ExecutionStatus, ProgressStep } from './executions'
 
 // ==================== 类型定义 ====================
 export interface ResearchProject {
@@ -297,7 +298,12 @@ export interface ProjectMemoryPayload {
 export interface ReadingExecution {
   task_id: string
   project_id: string
-  status: 'queued' | 'running' | 'paused' | 'completed' | 'failed'
+  status: ExecutionStatus
+  plan_version?: number
+  progress?: ProgressStep[] | null
+  blockers?: Array<{ task_id?: string; capability?: string; reason?: string; context?: { prompt?: string; message?: string; code?: string } }> | null
+  completion_reason?: string | null
+  result_payload?: Record<string, unknown> | null
   total: number
   completed: number
   current_paper_id?: string | null

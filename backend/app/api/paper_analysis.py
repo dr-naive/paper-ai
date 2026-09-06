@@ -15,6 +15,7 @@ from app.utils.qa_helpers import (
 from app.agent.qa_agent.enhanced_graph import run_enhanced_qa_agent
 from app.agent.summarizer.graph import run_summarizer_agent
 from app.api.dependencies import get_current_user_id
+from app.application.project_execution_entrypoint import classify_instant_interaction
 from app.database import get_db
 from app.harness.agents.lead_agent import run_lead_agent
 from app.harness.tools.paper_internal import _get_paper_metadata_impl
@@ -35,6 +36,7 @@ async def ask_question(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = await get_current_user_id(authorization, db)
+    classify_instant_interaction("paper_chat")
     question = data.get("question")
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
@@ -176,6 +178,7 @@ async def interpret_paper(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = await get_current_user_id(authorization, db)
+    classify_instant_interaction("paper_interpretation")
     paper, sections = await _owned_paper_with_sections(db, paper_id, user_id)
     content = _sections_data(paper, sections)
     if not content:
@@ -240,6 +243,7 @@ async def generate_structured_summary(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = await get_current_user_id(authorization, db)
+    classify_instant_interaction("paper_summary")
     paper, sections = await _owned_paper_with_sections(db, paper_id, user_id)
     content = _sections_data(paper, sections)
     if not content:

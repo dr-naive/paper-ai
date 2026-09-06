@@ -32,6 +32,14 @@
             <a-button type="primary" :loading="saving" :disabled="!editor" @click="saveRevision()">保存版本</a-button>
           </div>
         </header>
+        <section v-if="activeGoalExecution" class="writing-execution-progress" aria-live="polite" aria-label="项目写作进度">
+          <div class="writing-execution-progress__header">
+            <strong>项目写作</strong>
+            <span>{{ executionStatusLabel(activeGoalExecution.status) }}</span>
+          </div>
+          <p>{{ executionProgressLabel }}</p>
+          <p v-if="['blocked', 'failed', 'partial'].includes(activeGoalExecution.status)" class="writing-execution-progress__blocker">{{ executionBlockerText }}</p>
+        </section>
         <div v-if="editor" class="editor-toolbar" role="toolbar" aria-label="文本格式">
           <select class="heading-select" aria-label="文本样式" :value="currentHeadingLevel" @change="changeHeading">
             <option value="paragraph">正文</option>
@@ -105,6 +113,7 @@ import StarterKit from '@tiptap/starter-kit'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconBold, IconItalic, IconList, IconQuote, IconRedo, IconUndo } from '@arco-design/web-vue/es/icon'
 import { auditCitations, createDocument, createRevision, getDocument, listDocuments, rewriteSelection, updateDocument, type CitationAudit, type WritingCitationMapping, type WritingDocument, type WritingGenerateRequest, type WritingRewriteRequest } from '@/api/documents'
+import type { AgentExecution } from '@/api/executions'
 import { listEvidence, type EvidenceItem } from '@/api/projects'
 import { useExecutionsStore } from '@/stores/executions'
 import { useWritingStore, type WritingProposal } from '@/stores/writing'
@@ -133,6 +142,30 @@ const titleDirty = ref(false)
 const evidenceSearch = ref('')
 const citationAudit = ref<CitationAudit | null>(null)
 const revisionVersion = computed(() => activeDocument.value?.current_revision?.version || 1)
+const activeGoalExecution = computed(() => activeExecutionId.value
+  ? executionStore.allExecutions.find(item => item.id === activeExecutionId.value) || null
+  : null)
+const executionStatusLabel = (status: AgentExecution['status']) => ({
+  pending: '待开始', queued: '排队中', running: '执行中', waiting_user: '等待确认', retrying: '正在重试',
+  paused: '已暂停', blocked: '需要补充资料', partial: '部分完成', completed: '已完成', failed: '执行失败', cancelled: '已取消',
+}[status] || '执行中')
+const executionProgressLabel = computed(() => {
+  const execution = activeGoalExecution.value
+  if (!execution) return ''
+  const step = execution.progress?.find(item => ['running', 'retrying', 'waiting_user', 'queued'].includes(item.status))
+  return step?.label || (execution.status === 'completed' ? '写作建议已准备好。' : '正在处理项目论文和证据。')
+})
+const executionBlockerText = computed(() => {
+  const execution = activeGoalExecution.value
+  if (!execution) return ''
+  const labels: Record<string, string> = {
+    NO_INDEXED_PAPERS: '当前项目没有已完成解析并建立索引的论文。',
+    NO_SUPPORTING_EVIDENCE: '当前项目论文中没有找到足够的支持证据。',
+    NO_IMPORTED_PAPERS: '当前项目还没有可用于写作的已导入论文。',
+  }
+  return execution.blockers?.map(item => item.reason || item.context?.prompt || item.context?.message || labels[item.context?.code || '']).filter(Boolean).join('；')
+    || execution.error_message || '当前项目缺少完成写作所需的资料。'
+})
 const currentHeadingLevel = computed(() => {
   // Keep the native select in sync with Tiptap without introducing editor state.
   editorContentVersion.value
@@ -263,6 +296,8 @@ const friendlyWritingError = (error: unknown) => {
     NO_IMPORTED_PAPERS: '当前项目还没有已导入且可用于引用的论文。请先到“文献发现”或“项目论文”导入论文。',
     NO_RELEVANT_PAPERS: '当前项目没有已完成解析且适合本次写作的论文，请调整要求或先完成论文解析。',
     NO_SUPPORTING_EVIDENCE: '当前项目已导入论文中没有找到足够证据支持这一写作要求。',
+    NO_INDEXED_PAPERS: '当前项目没有已完成解析并建立索引的论文，请先完成论文处理。',
+    GOAL_DEPENDENCIES_MISSING: '当前项目缺少完成写作所需的论文资料。',
     WRITING_DOCUMENT_CONFLICT: '正文已发生变化，请重新选择后再次生成建议。',
     VERIFICATION_ERROR: '引用验证暂时不可用，建议不会被标记为已验证。',
     GENERATION_ERROR: '段落生成暂时不可用，文档未发生变化。',
@@ -275,6 +310,7 @@ const submitAgentInstruction = async (instruction: string) => {
   const hasSelection = writingStore.hasSelection
   const baseRevisionId = activeDocument.value.current_revision_id || ''
   const requestEditorVersion = editorContentVersion.value
+  if (hasSelection) activeExecutionId.value = ''
   writingStore.appendMessage({ id: `user-${Date.now()}`, role: 'user', content: instruction })
   writingStore.startRequest(hasSelection ? '正在准备当前选区的改写建议…' : '正在准备项目论文和证据…')
   try {
@@ -307,10 +343,18 @@ const submitAgentInstruction = async (instruction: string) => {
         citation_style: 'gbt7714',
         base_revision_id: baseRevisionId,
       }
-      const execution = await executionStore.createWriting(props.projectId, {
-        agent_type: 'writing_generate',
+      const execution = await executionStore.createResearch(props.projectId, {
+        agent_type: 'research_goal',
         goal: instruction,
-        input: payload,
+        input: {
+          goal_type: 'WRITE_SECTION',
+          document_id: payload.document_id,
+          instruction: payload.instruction,
+          section_path: payload.section_path,
+          nearby_text: payload.nearby_text || '',
+          citation_style: payload.citation_style,
+          base_revision_id: payload.base_revision_id,
+        },
       })
       activeExecutionId.value = execution.id
       await executionStore.loadEvents(execution.id)
@@ -369,6 +413,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .writing-v2 { position: relative; display: grid; grid-template-columns: 220px minmax(0, 1fr) 344px; min-height: calc(100vh - 112px); overflow: hidden; background: var(--pa-surface); }
+.writing-execution-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 9px 20px; border-bottom: 1px solid var(--pa-border); background: var(--pa-surface-soft); color: var(--pa-muted); font-size: 12px; }
+.writing-execution-progress__header { display: inline-flex; align-items: center; gap: 8px; color: var(--pa-ink); }
+.writing-execution-progress__header span { color: var(--pa-primary-hover); font-size: 11px; }
+.writing-execution-progress p { margin: 0; }
+.writing-execution-progress__blocker { flex-basis: 100%; color: var(--pa-danger); }
 .writing-v2.outline-collapsed { grid-template-columns: 44px minmax(0, 1fr) 344px; }
 .writing-v2.agent-collapsed { grid-template-columns: 220px minmax(0, 1fr) 44px; }
 .writing-v2.outline-collapsed.agent-collapsed { grid-template-columns: 44px minmax(0, 1fr) 44px; }

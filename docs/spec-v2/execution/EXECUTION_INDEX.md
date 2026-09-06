@@ -19,14 +19,65 @@ Do not read all active specifications by default. Do not read
 
 ## Current Phase
 
-Phase 23 — Goal-driven Research Orchestration.
+Phase 24 — Project Execution Lifecycle Closure.
 
 ## Current Implementation Block
 
-ORCH-1 — persistent goal plans, business tasks and existing worker adapters.
+LIFE-1 — close legacy project Reading/Writing lifecycles into GoalExecution.
 
-ORCH-1 status: COMPLETE. The next implementation block is not selected; use
-`IMPLEMENTATION_PROGRESS.md` for the tested handoff and remaining risks.
+LIFE-1 status: COMPLETE. The acceptance gate passed locally; no next block is
+selected. Read the completed boundary below when extending this lifecycle.
+
+## LIFE-1 Reading Boundary
+
+User-authorized scope: project Reading compatibility adapter, project Writing
+compatibility adapter, centralized instant-vs-goal entry classification,
+GoalExecution progress projection, and minimal Project Papers/Writing/Global
+Task Center frontend adaptation. Preserve independent single-paper Reader,
+paper Chat, PDF, RAG, Writing, Queue, Worker, TaskScope and Skill Runtime.
+
+Inspect:
+
+- `backend/app/api/projects.py`
+- `backend/app/api/executions.py`
+- `backend/app/application/reading_execution_service.py`
+- `backend/app/application/research_orchestrator.py`
+- `backend/app/application/research_planning.py`
+- `backend/app/application/research_task_worker.py`
+- `backend/app/application/research_task_executors.py`
+- `backend/app/worker.py`
+- `backend/app/harness/agents/lead_agent.py`
+- `backend/app/api/chat.py`
+- `backend/app/api/documents.py`
+- `backend/app/application/writing_service.py`
+- `backend/tests/test_research_orchestrator.py`
+- `backend/tests/test_execution_runtime.py`
+- `backend/tests/test_project_contracts.py`
+- `backend/tests/test_project_router_structure.py`
+- `backend/tests/test_agent_routing.py`
+- `frontend/src/api/executions.ts`
+- `frontend/src/api/projects.ts`
+- `frontend/src/stores/executions.ts`
+- `frontend/src/components/GlobalTaskCenter.vue`
+- `frontend/src/components/project/WritingDocumentEditor.vue`
+- `frontend/src/views/ProjectPapers.vue`
+- related frontend tests
+- `docs/API.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+
+Acceptance boundary:
+
+- Project Reading API remains compatible but creates only `READ_PAPERS`
+  GoalExecution; the old Redis project-reading worker is no longer a new
+  lifecycle and is removed or reduced to a compatibility adapter.
+- `writing_generate` remains an accepted compatibility input but initializes
+  `WRITE_SECTION` through the existing GoalExecution/ResearchOrchestrator;
+  new requests do not enqueue an independent writing lifecycle.
+- Independent single-paper Q&A, interpretation, summary and short local
+  interactions continue through their existing Agent/Workflow paths.
+- Project UI reads `status`, `progress`, `blockers`, `completion_reason` and
+  `result_payload`; internal WorkerJob, ToolCall, executor and queue concepts
+  stay out of user-facing UI.
 
 ## ORCH-1 Reading Boundary
 

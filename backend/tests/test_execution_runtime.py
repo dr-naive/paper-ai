@@ -98,14 +98,15 @@ def test_writing_completion_gate_requires_active_skill_completion():
         validate_writing_completion(execution, _writing_proposal(), {"passed": False})
 
 
-def test_durable_worker_activates_and_evaluates_writing_skill_without_review_reasoning():
+def test_legacy_writing_worker_is_only_a_goal_execution_adapter():
     from pathlib import Path
     source = (Path(__file__).resolve().parents[1] / "app" / "worker.py").read_text(encoding="utf-8")
 
-    assert 'WRITING_SKILL_ID = "writing_evidence_generation"' in source
-    assert "skill_runtime.activate" in source
-    assert "skill_runtime.evaluate_completion" in source
-    assert '"skill_completion_evaluated"' in source
+    assert "Compatibility adapter for historical writing execution jobs" in source
+    assert "initialize_project_goal" in source
+    assert "WritingService(db).generate_paragraph" not in source
+    assert "handle_project_reading_execution" not in source
+    assert "project_reading_execution" not in source
     assert "chain_of_thought" not in source
 
 

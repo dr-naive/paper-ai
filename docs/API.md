@@ -159,6 +159,10 @@ Citation-aware rewrite 使用 `[[CITATION:<citation_key>]]` 作为内部不可�
 
 模型只能从服务端提供的临时 `E1…En` Evidence 键中选择，并返回一个段落、结构化 `citation_key/evidence_key/claim_text` 以及正文 placeholder；服务端验证 claim 确实来自正文后，重新校验 Evidence 来源、持久化实际使用的 Evidence，再解析为真实 `paper_id/evidence_id` 并强制验证。响应是 `ready / partially_verified / verification_failed` proposal，不修改正文。`unsupported` citation 保持显式 warning，绝不标记为 verified。失败码包括 `NO_IMPORTED_PAPERS`、`NO_RELEVANT_PAPERS`、`NO_SUPPORTING_EVIDENCE`、`GENERATION_ERROR`、`VERIFICATION_ERROR` 和既有 `WRITING_DOCUMENT_CONFLICT`；模型结构失败只 repair 一次。
 
+现有同步 `writing/agent/generate` 端点继续作为旧调用方的 proposal 兼容接口；新的 Project
+Writing 编辑器不再调用它，而是创建 `WRITE_SECTION` GoalExecution。该兼容接口不创建旧的
+`agent_execution_v2` 生命周期，待下游调用方迁移后可在后续兼容清理中移除。
+
 段落草案在 Evidence 持久化前经过 bounded Writing Reviewer。Reviewer 只返回
 `pass / repair`、受限 issue codes 和修复指令，不返回推理过程；`repair` 最多触发一次额外
 生成，修复结果必须重新满足单段、Evidence key、claim 和 citation placeholder Schema，失败
@@ -223,10 +227,11 @@ Router：`backend/app/api/executions.py`。接口受 `ENABLE_AGENT_RUNTIME_V2` �
 和 Project 所有权校验；事件可通过分页接口重放，也可通过 SSE 持续读取。
 
 创建契约同时兼容既有 `agent_type: "writing_generate"` 和 Goal-driven
-`agent_type: "research_goal"`。前者继续直接进入既有 Writing WorkerJob；后者将用户目标
-持久化为同一张 `AgentExecution`（语义别名为 ResearchExecution/GoalExecution），生成持久化
-Execution Plan 与 `ResearchTask` 图，再通过现有 Redis Queue/Worker 执行。公开事件仅包含阶段、
-计数和状态，不包含 prompt、模型原始响应或推理过程。
+`agent_type: "research_goal"`。两者都持久化为同一张 `AgentExecution`（语义别名为
+ResearchExecution/GoalExecution），生成持久化 Execution Plan 与 `ResearchTask` 图，再通过
+现有 Redis Queue/Worker 执行；`writing_generate` 只是转换为 `WRITE_SECTION` 的兼容输入，
+不再进入独立 Writing WorkerJob 生命周期。公开事件仅包含阶段、计数和状态，不包含 prompt、
+模型原始响应或推理过程。
 
 `research_goal` 的 `input.goal_type` 目前为 `READ_PAPERS`、`WRITE_SECTION` 或
 `DISCOVER_AND_IMPORT`。规划按“目标所需能力 - 可复用 Project 资产 + 缺失 Hard Dependency”
@@ -243,6 +248,11 @@ ProgressStep。论文列表确认使用 `POST /api/v1/executions/{execution_id}/
 `skill_completion_evaluated` 事件。最终 `result_payload` 同时包含 `proposal`、
 `skill_completion` 与 `completion`；Skill completion 未通过时 Completion Gate 必须失败，执行
 不能进入 `completed`。
+
+旧 Project Reading 的 `/api/v1/projects/{project_id}/reading-executions/*` 入口继续保留
+兼容请求形状，但创建、暂停和恢复都只操作 `READ_PAPERS` GoalExecution；旧 Redis
+`project_reading_execution` 生命周期不再创建。独立论文问答、解释和局部总结仍走原有
+Reader / Agent / Workflow 即时链路，不创建 GoalExecution。
 
 | Method | Path | 用途 |
 | --- | --- | --- |

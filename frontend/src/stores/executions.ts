@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { getExecution, respondExecution, approveExecution, cancelExecution, createResearchExecution, createWritingExecution, getExecutionEvaluation, getExecutionTrace, listExecutionEvents, listProjectExecutions, listUserExecutions, pauseExecution, resumeExecution, streamExecutionEvents, type AgentEvent, type AgentExecution, type ExecutionEvaluation, type ExecutionTraceReport, type ResearchExecutionCreate, type WritingExecutionCreate } from '@/api/executions'
 
-const terminalStatuses = new Set<AgentExecution['status']>(['completed', 'partial', 'failed', 'cancelled'])
+const streamStopStatuses = new Set<AgentExecution['status']>(['waiting_user', 'blocked', 'paused', 'completed', 'partial', 'failed', 'cancelled'])
 
 export const useExecutionsStore = defineStore('executions', () => {
   const byProject = ref<Record<string, AgentExecution[]>>({})
@@ -91,6 +91,6 @@ export const useExecutionsStore = defineStore('executions', () => {
     eventsByExecution.value = { ...eventsByExecution.value, [execution.id]: [] }
     return execution
   }
-  const shouldStream = (execution: AgentExecution) => !terminalStatuses.has(execution.status)
+  const shouldStream = (execution: AgentExecution) => !streamStopStatuses.has(execution.status)
   return { byProject, globalExecutions, eventsByExecution, tracesByExecution, evaluationsByExecution, loadingProjects, allExecutions, runningCount, projectExecutions, executionEvents, executionTrace, executionEvaluation, loadProject, loadGlobal, loadEvents, loadTrace, startStream, stopStream, shouldStream, act, respond, createWriting, createResearch }
 })

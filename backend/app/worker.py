@@ -8,7 +8,6 @@ import json
 import logging
 import signal
 import time
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -17,7 +16,7 @@ from app.agent.qa_agent.enhanced_graph import generate_follow_up_questions
 from app.agent.qa_agent.workflow import QAWorkflowState
 from app.config import settings
 from app.database import AsyncSessionLocal, close_db, init_db
-from app.harness.agents.lead_agent import run_lead_agent, stream_lead_agent
+from app.harness.agents.lead_agent import stream_lead_agent
 from app.job_queue import (
     WorkerJob,
     acknowledge_job,
@@ -35,24 +34,6 @@ from app.models.project import ResearchProject, ProjectPaper, WritingArtifact  #
 from app.models.execution import AgentExecution, AgentEvent, ToolCall, TERMINAL_EXECUTION_STATUSES  # noqa: F401
 from app.models.research import MemoryItem, EvidenceItem  # noqa: F401
 from app.models.document import WritingDocument, DocumentRevision  # noqa: F401
-from app.application.execution_service import (
-    CompletionGateError,
-    append_event,
-    delete_checkpoint,
-    get_control,
-    save_checkpoint,
-    set_control,
-    set_status,
-    validate_writing_completion,
-)
-from app.application.writing_service import (
-    WritingGenerateRequest,
-    WritingGenerationProposal,
-    WritingService,
-    WritingServiceError,
-)
-from app.harness.runtime.skill_runtime import SkillRuntime
-from app.harness.runtime.standard_tools import build_standard_tool_runtime
 from app.research.context.paper_profile import (
     PaperProfileNotFoundError,
     PaperProfileService,
@@ -60,7 +41,7 @@ from app.research.context.paper_profile import (
 )
 from app.services.remote_paper_import import download_arxiv_pdf
 from app.utils.task_manager import update_task
-from app.redis_client import close_redis, get_async_redis, get_json, initialize_redis, set_json
+from app.redis_client import close_redis, get_async_redis, initialize_redis, set_json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,163 +50,25 @@ ANSWER_TASK_PREFIX = "paperai:answer-task:"
 ANSWER_CANCEL_PREFIX = "paperai:answer-cancel:"
 WORKER_HEARTBEAT_KEY = "paperai:worker:heartbeat"
 ANSWER_TRACE_PREFIX = "paperai:answer-trace:"
-READING_EXECUTION_PREFIX = "paperai:reading-execution:"
-READING_EXECUTION_TTL = 7 * 24 * 60 * 60
-WRITING_SKILL_ID = "writing_evidence_generation"
-SKILLS_DIR = Path(__file__).resolve().parent / "harness" / "skills"
 
 
 async def handle_agent_execution_v2(job: WorkerJob) -> None:
+    """Compatibility adapter for historical writing execution jobs.
+
+    New project writing never enters this queue type.  If an old queued job is
+    still present, it is converted into the same persisted GoalExecution path
+    instead of running a second writing lifecycle in the Worker.
+    """
     execution_id = str(job.payload["execution_id"])
     async with AsyncSessionLocal() as db:
         item = await db.get(AgentExecution, execution_id)
         if item is None or item.status in TERMINAL_EXECUTION_STATUSES:
             return
-        if await get_control(execution_id) == "pause":
-            return
-        if item.agent_type != "writing_generate":
-            await set_status(db, item, "failed", stage="failed", error_code="UNSUPPORTED_AGENT_TYPE",
-                             error_message="不支持的执行类型")
-            await append_event(db, item, "execution_failed", "执行类型不受支持", stage="failed")
-            return
+        if item.agent_type not in {"writing_generate", "research_goal"}:
+            raise ValueError("UNSUPPORTED_PROJECT_GOAL_EXECUTION")
+        from app.application.project_execution_entrypoint import initialize_project_goal
 
-        stage_messages = {
-            "context_started": "正在查找与写作要求相关的项目论文",
-            "context_ready": "已找到候选论文与支持证据",
-            "generation_started": "正在生成证据支持的段落",
-            "proposal_generated": "段落草案已生成",
-            "review_started": "正在审查草案质量与证据一致性",
-            "review_passed": "Writing Reviewer 审查已通过",
-            "review_repair_required": "Writing Reviewer 要求进行一次有限修复",
-            "review_repair_completed": "一次有限修复已完成",
-            "evidence_persisted": "引用证据已保存",
-            "verification_started": "正在验证引用与论断",
-            "citation_verified": "引用验证已完成",
-        }
-        safe_control_stages = {"context_started", "context_ready", "generation_started", "proposal_generated"}
-
-        class ExecutionPaused(Exception):
-            pass
-
-        class ExecutionCancelled(Exception):
-            pass
-
-        async def check_control(stage: str) -> None:
-            action = await get_control(execution_id)
-            if action == "cancel":
-                raise ExecutionCancelled
-            if action == "pause":
-                raise ExecutionPaused
-
-        async def progress(stage: str, data: dict[str, Any]) -> None:
-            item.current_stage = stage
-            await db.commit()
-            await save_checkpoint(execution_id, {"stage": stage, "data": data})
-            await append_event(db, item, stage, stage_messages[stage], stage=stage, data=data)
-            if stage in safe_control_stages:
-                await check_control(stage)
-
-        try:
-            await set_status(db, item, "running", stage="starting")
-            await append_event(db, item, "execution_started", "写作任务已启动", stage="starting")
-            skill_runtime = SkillRuntime(SKILLS_DIR, build_standard_tool_runtime().specs())
-            skill = await skill_runtime.activate(item, WRITING_SKILL_ID, db=db)
-            await append_event(
-                db, item, "skill_activated", "Evidence-backed Writing Skill 已激活",
-                stage="skill_activated", data={"skill_id": skill.id, "skill_version": skill.version},
-            )
-            if item.result_payload and item.result_payload.get("proposal"):
-                proposal = WritingGenerationProposal.model_validate(item.result_payload["proposal"])
-            else:
-                request = WritingGenerateRequest.model_validate(item.input_payload or {})
-                proposal = await WritingService(db).generate_paragraph(
-                    project_id=str(item.project_id),
-                    user_id=item.user_id,
-                    request=request,
-                    on_progress=progress,
-                )
-                item.result_payload = {"proposal": proposal.model_dump(mode="json")}
-                await db.commit()
-                await save_checkpoint(execution_id, {"stage": "proposal_ready", "result_persisted": True})
-
-            await check_control("proposal_ready")
-            review = proposal.review
-            single_paragraph = len([part for part in proposal.content.split("\n\n") if part.strip()]) == 1
-            mappings_valid = bool(proposal.citations) and all(
-                citation.citation_key and citation.paper_id and citation.evidence_id for citation in proposal.citations
-            )
-            reviewer_valid = review is not None and review.status in {"passed", "repaired"} and review.repair_count <= 1
-            citations_supported = all(citation.status != "unsupported" for citation in proposal.citations)
-            contract_ready = single_paragraph and mappings_valid and reviewer_valid and citations_supported
-            criteria = {
-                "生成结果只有一个段落": single_paragraph,
-                "每个事实性引用具有结构化 Evidence 映射": mappings_valid,
-                "Writing Reviewer 已通过或完成一次有限修复": reviewer_valid,
-                "Citation Verification 不包含 unsupported": citations_supported,
-                "生成结果满足 Completion Gate 输入契约": contract_ready,
-            }
-            skill_report = skill_runtime.evaluate_completion(
-                WRITING_SKILL_ID,
-                metadata={
-                    "document_id": proposal.document_id,
-                    "proposal_id": proposal.proposal_id,
-                    "citation_count": len(proposal.citations),
-                    "reviewer_status": review.status if review else None,
-                    "repair_count": review.repair_count if review else None,
-                    "completion_contract_ready": contract_ready,
-                },
-                criterion_results=criteria,
-            ).model_dump(mode="json")
-            item.result_payload = {"proposal": proposal.model_dump(mode="json"), "skill_completion": skill_report}
-            await db.commit()
-            await append_event(
-                db, item, "skill_completion_evaluated",
-                "Writing Skill 完成条件已通过" if skill_report["passed"] else "Writing Skill 完成条件未通过",
-                stage="skill_completion", data={
-                    "skill_id": skill_report["skill_id"], "passed": skill_report["passed"],
-                    "failed_criteria_count": sum(not criterion["passed"] for criterion in skill_report["criteria"]),
-                    "missing_metadata_count": len(skill_report["missing_metadata"]),
-                },
-            )
-            completion = validate_writing_completion(item, proposal, skill_report)
-            item.result_payload = {
-                "proposal": proposal.model_dump(mode="json"),
-                "skill_completion": skill_report,
-                "completion": completion,
-            }
-            await db.commit()
-            await append_event(db, item, "completion_gate_passed", "完成质量检查已通过",
-                               stage="completion_gate", data=completion)
-            await set_status(db, item, "completed", stage="completed")
-            await append_event(db, item, "execution_completed", "写作建议已完成", stage="completed",
-                               data={"proposal_id": proposal.proposal_id, "proposal_status": proposal.status})
-            await delete_checkpoint(execution_id)
-            await set_control(execution_id, None)
-        except ExecutionPaused:
-            await set_status(db, item, "paused", stage=item.current_stage)
-            await append_event(db, item, "execution_paused", "执行已在安全边界暂停", stage=item.current_stage)
-        except ExecutionCancelled:
-            await set_status(db, item, "cancelled", stage="cancelled", error_code="EXECUTION_CANCELLED",
-                             error_message="用户取消")
-            await append_event(db, item, "execution_cancelled", "执行已取消", stage="cancelled")
-            await delete_checkpoint(execution_id)
-            await set_control(execution_id, None)
-        except CompletionGateError as exc:
-            await set_status(db, item, "failed", stage="completion_gate", error_code="COMPLETION_GATE_FAILED",
-                             error_message=str(exc))
-            await append_event(db, item, "completion_gate_failed", "完成质量检查未通过",
-                               stage="completion_gate", data={"checks_failed": str(exc).split(",")})
-            await set_control(execution_id, None)
-        except WritingServiceError as exc:
-            await set_status(db, item, "failed", stage="failed", error_code=exc.code, error_message=str(exc))
-            await append_event(db, item, "execution_failed", str(exc), stage="failed", data={"code": exc.code})
-            await set_control(execution_id, None)
-        except Exception:
-            logger.exception("Durable writing execution failed execution_id=%s", execution_id)
-            await set_status(db, item, "failed", stage="failed", error_code="EXECUTION_FAILED",
-                             error_message="执行失败，请稍后重试")
-            await append_event(db, item, "execution_failed", "执行失败，请稍后重试", stage="failed")
-            await set_control(execution_id, None)
+        await initialize_project_goal(db, item)
 
 
 async def _load_answer_data(task_id: str) -> dict[str, Any]:
@@ -607,102 +450,6 @@ async def handle_arxiv_import(job: WorkerJob) -> None:
     logger.info("arXiv 导入完成 project_id=%s arxiv_id=%s paper_id=%s", project_id, arxiv_id, paper_id)
 
 
-async def handle_project_reading_execution(job: WorkerJob) -> None:
-    payload = job.payload
-    task_id = str(payload["task_id"])
-    project_id = str(payload["project_id"])
-    user_id = str(payload["user_id"])
-    key = f"{READING_EXECUTION_PREFIX}{task_id}"
-    task = await get_json(key)
-    if not isinstance(task, dict):
-        raise LookupError(f"精读任务不存在 task_id={task_id}")
-    task.update({"status": "running", "updated_at": time.time()})
-    await set_json(key, task, READING_EXECUTION_TTL)
-
-    try:
-        async with AsyncSessionLocal() as db:
-            project = await db.get(ResearchProject, project_id)
-            if project is None or project.user_id != user_id:
-                raise LookupError("项目不存在或无访问权限")
-            rows = (await db.execute(
-                select(ProjectPaper, Paper)
-                .join(Paper, Paper.id == ProjectPaper.paper_id)
-                .where(ProjectPaper.project_id == project_id, Paper.user_id == user_id)
-            )).all()
-            pending = [
-                (pp, paper) for pp, paper in rows
-                if (pp.reading_plan or {}).get("status") in {"pending", "reading", "failed"}
-            ]
-            pending.sort(key=lambda row: int((row[0].reading_plan or {}).get("order") or 9999))
-            pending = pending[: int(task.get("max_items") or 10)]
-            task["total"] = int(task.get("completed") or 0) + len(pending)
-
-            for pp, paper in pending:
-                latest = await get_json(key)
-                if isinstance(latest, dict):
-                    task = latest
-                if task.get("control") == "pause":
-                    task.update({"status": "paused", "current_paper_id": None, "updated_at": time.time()})
-                    await set_json(key, task, READING_EXECUTION_TTL)
-                    return
-
-                plan = dict(pp.reading_plan or {})
-                plan.update({"status": "reading", "updated_at": time.time()})
-                pp.reading_plan = plan
-                await db.commit()
-                task.update({
-                    "status": "running",
-                    "current_paper_id": str(paper.id),
-                    "current_paper_title": paper.title,
-                    "updated_at": time.time(),
-                })
-                await set_json(key, task, READING_EXECUTION_TTL)
-
-                focus = "；".join(plan.get("focus") or []) or "核心方法、实验与局限"
-                questions = "；".join(plan.get("questions") or []) or "论文的核心贡献、证据和局限是什么？"
-                prompt = (
-                    "你正在执行项目精读队列中的单篇任务。"
-                    f"请只精读当前论文《{paper.title}》。阅读重点：{focus}。"
-                    f"需要回答：{questions}。"
-                    "必须先用 search_paper_content 查找证据，再调用 project_save_paper_card 保存结构化卡片，"
-                    "并用 project_append_memory 记录至少一条带 paper_id、page、source_id 的关键发现。"
-                    "不要生成领域综述，也不要修改阅读计划。"
-                )
-                result = await run_lead_agent(
-                    db=db,
-                    paper_id=str(paper.id),
-                    question=prompt,
-                    user_id=user_id,
-                    project_id=project_id,
-                    request_id=f"reading-{task_id}-{paper.id}",
-                    enable_critique=False,
-                )
-                await db.refresh(pp)
-                if not result.success or not (pp.analysis_card or {}).get("summary"):
-                    failed_plan = dict(pp.reading_plan or plan)
-                    failed_plan.update({"status": "failed", "updated_at": time.time()})
-                    pp.reading_plan = failed_plan
-                    await db.commit()
-                    raise RuntimeError(result.trace.failure_reason or f"论文 {paper.id} 未生成阅读卡片")
-
-                results = list(task.get("results") or [])
-                results.append({"paper_id": str(paper.id), "paper_title": paper.title, "status": "completed"})
-                task.update({
-                    "completed": int(task.get("completed") or 0) + 1,
-                    "results": results,
-                    "current_paper_id": None,
-                    "updated_at": time.time(),
-                })
-                await set_json(key, task, READING_EXECUTION_TTL)
-
-        task.update({"status": "completed", "current_paper_id": None, "updated_at": time.time()})
-        await set_json(key, task, READING_EXECUTION_TTL)
-    except Exception as exc:
-        task.update({"status": "failed", "error": str(exc), "current_paper_id": None, "updated_at": time.time()})
-        await set_json(key, task, READING_EXECUTION_TTL)
-        raise
-
-
 async def dispatch_job(job: WorkerJob) -> None:
     from app.application.research_task_worker import run_task
     handlers = {
@@ -712,7 +459,6 @@ async def dispatch_job(job: WorkerJob) -> None:
         "paper_media_enhance": handle_paper_process,
         "paper_profile": handle_paper_profile,
         "arxiv_import": handle_arxiv_import,
-        "project_reading_execution": handle_project_reading_execution,
         "agent_execution_v2": handle_agent_execution_v2,
     }
     handler = handlers.get(job.type)

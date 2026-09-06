@@ -4,20 +4,114 @@ Status: COMPLETE
 
 ## Current State
 
-Current Phase: Phase 23 — Goal-driven Research Orchestration
+Current Phase: Phase 24 — Project Execution Lifecycle Closure
 
-Current Implementation Block: ORCH-1
+Current Implementation Block: LIFE-1
 
 Current Block Status: COMPLETE
 
-Last Completed Phase: Phase 23 — Goal-driven Research Orchestration
+Last Completed Phase: Phase 24 — Project Execution Lifecycle Closure
 
-Last Completed Implementation Block: ORCH-1 — Persistent Goal Plans and Business Tasks
-Hierarchy
+Last Completed Implementation Block: LIFE-1 — Project Reading/Writing
+Lifecycle Closure
 
-Last Completed Implementation Commit: `4985c30` baseline; all GUIDE/NAV,
-Reader transport, PDF performance and navigation hierarchy changes remain
-intentionally uncommitted at the user's request.
+Last Completed Implementation Commit: 当前本地提交 — 完善项目阅读写作执行链路。
+Baseline commit was `90cedc1`; exact commit ID is the current Git HEAD.
+
+## Completed Block — LIFE-1
+
+Baseline commit: `90cedc1`.
+
+Goal achieved: project Reading and Writing now enter the existing GoalExecution
+/ ResearchOrchestrator lifecycle; the duplicate project-reading execution loop
+was removed; the instant-interaction boundary is explicit; and project UI reads
+durable GoalExecution projections.
+
+Actual files changed:
+
+- Backend entry and lifecycle adapters: `backend/app/application/project_execution_entrypoint.py`, `backend/app/api/projects.py`, `backend/app/application/reading_execution_service.py`, `backend/app/api/executions.py`, `backend/app/worker.py`.
+- Existing task capability boundary: `backend/app/application/research_task_executors.py`.
+- Instant interaction boundary: `backend/app/api/chat.py`, `backend/app/api/paper_analysis.py`, `backend/app/api/documents.py`.
+- Backend tests: `backend/tests/test_project_lifecycle_closure.py`, `backend/tests/test_execution_runtime.py`, `backend/tests/test_research_orchestrator.py`.
+- Frontend GoalExecution projection: `frontend/src/api/executions.ts`, `frontend/src/api/projects.ts`, `frontend/src/stores/executions.ts`, `frontend/src/stores/stores.spec.ts`, `frontend/src/components/GlobalTaskCenter.vue`, `frontend/src/components/project/WritingDocumentEditor.vue`, `frontend/src/views/ProjectPapers.vue`, `frontend/src/views/ProjectPapers.spec.ts`.
+- Documentation: `docs/API.md`, `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`, `docs/spec-v2/execution/EXECUTION_INDEX.md`, `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`.
+
+Database changes: none. Existing `AgentExecution` and `research_tasks` schema
+remain unchanged; no migration was needed, and historical executions remain
+readable.
+
+Core call-chain changes:
+
+- Project Reading compatibility endpoints now create/read/control only a
+  `READ_PAPERS` GoalExecution. The old Redis reading state and direct project
+  Reading Worker loop were removed. Each `READ_PAPER` remains a persisted
+  ResearchTask and uses the existing TaskScope Lead Agent path; paper processing
+  and indexing are reused before reading.
+- `writing_generate` remains accepted at the existing execution API, but is
+  resolved to `WRITE_SECTION` and initialized by ResearchOrchestrator. New
+  project writing requests do not enqueue the old independent writing worker
+  lifecycle. The canonical Writing editor now creates `research_goal` with
+  `WRITE_SECTION` and reads its durable result/progress.
+- Single-paper Q&A, summary, interpretation and selection rewrite remain
+  instant Agent/Workflow paths and are explicitly classified without creating a
+  GoalExecution.
+- SSE and frontend streaming stop at `waiting_user`, `blocked` and `paused`,
+  so the same execution can be resumed instead of leaving a page in a false
+  running state.
+
+Reused old capabilities: AgentExecution, ResearchOrchestrator, ResearchTask,
+Redis Queue/WorkerJob, retry/dead-letter, checkpoint, trace, TaskScope, Skill
+Runtime, paper processing/indexing, RAG/Evidence, WritingService,
+WritingDocument/revision, Citation Audit and existing instant Reader/Chat
+workflows. No second orchestrator, recovery manager, RAG, writing runtime or
+worker system was added.
+
+Deleted/deprecated logic: the old `handle_project_reading_execution` loop,
+Redis `paperai:reading-execution:*` state and new project writes to the
+independent `agent_execution_v2` writing lifecycle are gone. The historical
+`agent_execution_v2` handler remains only as a compatibility adapter that
+converts queued legacy rows into the unified GoalExecution path.
+
+Tests and checks:
+
+- Backend complete suite: `339 passed` in the rebuilt backend image.
+- Frontend complete suite: `79 passed` across 19 files.
+- Frontend `npm run lint`: passed.
+- Frontend `npm run typecheck`: passed.
+- Frontend `npm run build`: passed.
+- Targeted backend Ruff check: passed.
+- Python compile and `git diff --check`: passed.
+- Docker backend/worker rebuild: passed.
+
+Target chain acceptance:
+
+- `READ_PAPERS`: indexed papers reuse existing Paper Cards; incomplete paper
+  processing waits/retries through the existing processing path; no old project
+  Reading lifecycle is created.
+- `WRITE_SECTION`: existing Evidence skips evidence building; indexed-only
+  papers create `BUILD_EVIDENCE → WRITE_SECTION → AUDIT_DRAFT`; no usable
+  papers become blocked without automatic Discover.
+- `DISCOVER_AND_IMPORT`: discovery remains structured and import confirmation
+  resumes the same execution through `waiting_user`.
+- Independent Reader/Chat/PDF/RAG/Writing regressions remain covered by the
+  complete suites.
+
+Manual acceptance: source-level call-chain inspection and deterministic
+integration fixtures passed for asset reuse, TaskScope reading, retry,
+interruption/recovery, duplicate queue delivery, partial output, cancel,
+pause/resume, blocked, waiting-user response and old execution compatibility.
+Live provider/model acceptance was not attempted because the local environment
+does not provide the configured external credentials.
+
+Remaining compatibility: the stable synchronous
+`/projects/{project_id}/writing/agent/generate` proposal endpoint and the
+frontend `createWriting` helper remain available for older callers; they are
+not used by the canonical editor and do not create the old independent
+`agent_execution_v2` lifecycle. They can be removed in a later compatibility
+cleanup after downstream callers migrate.
+
+Exact next action: none for LIFE-1. Remote push still requires a separate
+Chinese description and explicit user approval.
 
 ## Completed Block — ORCH-1
 
@@ -70,11 +164,12 @@ rows remain readable; local PostgreSQL was upgraded from `0006_execution_io`
 to `0007_research_tasks` through Alembic and schema preflight reports
 `compatible: true`.
 
-API: `research_goal` is accepted beside legacy `writing_generate` on the
-existing execution endpoint. Legacy writing continues to enqueue
-`agent_execution_v2`; Goal executions persist plans/tasks and use
-`/respond` for waiting-user recovery. Public execution serialization exposes
-progress/blocker projections but keeps the internal plan/DAG server-side.
+API: `research_goal` was accepted beside legacy `writing_generate` on the
+existing execution endpoint. The later LIFE-1 block moved that compatibility
+input onto the same GoalExecution path; Goal executions persist plans/tasks and
+use `/respond` for waiting-user recovery. Public execution serialization
+exposes progress/blocker projections but keeps the internal plan/DAG
+server-side.
 
 Tests and checks executed:
 

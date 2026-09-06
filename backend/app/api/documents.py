@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id
+from app.application.project_execution_entrypoint import classify_instant_interaction
 from app.application.citation_verification_service import (
     CitationMapping,
     CitationVerificationService,
@@ -196,6 +197,7 @@ async def rewrite_selection(
     authorization: str | None = Header(None),
 ):
     uid = await user_id(authorization, db)
+    classify_instant_interaction("writing_selection_proposal")
     try:
         proposal = await WritingService(db).rewrite_selection(
             project_id=project_id,

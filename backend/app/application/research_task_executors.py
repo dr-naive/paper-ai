@@ -1,6 +1,7 @@
 """Adapters over incumbent reading, retrieval, writing and import capabilities."""
 from __future__ import annotations
 from pathlib import Path
+from datetime import datetime
 from uuid import uuid5, NAMESPACE_URL
 from sqlalchemy import select
 from app.models.paper import Paper, Section
@@ -80,6 +81,10 @@ class TaskExecutors:
         if state is None:
             return self.blocked('PAPER_NOT_IN_PROJECT')
         paper = await self.db.get(Paper, paper_id)
+        pp = await self.db.scalar(select(ProjectPaper).where(ProjectPaper.project_id == self.execution.project_id,
+                                                            ProjectPaper.paper_id == paper_id))
+        if pp is None:
+            return self.blocked('PAPER_NOT_IN_PROJECT')
         if not state.indexed:
             if state.processing in {'pending', 'processing'}:
                 # The incumbent paper worker already owns the parse/index
@@ -87,16 +92,26 @@ class TaskExecutors:
                 # of replaying a second paper-processing side effect.
                 raise RuntimeError('PAPER_PROCESSING_INCOMPLETE')
             if not paper.pdf_path:
+                pp.reading_plan = {**(pp.reading_plan or {}), 'status': 'failed',
+                                   'updated_at': datetime.utcnow().isoformat(),
+                                   'source_task_id': self.task.task_id}
+                await self.db.commit()
                 return self.blocked('PAPER_PROCESSING_SOURCE_MISSING')
             await handle_paper_process(WorkerJob.create('paper_process', {
                 'paper_id': paper_id, 'user_id': self.execution.user_id, 'file_path': paper.pdf_path}))
             snapshot = await ProjectStateReader(self.db).read(self.execution.project_id, self.execution.user_id)
             if not next(p.indexed for p in snapshot.papers if p.paper_id == paper_id):
                 raise RuntimeError('PAPER_PROCESSING_INCOMPLETE')
-        pp = await self.db.scalar(select(ProjectPaper).where(ProjectPaper.project_id == self.execution.project_id,
-                                                            ProjectPaper.paper_id == paper_id))
         if (pp.analysis_card or {}).get('summary'):
+            pp.reading_plan = {**(pp.reading_plan or {}), 'status': 'completed',
+                               'updated_at': datetime.utcnow().isoformat(),
+                               'source_task_id': self.task.task_id}
+            await self.db.commit()
             return self.result([self.ref('paper_card', pp.id, source_paper_id=paper_id)], paper_card_saved=True)
+        pp.reading_plan = {**(pp.reading_plan or {}), 'status': 'reading',
+                           'updated_at': datetime.utcnow().isoformat(),
+                           'source_task_id': self.task.task_id}
+        await self.db.commit()
         skill_runtime = SkillRuntime(Path(__file__).parents[1] / 'harness/skills', build_standard_tool_runtime().specs())
         skill = await skill_runtime.activate(self.execution, self.task.skill_id, db=self.db)
         if self.task.task_type not in skill.supported_task_types:
@@ -114,6 +129,9 @@ class TaskExecutors:
             raise RuntimeError('READING_EVIDENCE_INCOMPLETE')
         pp.analysis_card = {**(pp.analysis_card or {}), 'summary': answer.answer,
                             'source_task_id': self.task.task_id, 'sources': answer.chunks}
+        pp.reading_plan = {**(pp.reading_plan or {}), 'status': 'completed',
+                           'updated_at': datetime.utcnow().isoformat(),
+                           'source_task_id': self.task.task_id}
         await self.db.commit()
         return self.result([self.ref('paper_card', pp.id, source_paper_id=paper_id)], paper_card_saved=True, sources_present=True)
 

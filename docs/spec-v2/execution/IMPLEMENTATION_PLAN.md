@@ -1,6 +1,33 @@
 # PaperAI Implementation Plan
 
-Status: IN_PROGRESS
+Status: COMPLETE
+
+## Phase 24 — Project Execution Lifecycle Closure
+
+LIFE-1 is one coherent block: route project Reading and Writing through the
+existing GoalExecution/ResearchOrchestrator lifecycle, remove the duplicate
+project-reading worker lifecycle, centralize project-goal entry classification,
+preserve independent single-paper interaction paths, and expose only the
+durable GoalExecution progress projection in project UI. Do not redesign the
+Orchestrator, Queue, RAG, Skill Runtime or stable Writing foundations.
+
+The acceptance gate covers the legacy project Reading adapter, the
+`writing_generate` compatibility adapter, the Reading/Writing/instant
+interaction boundary, GoalExecution progress and blocker projections, waiting
+user recovery, and existing Discover/Reader/Chat/PDF/RAG/Writing regressions.
+
+LIFE-1 acceptance result: COMPLETE. Backend `339 passed`, frontend `79 passed`,
+frontend typecheck/lint/build passed, targeted backend Ruff passed, and no
+database migration was required. See `IMPLEMENTATION_PROGRESS.md` for the
+actual compatibility boundaries and remaining risks.
+
+## Current Phase
+
+Phase 24 — Project Execution Lifecycle Closure.
+
+## Current Implementation Block
+
+LIFE-1 — completed; no next block selected.
 
 ## Phase 23 — Goal-driven Research Orchestration
 
@@ -16,13 +43,10 @@ frontend typecheck/lint/build passed, Alembic head `0007_research_tasks` and
 schema preflight passed. See `IMPLEMENTATION_PROGRESS.md` for the exact file,
 chain, migration and remaining-risk handoff.
 
-## Current Phase
+## Historical Phase 23 Reference
 
-Phase 23 — Goal-driven Research Orchestration.
-
-## Current Implementation Block
-
-ORCH-1.
+Phase 23 — Goal-driven Research Orchestration. ORCH-1 is complete and is the
+foundation used by Phase 24; the current block is recorded above.
 
 ## Phase 22 Goal
 

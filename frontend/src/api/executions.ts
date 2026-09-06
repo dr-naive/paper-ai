@@ -1,15 +1,24 @@
 import request from './index'
 import type { WritingGenerateRequest, WritingGenerationProposal } from './documents'
 
+export type ExecutionStatus = 'pending' | 'queued' | 'running' | 'waiting_user' | 'paused' | 'retrying' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled'
+export interface ProgressStep { id: string; label: string; status: ExecutionStatus }
+
 export interface AgentExecution {
   id: string
   project_id?: string | null
   agent_type: string
   goal: string
-  status: 'pending' | 'queued' | 'running' | 'waiting_user' | 'paused' | 'retrying' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled'
+  status: ExecutionStatus
   plan_version?: number
-  progress?: Array<{ id: string; label: string; status: AgentExecution['status'] }> | null
-  blockers?: Array<{ task_id?: string; context?: { prompt?: string; options?: Array<{ result_id: string; title: string; import_available: boolean }> } }> | null
+  progress?: ProgressStep[] | null
+  blockers?: Array<{
+    task_id?: string
+    capability?: string
+    reason?: string
+    context?: { prompt?: string; message?: string; code?: string; options?: Array<{ result_id: string; title: string; import_available: boolean }> }
+  }> | null
+  completion_reason?: string | null
   current_stage?: string | null
   active_skill?: string | null
   tool_call_count: number
@@ -22,6 +31,7 @@ export interface AgentExecution {
   result_payload?: {
     proposal?: WritingGenerationProposal
     completion?: Record<string, unknown>
+    output_refs?: Array<Record<string, unknown>>
   } | null
 }
 

@@ -507,6 +507,41 @@ Workflow/Service/Deterministic executor 负责，Agent 只处理语义判断、�
 task/artifact ID、Project advisory lock 和输出复用保持幂等。用户确认论文列表时，等待输入、schema、
 候选上下文和对应 Task 均保存在当前 Execution 上，响应后恢复同一链路。
 
+### 项目级 Goal 与即时交互边界
+
+项目级 Reading / Writing 只有一个生命周期来源：
+
+```text
+Project Reading
+  → READ_PAPERS GoalExecution
+  → ResearchOrchestrator
+  → ResearchTask(READ_PAPER)
+  → TaskScope Lead Agent / existing workflow
+
+Project Writing
+  → WRITE_SECTION GoalExecution
+  → ResearchOrchestrator
+  → BUILD_EVIDENCE（按需）
+  → WRITE_SECTION
+  → AUDIT_DRAFT
+```
+
+旧 `writing_generate` 和旧 Project Reading HTTP 入口只保留兼容适配职责，
+不得自行创建另一套 execution、WorkerJob 生命周期或项目级状态推进。旧的
+项目 Reading Worker 循环已废弃；历史队列消息只允许转换到上述统一链路。
+
+独立单论文问答、章节/公式/段落解释、当前论文局部总结以及选中文本的短
+proposal 仍保留即时路径：
+
+```text
+API → Agent / Workflow → Tool → Result
+```
+
+即时请求不创建 GoalExecution，也不能被 Lead Agent 自行升级为项目级 Goal。
+项目级入口统一由 `project_execution_entrypoint.py` 分类后交给
+ResearchOrchestrator；Worker 只执行已持久化的 WorkerJob，Lead Agent 只执行
+当前 ResearchTask。
+
 ---
 
 ## 16. Writing Domain

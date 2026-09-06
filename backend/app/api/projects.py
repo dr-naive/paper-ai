@@ -29,8 +29,6 @@ from __future__ import annotations
 
 import logging
 import json
-import time
-import uuid
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -46,8 +44,6 @@ from app.application.project_service import (
     ProjectNotFoundError,
     ProjectService,
 )
-from app.job_queue import enqueue_job
-from app.redis_client import get_json, set_json
 from app.models.project import (
     ARTIFACT_STATUS_DRAFT,
     PAPER_ROLE_BACKGROUND,
@@ -75,8 +71,6 @@ from app.utils.manuscript_export import build_docx, build_submission_package, ma
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
-READING_EXECUTION_PREFIX = "paperai:reading-execution:"
-READING_EXECUTION_TTL = 7 * 24 * 60 * 60
 
 # 合法枚举值(用于校验,避免无效字符串入库)
 _VALID_PHASES = {
@@ -1166,15 +1160,6 @@ async def start_reading_execution(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-
-
-async def _owned_execution(task_id: str, project_id: str, user_id: str) -> dict[str, Any]:
-    data = await get_json(f"{READING_EXECUTION_PREFIX}{task_id}")
-    if not isinstance(data, dict) or data.get("project_id") != project_id or data.get("user_id") != user_id:
-        raise HTTPException(status_code=404, detail="精读任务不存在或无访问权限")
-    return data
-
-
 @router.get("/{project_id}/reading-executions/{task_id}")
 async def get_reading_execution(
     project_id: str,
@@ -1186,9 +1171,9 @@ async def get_reading_execution(
     await _get_owned_project(db, project_id, user_id)
     from app.application.reading_execution_service import find_reading, reading_projection
     item = await find_reading(db, task_id, project_id, user_id)
-    if item:
-        return await reading_projection(db, item)
-    return await _owned_execution(task_id, project_id, user_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="精读任务不存在或无访问权限")
+    return await reading_projection(db, item)
 
 
 @router.post("/{project_id}/reading-executions/{task_id}/pause")
@@ -1200,18 +1185,13 @@ async def pause_reading_execution(
     from app.application.reading_execution_service import find_reading, reading_projection
     from app.application.research_orchestrator import ResearchOrchestrator
     item = await find_reading(db, task_id, project_id, user_id)
-    if item:
-        try:
-            await ResearchOrchestrator(db).control(item, 'pause')
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return await reading_projection(db, item)
-    data = await _owned_execution(task_id, project_id, user_id)
-    if data.get("status") not in {"queued", "running"}:
-        raise HTTPException(status_code=409, detail="当前任务不可暂停")
-    data.update({"control": "pause", "updated_at": time.time()})
-    await set_json(f"{READING_EXECUTION_PREFIX}{task_id}", data, READING_EXECUTION_TTL)
-    return data
+    if item is None:
+        raise HTTPException(status_code=404, detail="精读任务不存在或无访问权限")
+    try:
+        await ResearchOrchestrator(db).control(item, 'pause')
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await reading_projection(db, item)
 
 
 @router.post("/{project_id}/reading-executions/{task_id}/resume", status_code=202)
@@ -1223,19 +1203,10 @@ async def resume_reading_execution(
     from app.application.reading_execution_service import find_reading, reading_projection
     from app.application.research_orchestrator import ResearchOrchestrator
     item = await find_reading(db, task_id, project_id, user_id)
-    if item:
-        try:
-            await ResearchOrchestrator(db).control(item, 'resume')
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return await reading_projection(db, item)
-    data = await _owned_execution(task_id, project_id, user_id)
-    if data.get("status") not in {"paused", "failed"}:
-        raise HTTPException(status_code=409, detail="当前任务不可继续或重试")
-    data.update({"status": "queued", "control": "run", "error": None, "updated_at": time.time()})
-    await set_json(f"{READING_EXECUTION_PREFIX}{task_id}", data, READING_EXECUTION_TTL)
-    await enqueue_job(
-        "project_reading_execution",
-        {"task_id": task_id, "project_id": project_id, "user_id": user_id},
-    )
-    return data
+    if item is None:
+        raise HTTPException(status_code=404, detail="精读任务不存在或无访问权限")
+    try:
+        await ResearchOrchestrator(db).control(item, 'resume')
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await reading_projection(db, item)
