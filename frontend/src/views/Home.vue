@@ -37,7 +37,7 @@
             <template #content>
               <a-doption @click="$router.push('/library')">
                 <template #icon><icon-file /></template>
-                本地论文库
+                独立阅读
               </a-doption>
               <a-doption @click="$router.push('/projects')">
                 <template #icon><icon-folder /></template>
@@ -182,10 +182,10 @@
     <section class="cta-section">
       <div class="cta-content">
         <h2>按你的任务选择入口</h2>
-        <p>多篇论文的发现、管理与写作从研究项目开始；单篇 PDF 精读从本地论文库开始。</p>
+        <p>多篇论文的发现、管理与写作从研究项目开始；单篇 PDF 精读从独立阅读开始。</p>
         <div class="cta-actions">
           <a-button type="primary" size="large" @click="$router.push('/projects')">进入研究项目</a-button>
-          <a-button size="large" @click="$router.push('/library')">打开本地论文库</a-button>
+          <a-button size="large" @click="$router.push('/library')">进入独立阅读</a-button>
         </div>
       </div>
     </section>

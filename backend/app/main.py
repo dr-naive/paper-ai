@@ -8,6 +8,7 @@ from app.database import init_db, close_db
 from app.redis_client import close_redis, get_async_redis, initialize_redis, redis_health
 import logging
 import re
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,12 +55,54 @@ app = FastAPI(
 )
 
 
+def _is_pdf_transport_request(request: Request) -> bool:
+    path = request.url.path
+    return (
+        request.method == "GET"
+        and path.startswith("/api/v1/papers/")
+        and path.endswith("/pdf")
+    )
+
+
+@app.middleware("http")
+async def add_pdf_request_timing(request: Request, call_next):
+    """Expose and log the server-side portion of PDF request latency.
+
+    The browser reports first-page/render/cache timings separately. This
+    middleware covers API/auth/file preparation time and deliberately logs the
+    path without query parameters so legacy token query strings are not copied
+    into the performance log.
+    """
+    is_pdf_request = _is_pdf_transport_request(request)
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        if is_pdf_request:
+            logger.exception("pdf_request_failed path=%s", request.url.path)
+        raise
+
+    if is_pdf_request:
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        response.headers["Server-Timing"] = f"pdf-app;dur={duration_ms:.1f}"
+        logger.info(
+            "pdf_request path=%s status=%s range=%s response_bytes=%s app_ms=%.1f",
+            request.url.path,
+            response.status_code,
+            "yes" if request.headers.get("range") else "no",
+            response.headers.get("content-length", "-"),
+            duration_ms,
+        )
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["Server-Timing"],
 )
 
 

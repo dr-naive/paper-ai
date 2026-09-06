@@ -68,6 +68,7 @@ class CandidatePaperSelector:
         instruction: str,
         current_section_title: str = "",
         limit: int = 5,
+        allowed_paper_ids: list[str] | None = None,
     ) -> CandidateSelectionResult:
         project = await self.db.get(ResearchProject, project_id)
         if project is None or project.user_id != user_id:
@@ -96,6 +97,8 @@ class CandidatePaperSelector:
         )
         ranked: list[tuple[float, ProjectPaper, Paper, PaperProfile]] = []
         for project_paper, paper in rows:
+            if allowed_paper_ids is not None and str(paper.id) not in allowed_paper_ids:
+                continue
             profile = read_paper_profile(project_paper.analysis_card)
             if profile is None or profile.status not in {"ready", "stale"}:
                 continue

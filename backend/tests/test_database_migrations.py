@@ -61,7 +61,7 @@ def test_runtime_head_points_to_evidence_verification_revision():
 def test_runtime_head_points_to_execution_io_revision():
     revision = BACKEND_DIR / "alembic" / "versions" / "0006_execution_io_add_execution_input_and_result.py"
     source = revision.read_text(encoding="utf-8")
-    assert ALEMBIC_HEAD_REVISION == "0006_execution_io"
+    assert ALEMBIC_HEAD_REVISION == "0007_research_tasks"
     assert 'revision: str = "0006_execution_io"' in source
     assert 'down_revision: Union[str, None] = "0005_evidence_verification"' in source
     assert '"input_payload"' in source

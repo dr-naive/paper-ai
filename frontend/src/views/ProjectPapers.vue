@@ -6,9 +6,9 @@
         <header class="page-heading">
           <div>
             <h1>项目论文</h1>
-            <p>只显示已经加入当前项目的论文，阅读入口保持与独立 Reader 一致。</p>
+            <p>只显示已经加入当前项目的论文；阅读时会保留当前项目上下文。</p>
           </div>
-          <a-button type="primary" @click="router.push('/library')">上传本地 PDF</a-button>
+          <a-button type="primary" @click="showUploadModal = true">上传本地 PDF</a-button>
         </header>
 
         <section class="papers-toolbar" aria-label="项目论文筛选">
@@ -25,8 +25,8 @@
         <a-spin :loading="loading">
           <section v-if="!loading && !papers.length" class="papers-empty">
             <h2>项目中还没有论文</h2>
-            <p>先在论文库上传或导入论文，再将它加入这个项目。</p>
-            <a-button type="primary" @click="router.push('/library')">打开论文库</a-button>
+            <p>直接上传本地 PDF，处理完成后会自动加入当前项目。</p>
+            <a-button type="primary" @click="showUploadModal = true">上传本地 PDF</a-button>
           </section>
           <section v-else-if="loading" class="papers-empty" aria-live="polite">
             <h2>正在加载项目论文</h2>
@@ -64,6 +64,12 @@
           </div>
         </a-spin>
       </main>
+      <PaperUploadModal
+        v-model:visible="showUploadModal"
+        :project-id="projectId"
+        :project-title="project.title"
+        @uploaded="handleUploaded"
+      />
     </template>
     <main v-else-if="loading" class="project-loading" aria-live="polite">正在加载项目…</main>
     <a-empty v-else description="项目不存在或无访问权限" class="project-error" />
@@ -77,7 +83,9 @@ import { Message } from '@arco-design/web-vue'
 import { getProject, listProjectPapers, type ProjectPaperItem, type ResearchProject } from '@/api/projects'
 import ProjectHeader from '@/components/project/ProjectHeader.vue'
 import ProjectShell from '@/components/project/ProjectShell.vue'
+import PaperUploadModal from '@/components/PaperUploadModal.vue'
 import { useProjectStore } from '@/stores/project'
+import { projectReaderLocation } from '@/router/reader'
 
 const route = useRoute()
 const router = useRouter()
@@ -88,6 +96,7 @@ const papers = ref<ProjectPaperItem[]>([])
 const loading = ref(false)
 const search = ref('')
 const statusFilter = ref('all')
+const showUploadModal = ref(false)
 
 const readingStatus = (item: ProjectPaperItem) => {
   if (item.reading_plan?.status) return item.reading_plan.status
@@ -98,7 +107,7 @@ const readingStatus = (item: ProjectPaperItem) => {
 }
 
 const readingStatusLabel = (item: ProjectPaperItem) => ({ pending: '未阅读', reading: '阅读中', completed: '已阅读', skipped: '已跳过', failed: '解析失败' }[readingStatus(item)] || '未阅读')
-const readerActionLabel = (item: ProjectPaperItem) => ({ pending: '开始阅读', reading: '继续阅读', completed: '查看', skipped: '查看', failed: '查看' }[readingStatus(item)] || '查看')
+const readerActionLabel = (item: ProjectPaperItem) => ({ pending: '开始阅读', reading: '继续阅读', completed: '阅读', skipped: '阅读', failed: '阅读' }[readingStatus(item)] || '阅读')
 
 const filteredPapers = computed(() => {
   const query = search.value.trim().toLowerCase()
@@ -126,7 +135,11 @@ const loadPage = async () => {
 
 const openReader = (item: ProjectPaperItem) => {
   if (!item.paper) return
-  router.push({ name: 'PaperReader', params: { id: item.paper_id }, query: { project_id: projectId.value } })
+  router.push(projectReaderLocation(projectId.value, item.paper_id))
+}
+
+const handleUploaded = async () => {
+  await loadPage()
 }
 
 onMounted(loadPage)

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.harness.agents.critique_subagent import run_critique_subagent
 from app.harness.agents.routing import ExecutionMode, decide_agent_route
 from app.harness.skills.registry import SkillRegistry
+from app.harness.runtime.task_context import account
 from app.llm.client import get_llm_client, invoke_with_retry
 
 logger = logging.getLogger(__name__)
@@ -497,6 +498,7 @@ async def run_lead_agent(
     project_id: str = "",
     request_id: str = "",
     on_token: Optional[Any] = None,
+    task_scope: Any = None,
 ) -> AgentResult:
     """运行 lead_agent 的 ReAct loop。
 
@@ -533,7 +535,7 @@ async def run_lead_agent(
 
     # ========== Project 上下文 + Project-scope tools 注入 ==========
     project_context_str = ""
-    if project_id:
+    if project_id and task_scope is None:
         from app.harness.tools.literature_research import make_project_tools
         # 1. 读 project_context(文档库 / 长期记忆 / 最近产物),带长度上限截断
         project_context_str = await _load_project_context(db, project_id, user_id)
@@ -545,6 +547,12 @@ async def run_lead_agent(
         for t in tools:
             _dedup[t.name] = t
         tools = list(_dedup.values())
+
+    if task_scope is not None:
+        from app.harness.runtime.task_scope import ALIASES
+        tools = [t for t in tools if ALIASES.get(t.name, t.name) in task_scope.allowed_tools]
+        enable_critique = False
+        max_iterations = min(max_iterations, task_scope.max_model_calls)
 
     # 启用 critique 委派时,加虚拟 tool 让 LLM 知道有这个能力
     if enable_critique:
@@ -569,7 +577,7 @@ async def run_lead_agent(
             f"当前论文 paper_id: `{paper_id}`\n"
             f"调用单篇论文 tool 时,paper_id 参数请用这个值,不要让用户自己提供。\n"
         )
-    if project_id:
+    if project_id and task_scope is None:
         system_prompt += (
             f"当前研究项目 project_id: `{project_id}`\n"
             f"这是一个写作全流程项目。与研究项目相关的操作请用 project_ 前缀的 tool。\n"
@@ -597,6 +605,8 @@ async def run_lead_agent(
     if history_context:
         system_prompt += f"\n历史对话:\n{history_context}\n"
 
+    if task_scope is not None:
+        system_prompt += f"\n当前仅执行 {task_scope.task_type}，task_id={task_scope.task_id}。只回答当前论文任务；不得管理目标、执行生命周期或创建任务。"
     messages: list = [SystemMessage(content=system_prompt), HumanMessage(content=question)]
 
     # bind_tools 拿到支持 tool calling 的 LLM 实例
@@ -638,6 +648,9 @@ async def run_lead_agent(
         logger.info("lead_agent 迭代 %d/%d,question=%s", iteration, max_iterations, question[:50])
 
         try:
+            # The worker owns the durable budget counter.  The contextvar is
+            # unset for legacy calls, so this keeps the old path unchanged.
+            await account('model_call', {'iteration': iteration})
             if on_token is not None:
                 # 流式模式:用 astream,边接收边推送 content 增量
                 from langchain_core.messages import AIMessageChunk
@@ -697,6 +710,15 @@ async def run_lead_agent(
             }
             trace.tool_calls.append(tool_trace_entry)
 
+            if task_scope is not None:
+                try:
+                    task_scope.check(tool_name, tool_args, len(trace.tool_calls))
+                    await task_scope.checkpoint('tool_call', {'tool': tool_name})
+                except PermissionError as exc:
+                    tool_trace_entry['error_code'] = str(exc)
+                    await task_scope.checkpoint('scope_rejected', {'code': str(exc), 'tool': tool_name})
+                    messages.append(ToolMessage(content=str(exc), tool_call_id=tool_call_id))
+                    continue
             if tool_name not in tool_map:
                 tool_result = f"错误: 未知工具 {tool_name},可用工具: {list(tool_map.keys())}"
                 logger.warning("lead_agent 调用了未知 tool: %s", tool_name)
@@ -723,7 +745,11 @@ async def run_lead_agent(
                     logger.exception("lead_agent 调用 critique subagent 失败")
             else:
                 try:
-                    tool_result = await tool_map[tool_name].ainvoke(tool_args)
+                    if task_scope is not None:
+                        import asyncio
+                        tool_result = await asyncio.wait_for(tool_map[tool_name].ainvoke(tool_args), timeout=60)
+                    else:
+                        tool_result = await tool_map[tool_name].ainvoke(tool_args)
                     tool_trace_entry["ok"] = True
                     # 累积证据:把 tool 返回加到 collected_evidence
                     if tool_result:

@@ -704,7 +704,9 @@ async def handle_project_reading_execution(job: WorkerJob) -> None:
 
 
 async def dispatch_job(job: WorkerJob) -> None:
+    from app.application.research_task_worker import run_task
     handlers = {
+        "research_task": run_task,
         "chat_answer": handle_chat_answer,
         "paper_process": handle_paper_process,
         "paper_media_enhance": handle_paper_process,
@@ -740,6 +742,8 @@ async def worker_loop() -> None:
     if not await initialize_redis():
         raise RuntimeError("Worker 无法连接 Redis")
     await recover_processing_jobs()
+    from app.application.research_task_worker import recover_tasks
+    await recover_tasks()
     from app.api.papers import recover_incomplete_paper_tasks
     recovered_papers = recover_incomplete_paper_tasks()
     if recovered_papers:

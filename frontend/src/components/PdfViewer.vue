@@ -100,7 +100,9 @@
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
+import type { PdfLoadTelemetry } from '@/api/paper'
 import {
+  PDF_CACHE_NAME,
   paperIdFromPdfUrl,
   readCachedPdf,
   removeCachedPdf,
@@ -117,6 +119,7 @@ const emit = defineEmits<{
   'page-change': [page: number]
   'load-error': [message: string]
   'load-success': [pages: number]
+  'load-metrics': [metrics: PdfLoadTelemetry]
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
@@ -276,22 +279,195 @@ const onScroll = () => {
   })
 }
 
+const withQueryParam = (url: string, name: string, value: string) => {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}${encodeURIComponent(name)}=${encodeURIComponent(value)}`
+}
+
+const performanceNow = () => (
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+)
+
+const elapsedMilliseconds = (startedAt: number | null) => (
+  startedAt === null ? 0 : Math.max(0, performanceNow() - startedAt)
+)
+
+const roundedMilliseconds = (value: number) => Math.round(Math.max(0, value) * 10) / 10
+
+const countPdfNetworkRequests = (url: string) => {
+  if (typeof performance === 'undefined' || typeof performance.getEntriesByType !== 'function') {
+    return 0
+  }
+  try {
+    const target = new URL(url, window.location.origin)
+    return performance.getEntriesByType('resource').filter((entry) => {
+      try {
+        const entryUrl = new URL(entry.name)
+        return entryUrl.origin === target.origin && entryUrl.pathname === target.pathname
+      } catch {
+        return false
+      }
+    }).length
+  } catch {
+    return 0
+  }
+}
+
+const pdfRequestHeaders = (): Record<string, string> => {
+  const token = localStorage.getItem('access_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+const attachLoadingProgress = (task: any) => {
+  if (!task) return
+  task.onProgress = ({ loaded = 0, total = 0 }: { loaded?: number; total?: number }) => {
+    if (total > 0) {
+      // Keep 100% reserved for a successfully rendered first page.
+      loadingProgress.value = Math.min(99, Math.max(0, Math.round((loaded / total) * 100)))
+    }
+  }
+}
+
+const scheduleCacheWarmup = (
+  paperId: string,
+  pdf: any,
+  sequence: number,
+  cachedData?: ArrayBuffer,
+) => {
+  const warmup = () => {
+    if (sequence !== loadSequence) return
+    if (cachedData) {
+      void writeCachedPdf(paperId, new Uint8Array(cachedData))
+      return
+    }
+    void pdf.getData()
+      .then((data: Uint8Array) => writeCachedPdf(paperId, data))
+      .catch((cacheError: unknown) => {
+        console.warn('准备 PDF 本地缓存失败:', cacheError)
+      })
+  }
+
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+  }
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(warmup, { timeout: 2000 })
+  } else {
+    window.setTimeout(warmup, 250)
+  }
+}
+
+const destroyLoadingTask = async () => {
+  const task = loadingTask
+  loadingTask = null
+  if (task && typeof task.destroy === 'function') {
+    await task.destroy().catch(() => undefined)
+  }
+}
+
+const fetchPdfBytes = async (url: string): Promise<Uint8Array> => {
+  const response = await fetch(
+    withQueryParam(url, '_paperai_retry', `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+    {
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/pdf',
+        ...pdfRequestHeaders()
+      }
+    }
+  )
+  if (!response.ok) {
+    throw new Error(`PDF 请求失败（HTTP ${response.status}）`)
+  }
+
+  const declaredLength = Number(response.headers.get('content-length') || 0)
+  const data = new Uint8Array(await response.arrayBuffer())
+  if (declaredLength > 0 && declaredLength !== data.byteLength) {
+    throw new Error(`PDF 响应长度不一致（声明 ${declaredLength} 字节，收到 ${data.byteLength} 字节）`)
+  }
+  if (
+    data.byteLength < 5
+    || data[0] !== 0x25
+    || data[1] !== 0x50
+    || data[2] !== 0x44
+    || data[3] !== 0x46
+    || data[4] !== 0x2d
+  ) {
+    throw new Error('服务器返回的内容不是有效 PDF')
+  }
+  return data
+}
+
+const loadPdfFromNetwork = async (url: string, sequence: number) => {
+  try {
+    // Keep PDF.js range/stream loading as the fast path.  It is important for
+    // large papers and remains compatible with the existing PDF endpoint.
+    loadingTask = pdfjsLib.getDocument({
+      url,
+      httpHeaders: pdfRequestHeaders(),
+      disableRange: false,
+      disableStream: false,
+      // Let the first page request only the chunks it needs. Full-document
+      // warming is scheduled after the first page so it cannot compete with
+      // the interaction that makes the Reader feel ready.
+      disableAutoFetch: true,
+      rangeChunkSize: 2 * 1024 * 1024,
+      verbosity: 0
+    })
+    attachLoadingProgress(loadingTask)
+    return {
+      pdf: await loadingTask.promise,
+      source: 'range' as const
+    }
+  } catch (firstError) {
+    await destroyLoadingTask()
+    if (sequence !== loadSequence) throw firstError
+
+    // A proxy/browser cache can truncate one of the range responses.  Retry
+    // once with a cache-busted, complete response and pass verified bytes to
+    // PDF.js so the worker no longer has to request additional ranges.
+    const data = await fetchPdfBytes(url)
+    if (sequence !== loadSequence) throw firstError
+    loadingTask = pdfjsLib.getDocument({ data, verbosity: 0 })
+    attachLoadingProgress(loadingTask)
+    try {
+      return {
+        pdf: await loadingTask.promise,
+        source: 'fallback' as const
+      }
+    } catch (fallbackError) {
+      await destroyLoadingTask()
+      throw fallbackError
+    }
+  }
+}
+
 const loadPdf = async () => {
   const sequence = ++loadSequence
+  const loadStartedAt = performanceNow()
   loading.value = true
   error.value = false
   errorMessage.value = '无法加载 PDF 文件'
   numPages.value = 0
+  loadingProgress.value = 0
   renderedPages.clear()
   pageHeights = []
   pageWidths = []
   currentPage.value = 1
+
+  let cacheLookupMs = 0
+  let documentMs = 0
+  let firstPageRenderMs = 0
+  let documentStartedAt: number | null = null
+  let firstPageRenderStartedAt: number | null = null
+  let source: PdfLoadTelemetry['source'] = 'range'
+  let cacheBytes = 0
+  const networkRequestsBefore = countPdfNetworkRequests(props.pdfUrl)
   
   try {
-    if (loadingTask) {
-      await loadingTask.destroy().catch(() => undefined)
-      loadingTask = null
-    }
+    await destroyLoadingTask()
     if (pdfDoc) {
       await pdfDoc.destroy().catch(() => undefined)
       pdfDoc = null
@@ -300,24 +476,43 @@ const loadPdf = async () => {
     const paperId = paperIdFromPdfUrl(props.pdfUrl)
     const forceReload = new URL(props.pdfUrl, window.location.origin).searchParams.has('t')
     if (paperId && forceReload) await removeCachedPdf(paperId)
+    const cacheLookupStartedAt = performanceNow()
     const cachedPdf = paperId && !forceReload
       ? await readCachedPdf(paperId)
       : null
-
-    loadingTask = pdfjsLib.getDocument(cachedPdf
-      ? {
-          data: new Uint8Array(cachedPdf),
-          verbosity: 0
-        }
-      : {
-          url: props.pdfUrl,
-          disableRange: false,
-          disableStream: false,
-          disableAutoFetch: false,
-          rangeChunkSize: 1024 * 1024,
+    cacheLookupMs = elapsedMilliseconds(cacheLookupStartedAt)
+    let loadedFromCache = false
+    let pdf: any
+    documentStartedAt = performanceNow()
+    if (cachedPdf) {
+      source = 'cache'
+      cacheBytes = cachedPdf.data.byteLength
+      try {
+        loadingTask = pdfjsLib.getDocument({
+          // PDF.js transfers the data buffer to its worker. Keep the cached
+          // response intact so a legacy v1 entry can be promoted after load.
+          data: new Uint8Array(cachedPdf.data.slice(0)),
           verbosity: 0
         })
-    const pdf = await loadingTask.promise
+        attachLoadingProgress(loadingTask)
+        pdf = await loadingTask.promise
+        loadedFromCache = true
+      } catch {
+        await destroyLoadingTask()
+        await removeCachedPdf(paperId as string)
+        if (sequence !== loadSequence) return
+        source = 'range'
+        cacheBytes = 0
+        const networkLoad = await loadPdfFromNetwork(props.pdfUrl, sequence)
+        pdf = networkLoad.pdf
+        source = networkLoad.source
+      }
+    } else {
+      const networkLoad = await loadPdfFromNetwork(props.pdfUrl, sequence)
+      pdf = networkLoad.pdf
+      source = networkLoad.source
+    }
+    documentMs = elapsedMilliseconds(documentStartedAt)
     if (sequence !== loadSequence) {
       await pdf.destroy()
       return
@@ -325,6 +520,7 @@ const loadPdf = async () => {
 
     pdfDoc = pdf
     loadingTask = null
+    firstPageRenderStartedAt = performanceNow()
     const firstPage = await pdf.getPage(1)
     const firstViewport = firstPage.getViewport({ scale: scale.value })
     pageHeights = new Array(pdf.numPages).fill(firstViewport.height)
@@ -337,30 +533,54 @@ const loadPdf = async () => {
     
     // 【第一步：立即渲染首页】不等待所有页面高度计算
     await renderPage(0)
+    firstPageRenderMs = elapsedMilliseconds(firstPageRenderStartedAt)
     
     // 【第二步：立即显示首页】用户马上能看到内容
     loading.value = false
     loadingProgress.value = 100
     emit('load-success', pdf.numPages)
+    emit('load-metrics', {
+      outcome: 'success',
+      source,
+      total_ms: roundedMilliseconds(elapsedMilliseconds(loadStartedAt)),
+      cache_lookup_ms: roundedMilliseconds(cacheLookupMs),
+      document_ms: roundedMilliseconds(documentMs),
+      first_page_render_ms: roundedMilliseconds(firstPageRenderMs),
+      pages: pdf.numPages,
+      network_requests: Math.max(0, countPdfNetworkRequests(props.pdfUrl) - networkRequestsBefore),
+      cache_bytes: cacheBytes
+    })
     renderVisiblePages()
     prefetchNearbyPages(0)
 
-    if (paperId && !cachedPdf) {
-      void pdf.getData()
-        .then((data: Uint8Array) => writeCachedPdf(paperId, data))
-        .catch((cacheError: unknown) => {
-          console.warn('准备 PDF 本地缓存失败:', cacheError)
-        })
+    if (paperId && loadedFromCache && cachedPdf && cachedPdf.cacheName !== PDF_CACHE_NAME) {
+      scheduleCacheWarmup(paperId, pdf, sequence, cachedPdf.data)
+    } else if (paperId && !loadedFromCache) {
+      scheduleCacheWarmup(paperId, pdf, sequence)
     }
   } catch (e: any) {
     if (sequence !== loadSequence) return
     console.error('加载 PDF 失败:', e.message || e)
+    documentMs = elapsedMilliseconds(documentStartedAt)
+    firstPageRenderMs = elapsedMilliseconds(firstPageRenderStartedAt)
     loadingTask = null
     errorMessage.value = e?.message
       ? `无法读取 PDF：${e.message}`
       : '无法读取 PDF 文件，请重试'
     error.value = true
     loading.value = false
+    emit('load-metrics', {
+      outcome: 'error',
+      source,
+      total_ms: roundedMilliseconds(elapsedMilliseconds(loadStartedAt)),
+      cache_lookup_ms: roundedMilliseconds(cacheLookupMs),
+      document_ms: roundedMilliseconds(documentMs),
+      first_page_render_ms: roundedMilliseconds(firstPageRenderMs),
+      pages: 0,
+      network_requests: Math.max(0, countPdfNetworkRequests(props.pdfUrl) - networkRequestsBefore),
+      cache_bytes: cacheBytes,
+      error: typeof e?.name === 'string' ? e.name : 'PDF_LOAD_ERROR'
+    })
     emit('load-error', errorMessage.value)
   }
 }

@@ -6,7 +6,10 @@ export interface AgentExecution {
   project_id?: string | null
   agent_type: string
   goal: string
-  status: 'queued' | 'running' | 'waiting_user' | 'paused' | 'completed' | 'failed' | 'cancelled'
+  status: 'pending' | 'queued' | 'running' | 'waiting_user' | 'paused' | 'retrying' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled'
+  plan_version?: number
+  progress?: Array<{ id: string; label: string; status: AgentExecution['status'] }> | null
+  blockers?: Array<{ task_id?: string; context?: { prompt?: string; options?: Array<{ result_id: string; title: string; import_available: boolean }> } }> | null
   current_stage?: string | null
   active_skill?: string | null
   tool_call_count: number
@@ -26,6 +29,28 @@ export interface WritingExecutionCreate {
   agent_type: 'writing_generate'
   goal: string
   input: WritingGenerateRequest
+}
+
+export type ResearchGoalType = 'READ_PAPERS' | 'WRITE_SECTION' | 'DISCOVER_AND_IMPORT'
+
+export interface ResearchGoalInput {
+  goal_type: ResearchGoalType
+  paper_ids?: string[]
+  evidence_ids?: string[]
+  document_id?: string | null
+  base_revision_id?: string | null
+  instruction?: string
+  section_path?: string[]
+  nearby_text?: string
+  citation_style?: 'apa' | 'ieee' | 'gbt7714'
+  search?: Record<string, unknown> | null
+  require_import_confirmation?: boolean
+}
+
+export interface ResearchExecutionCreate {
+  agent_type: 'research_goal'
+  goal: string
+  input: ResearchGoalInput
 }
 
 export interface AgentEvent {
@@ -80,6 +105,9 @@ export const listUserExecutions = (limit = 100) =>
 export const createWritingExecution = (projectId: string, data: WritingExecutionCreate) =>
   request.post<AgentExecution>(`/api/v1/projects/${projectId}/executions`, data)
 
+export const createResearchExecution = (projectId: string, data: ResearchExecutionCreate) =>
+  request.post<AgentExecution>(`/api/v1/projects/${projectId}/executions`, data)
+
 export const listExecutionEvents = (executionId: string, after = 0) =>
   request.get<{ items: AgentEvent[] }>(`/api/v1/executions/${executionId}/events`, { params: { after } })
 
@@ -125,3 +153,6 @@ export const cancelExecution = (executionId: string) => request.post<AgentExecut
 export const pauseExecution = (executionId: string) => request.post<AgentExecution>(`/api/v1/executions/${executionId}/pause`)
 export const resumeExecution = (executionId: string) => request.post<AgentExecution>(`/api/v1/executions/${executionId}/resume`)
 export const approveExecution = (executionId: string) => request.post<AgentExecution>(`/api/v1/executions/${executionId}/approve`)
+
+export const getExecution = (executionId: string) => request.get<AgentExecution>(`/api/v1/executions/${executionId}`)
+export const respondExecution = (executionId: string, selectedResultIds: string[]) => request.post<AgentExecution>(`/api/v1/executions/${executionId}/respond`, { selected_result_ids: selectedResultIds })

@@ -24,3 +24,8 @@ completion:
   required_metadata:
     - paper_id
     - source_ids
+
+supported_task_types: ['READ_PAPER']
+required_inputs: ['paper']
+produced_artifacts: ['paper_card']
+max_model_calls: 20

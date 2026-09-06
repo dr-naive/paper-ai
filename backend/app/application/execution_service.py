@@ -69,8 +69,13 @@ def validate_writing_completion(
 
 
 def execution_dict(item: AgentExecution) -> dict[str, Any]:
+    # Plan is durable server state used for recovery, not a frontend
+    # interaction model.  Expose only the user-facing progress/blocker
+    # projections; this prevents internal DAG/task names from becoming UI API.
     return {column.name: (value.isoformat() if isinstance(value, datetime) else value)
-            for column in item.__table__.columns for value in [getattr(item, column.name)]}
+            for column in item.__table__.columns
+            if column.name != "plan"
+            for value in [getattr(item, column.name)]}
 
 
 def event_envelope(item: AgentEvent) -> dict[str, Any]:
@@ -238,7 +243,8 @@ async def append_event(db: AsyncSession, execution: AgentExecution, event_type: 
 async def set_status(db: AsyncSession, execution: AgentExecution, status: str, *, stage: str | None = None,
                      error_code: str | None = None, error_message: str | None = None) -> None:
     now = datetime.utcnow()
-    execution.status = status
+    from app.research.task_contracts import transition_execution
+    transition_execution(execution, status)
     execution.current_stage = stage if stage is not None else execution.current_stage
     execution.updated_at = now
     execution.error_code = error_code

@@ -18,6 +18,18 @@ Overview | Discover | Papers | Writing
 No Agent Center, Tool/Skill UI, Research Map, Evidence Matrix or universal
 Project Chat appears in primary navigation.
 
+Reader navigation has two explicit business contexts while reusing one Reader
+implementation:
+
+- Independent Reading enters `/paper/:id` and returns to `/library`.
+- Project Papers enters `/projects/:projectId/papers/:paperId/read` and returns
+  to the current Project Papers page with the project identity intact.
+
+Shared headers accept typed Vue Router locations for Back and breadcrumbs.
+Navigation must not infer the destination from browser history or an arbitrary
+`return_to` string. The legacy `/paper/:id?project_id=...` form remains a
+compatibility bridge and is normalized to the semantic project route.
+
 ## Visual direction
 
 The interface is an editorial research workspace: restrained, professional,

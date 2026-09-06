@@ -222,7 +222,7 @@ harness/
 
 ### `lead_agent.py`
 
-当前 Lead Agent 已经承担：
+Legacy chat/Reader 路径中的 Lead Agent 仍承担：
 
 - model tool-calling / ReAct loop
 - 意图与上下文处理
@@ -231,8 +231,10 @@ harness/
 - execution / checkpoint / streaming 等相关职责
 
 V1 用例通过独立的 Context、Discovery、Writing 和 Citation application/workflow 边界接入通用
-Runtime；`lead_agent.py` 仍保留通用 tool-calling、checkpoint 和 streaming 职责。
-其职责过宽是已记录的长期风险，不通过新增用户界面来扩大。
+Runtime；`lead_agent.py` 仍保留通用 tool-calling、checkpoint 和 streaming 职责。Goal-driven
+ResearchTask 则必须传入 `TaskScope`：只加载当前 Skill 的工具，只允许当前 Project/Paper 资源，
+在每次 ToolCall 前检查权限与预算，并以结构化 TaskResult 返回。Goal 场景下 Lead Agent 不规划
+整个 Execution、不创建无关 Task，也不推进生命周期。
 
 ### Tool Runtime
 
@@ -461,6 +463,50 @@ ProjectPaper.analysis_card
 
 用户界面只显示产品可理解的阶段，不展示 raw tool log 或 chain-of-thought。
 
+### 15.1 Goal-driven Research Orchestration
+
+Goal-driven 执行复用上述 `AgentExecution`、Redis Queue、Worker、checkpoint、retry、dead-letter、
+trace、pause/cancel 基础，不维护第二套 execution runtime。`AgentExecution` 在 Goal 场景的
+语义别名是 `ResearchExecution` / `GoalExecution`，并在原记录上持久化 `plan`、`plan_version`、
+`progress`、`blockers` 和 `completion_reason`；旧 execution 行仍按原字段读取。
+
+唯一业务执行链为：
+
+```text
+ResearchExecution (AgentExecution)
+  → persisted ExecutionPlan
+  → ResearchTask
+  → WorkerJob (Redis queue carrier)
+  → TaskDispatcher
+  → AGENT / WORKFLOW / DETERMINISTIC executor
+  → Artifact / Evidence / Project state
+  → CompletionEvaluator
+  → next task / waiting_user / blocked / completed
+```
+
+职责边界固定如下：
+
+| 概念 | 当前职责 |
+| --- | --- |
+| ResearchExecution / GoalExecution | 一个用户目标的生命周期、预算、事件、恢复入口 |
+| ExecutionPlan | 持久化的 goal、plan version、任务 DAG、依赖、复用资产和缺失依赖 |
+| ResearchTask | 可独立执行、可重试、能产出明确结构化引用的业务步骤 |
+| WorkerJob | 现有 Redis Queue 的传输与重试载体，不承载业务计划 |
+| ResearchOrchestrator | 只负责 Goal、统一 ProjectStateSnapshot、Dependency、Plan、Dispatch、Completion |
+| Lead Agent | 当前 ResearchTask 范围内的语义执行器，不接管整个 Execution |
+| Skill | Task 的输入、产物、Tool 白名单、预算和 completion criteria 约束 |
+| Tool | 原子、类型化、权限分类、超时和 ownership 校验的操作 |
+| Artifact / Evidence | 可被后续任务通过结构化引用复用的项目产物 |
+
+第一版任务类型只包括 `DISCOVER`、`IMPORT_PAPER`、`READ_PAPER`、`BUILD_EVIDENCE`、
+`WRITE_SECTION`、`AUDIT_DRAFT`；ToolCall 不拆成 ResearchTask。确定性搜索过滤、导入、解析/索引、
+retrieval、reference builder、citation integrity、final gate 和 dependency check 继续由既有
+Workflow/Service/Deterministic executor 负责，Agent 只处理语义判断、深度阅读、跨论文综合和写作。
+
+恢复从 PostgreSQL 中的 Plan 与 Task 状态继续，绝不因为重启重新规划；重复 queue 消息通过稳定
+task/artifact ID、Project advisory lock 和输出复用保持幂等。用户确认论文列表时，等待输入、schema、
+候选上下文和对应 Task 均保存在当前 Execution 上，响应后恢复同一链路。
+
 ---
 
 ## 16. Writing Domain
@@ -682,6 +728,9 @@ Citation Mapping
 Citation Verification
 Execution Progress
 ```
+
+Execution Progress 只映射为“正在搜索相关论文”“已整理可用论文证据”“正在生成章节草稿”等
+用户可理解的 ProgressStep；Worker、ToolCall、DAG 内部名称和 raw execution event 不作为产品 UI。
 
 前端不得通过正则从 Agent prose 中解析论文卡片或 Citation。
 

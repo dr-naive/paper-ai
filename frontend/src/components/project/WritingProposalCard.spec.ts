@@ -48,6 +48,7 @@ describe('WritingProposalCard', () => {
     expect(wrapper.text()).toContain('规范化主张：The method improves retrieval quality.')
     expect(wrapper.text()).toContain('第 4 页')
     expect(wrapper.get('.proposal-primary').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('a').attributes('href')).toBe('/projects/project-1/papers/paper-a/read')
     await wrapper.get('.proposal-primary').trigger('click')
     expect(wrapper.emitted('replace')).toHaveLength(1)
   })

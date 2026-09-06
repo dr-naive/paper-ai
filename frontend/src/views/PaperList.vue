@@ -1,6 +1,6 @@
 <template>
   <div class="paper-list-page">
-    <ProductHeader context="论文工作台" />
+    <ProductHeader context="独立阅读" />
 
     <main class="paper-list-shell">
       <header class="library-header">
@@ -173,7 +173,7 @@
                     :loading="retryingTasks[`task_${paper.id}`]"
                     @click.stop="retryMediaEnhancement(paper)"
                   >重试图表增强</a-button>
-                  <a-button type="primary" size="small" @click.stop="openPaper(paper)">打开论文</a-button>
+                  <a-button type="primary" size="small" @click.stop="openPaper(paper)">{{ readerActionLabel(paper) }}</a-button>
                   <a-dropdown trigger="click" position="br">
                     <button
                       type="button"
@@ -204,22 +204,7 @@
         </template>
       </a-spin>
     </main>
-    <a-modal v-model:visible="showUploadModal" title="上传论文" :footer="false">
-      <a-spin :spinning="uploading" tip="上传中...">
-        <a-upload :limit="1" accept=".pdf" :auto-upload="false" action="" :custom-request="customUpload" @change="handleFileChange">
-          <template #upload-button><div class="upload-trigger"><p>点击或拖拽上传 PDF 文件</p></div></template>
-        </a-upload>
-      </a-spin>
-      <div v-if="uploading" class="upload-progress">
-        <div class="progress-bar">
-          <div class="progress-fill" :style="{ transform: `scaleX(${progressPercent / 100})` }"></div>
-        </div>
-        <p class="progress-text">{{ progressText }}</p>
-      </div>
-      <div v-if="!uploading && selectedFile" style="margin-top: 16px; text-align: right;">
-        <a-button type="primary" @click="handleUpload" :disabled="!selectedFile">开始上传</a-button>
-      </div>
-    </a-modal>
+    <PaperUploadModal v-model:visible="showUploadModal" @uploaded="handleUploadComplete" />
   </div>
 </template>
 
@@ -227,20 +212,18 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
-import type { FileItem } from '@arco-design/web-vue'
-import type { RequestOption, UploadRequest } from '@arco-design/web-vue/es/upload/interfaces'
 import {
   deletePaper,
   getPaperList,
   getRecentMessages,
-  getTaskStatus,
   updateReadingStatus,
   retryPaperTask,
-  uploadPaper
 } from '@/api/paper'
 import type { PaperImportTask } from '@/api/paper'
 import dayjs from 'dayjs'
 import ProductHeader from '@/components/ProductHeader.vue'
+import PaperUploadModal from '@/components/PaperUploadModal.vue'
+import { standaloneReaderLocation } from '@/router/reader'
 import { removeCachedPdf } from '@/utils/pdfCache'
 import { IconDelete, IconStar } from '@arco-design/web-vue/es/icon'
 
@@ -254,11 +237,6 @@ const searchText = ref('')
 const statusFilter = ref('all')
 const sortMode = ref('updated')
 const showUploadModal = ref(false)
-const selectedFile = ref<File | null>(null)
-const uploading = ref(false)
-const progressPercent = ref(0)
-const progressText = ref('')
-let pollInterval: number | null = null
 let mediaPollInterval: number | null = null
 
 const readPosition = (paperId: string) => {
@@ -304,14 +282,23 @@ const filteredPapers = computed(() => {
 })
 
 const openPaper = (paper: any) => {
-  router.push(`/paper/${paper.id}`)
+  router.push(standaloneReaderLocation(String(paper.id)))
 }
 
 const openRecentMessage = (item: any) => {
-  router.push({
-    path: `/paper/${item.paper_id}`,
-    query: { session: item.session_id, message: item.id }
-  })
+  router.push(standaloneReaderLocation(String(item.paper_id), {
+    session: item.session_id,
+    message: item.id,
+  }))
+}
+
+const readerActionLabel = (paper: any) => paper.status === 'reading'
+  ? '继续阅读'
+  : paper.status === 'completed' ? '再次阅读' : '开始阅读'
+
+const handleUploadComplete = () => {
+  void loadPapers()
+  void loadRecentMessages()
 }
 
 const progressDescription = (paper: any) => {
@@ -428,102 +415,7 @@ const retryImport = (task: PaperImportTask) => retryTask(task.task_id, '导入�
 const retryMediaEnhancement = (paper: any) => retryTask(`task_${paper.id}`, '图表增强重试已排队')
 
 
-const customUpload = (options: RequestOption): UploadRequest => {
-  // 拦截 a-upload 的默认上传行为（包括重试按钮）
-  // 不做任何事，所有上传由 handleUpload 按钮触发
-  options.onSuccess?.({})
-  return {
-    abort: () => {}
-  }
-}
-
-const handleFileChange = (fileList: FileItem[]) => {
-  const latestFile = fileList[fileList.length - 1]
-  if (latestFile && latestFile.file) {
-    selectedFile.value = latestFile.file
-  } else {
-    selectedFile.value = null
-  }
-}
-
-const pollTaskStatus = async (taskId: string) => {
-  try {
-    const response = await getTaskStatus(taskId)
-    progressPercent.value = response.progress
-    progressText.value = response.message
-    
-    if (response.status === 'ready' || response.status === 'completed') {
-      if (pollInterval) {
-        clearInterval(pollInterval)
-        pollInterval = null
-      }
-      progressPercent.value = 100
-      const mediaEnhancing = response.status === 'ready'
-      progressText.value = mediaEnhancing ? '论文已可用，图表继续后台增强' : '处理完成！'
-      
-      setTimeout(() => {
-        Message.success(mediaEnhancing ? '论文已可用，图表将在后台继续增强' : '上传成功')
-        showUploadModal.value = false
-        selectedFile.value = null
-        uploading.value = false
-        progressPercent.value = 0
-        progressText.value = ''
-        loadPapers()
-        loadRecentMessages()
-      }, 500)
-    } else if (response.status === 'failed') {
-      if (pollInterval) {
-        clearInterval(pollInterval)
-        pollInterval = null
-      }
-      uploading.value = false
-      Message.error(response.message || '处理失败')
-    }
-  } catch (error) {
-    console.error('查询任务状态失败', error)
-  }
-}
-
-const handleUpload = async () => {
-  if (!selectedFile.value) { 
-    Message.warning('请选择文件')
-    return 
-  }
-  
-  uploading.value = true
-  progressPercent.value = 0
-  progressText.value = '上传文件...'
-  
-  try { 
-    // 异步上传，立即返回任务ID
-    const response = await uploadPaper(selectedFile.value)
-    const taskId = response.task_id || response.taskId
-
-    if (!taskId) {
-      throw new Error('未能获取任务ID')
-    }
-    
-    progressPercent.value = 5
-    progressText.value = '上传成功，正在后台处理...'
-    
-    // 开始轮询任务状态
-    pollInterval = window.setInterval(() => {
-      pollTaskStatus(taskId)
-    }, 2000)
-    
-  } catch (error: any) {
-    uploading.value = false
-    progressPercent.value = 0
-    progressText.value = ''
-    console.error('上传失败', error)
-    Message.error(error?.response?.data?.detail || '上传失败，请检查文件格式')
-  }
-}
-
 onUnmounted(() => {
-  if (pollInterval) {
-    clearInterval(pollInterval)
-  }
   if (mediaPollInterval) {
     clearInterval(mediaPollInterval)
   }

@@ -57,6 +57,7 @@ import { computed, ref } from 'vue'
 import type { CitationVerificationResult, WritingGenerationProposal, WritingRewriteProposal } from '@/api/documents'
 import type { EvidenceItem } from '@/api/projects'
 import { proposalSegments } from '@/utils/writingProposal'
+import { projectReaderPath } from '@/router/reader'
 import { IconCheck, IconClose, IconCloseCircle, IconExclamationCircle } from '@arco-design/web-vue/es/icon'
 
 const props = defineProps<{
@@ -85,7 +86,7 @@ const sourceTitle = (citation: CitationVerificationResult) => {
 }
 const sourcePage = (citation: CitationVerificationResult) => props.evidence.find(item => item.id === citation.evidence_id)?.page_number
 const normalizedClaim = (citation: CitationVerificationResult) => props.evidence.find(item => item.id === citation.evidence_id)?.normalized_claim || ''
-const paperHref = (paperId: string) => `/paper/${encodeURIComponent(paperId)}?project_id=${encodeURIComponent(props.projectId)}`
+const paperHref = (paperId: string) => projectReaderPath(props.projectId, paperId)
 </script>
 
 <style scoped>

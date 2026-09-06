@@ -2,15 +2,43 @@ import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import { pinia } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 
+const paperReaderComponent = () => import('@/views/PaperReader.vue')
+
 export const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/home' },
   { path: '/home', name: 'Home', component: () => import('@/views/Home.vue') },
-  { path: '/guide', name: 'Guide', component: () => import('@/views/Guide.vue') },
+  {
+    path: '/guide',
+    name: 'Guide',
+    redirect: { name: 'GuideSection', params: { section: 'overview' } },
+  },
+  {
+    path: '/guide/:section(overview|discover|papers|writing|reader|evidence|troubleshooting)',
+    name: 'GuideSection',
+    component: () => import('@/views/Guide.vue'),
+  },
   { path: '/login', name: 'Login', component: () => import('@/views/Login.vue') },
   { path: '/register', name: 'Register', component: () => import('@/views/Register.vue') },
   { path: '/papers', name: 'PaperWorkbench', component: () => import('@/views/ResearchProjectList.vue') },
   { path: '/library', name: 'PaperList', component: () => import('@/views/PaperList.vue') },
-  { path: '/paper/:id', name: 'PaperReader', component: () => import('@/views/PaperReader.vue') },
+  {
+    path: '/paper/:id',
+    name: 'PaperReader',
+    component: paperReaderComponent,
+    meta: { readerContext: 'standalone' },
+    beforeEnter: to => {
+      const projectId = String(to.query.project_id || '')
+      if (!projectId) return true
+      const query = { ...to.query }
+      delete query.project_id
+      return {
+        name: 'ProjectPaperReader',
+        params: { projectId, paperId: String(to.params.id) },
+        query,
+        hash: to.hash,
+      }
+    },
+  },
   { path: '/projects', name: 'ResearchProjects', component: () => import('@/views/ResearchProjectList.vue') },
   {
     path: '/project/:id',
@@ -38,6 +66,12 @@ export const routes: RouteRecordRaw[] = [
   { path: '/projects/:projectId/overview', name: 'ProjectOverview', component: () => import('@/views/ProjectOverview.vue') },
   { path: '/projects/:projectId/discover', name: 'ProjectDiscover', component: () => import('@/views/LiteratureDiscover.vue') },
   { path: '/projects/:projectId/papers', name: 'ProjectPapers', component: () => import('@/views/ProjectPapers.vue') },
+  {
+    path: '/projects/:projectId/papers/:paperId/read',
+    name: 'ProjectPaperReader',
+    component: paperReaderComponent,
+    meta: { readerContext: 'project' },
+  },
   { path: '/projects/:projectId/writing', name: 'ProjectWriting', component: () => import('@/views/ProjectWriting.vue') },
   {
     path: '/admin',
@@ -75,7 +109,11 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const auth = useAuthStore(pinia)
   const token = localStorage.getItem('access_token')
-  const isPublicRoute = to.path === '/login' || to.path === '/home' || to.path === '/guide' || to.path === '/register'
+  const isPublicRoute = to.path === '/login'
+    || to.path === '/home'
+    || to.path === '/guide'
+    || to.path.startsWith('/guide/')
+    || to.path === '/register'
 
   if (!token) {
     auth.clearSession()

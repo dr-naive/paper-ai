@@ -1,6 +1,6 @@
 # PaperAI Execution Index
 
-> Status: IDLE / SESSION ENTRYPOINT
+> Status: COMPLETE / SESSION HANDOFF
 >
 > This file is the sole entry point for deciding the current PaperAI
 > Implementation Block reading boundary. It does not replace active product,
@@ -19,11 +19,150 @@ Do not read all active specifications by default. Do not read
 
 ## Current Phase
 
-None. Phase 16 is complete.
+Phase 23 — Goal-driven Research Orchestration.
 
 ## Current Implementation Block
 
-None.
+ORCH-1 — persistent goal plans, business tasks and existing worker adapters.
+
+ORCH-1 status: COMPLETE. The next implementation block is not selected; use
+`IMPLEMENTATION_PROGRESS.md` for the tested handoff and remaining risks.
+
+## ORCH-1 Reading Boundary
+
+- `docs/spec-v2/product/PRODUCT_SCOPE.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/features/PROJECT_CONTEXT_AND_EVIDENCE.md`
+- `docs/spec-v2/features/LITERATURE_DISCOVERY.md`
+- `docs/spec-v2/features/WRITING_WORKSPACE.md`
+- `backend/app/models/`, `backend/app/application/`, `backend/app/research/`
+- `backend/app/harness/`, `backend/app/job_queue.py`, `backend/app/worker.py`
+- execution, discovery, project and writing APIs and their called services
+- migrations, execution/worker/reading/writing/discovery/skill tests
+- existing frontend execution API/store/task center and their tests
+- `docs/API.md`, `docs/architecture/SKILL_RUNTIME.md`
+
+User-authorized scope: three goal templates, deterministic dependencies, durable
+Task/Plan, task-scoped execution, recovery/idempotency, compatible API/progress.
+No new provider or execution runtime. Preserve existing uncommitted changes.
+
+## Completed NAV-2 Reading Boundary
+
+- `frontend/src/components/project/ProjectShell.vue`
+- `frontend/src/components/project/ProjectShell.spec.ts`
+- `frontend/DESIGN_SYSTEM.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+The block changes only the Project Shell's navigation grouping. Routes,
+project context, Reader behavior and the global V1 product boundary remain
+unchanged.
+
+## PDF-PERF-1 Reading Boundary
+
+- `backend/app/api/papers.py`
+- `backend/app/main.py`
+- `backend/tests/test_pdf_range.py`
+- `frontend/nginx.conf`
+- `frontend/src/components/PdfViewer.vue`
+- `frontend/src/utils/pdfCache.ts`
+- `frontend/src/views/PaperReader.vue`
+- `frontend/src/api/paper.ts`
+- `frontend/src/utils/pdfCache.spec.ts`
+- `docs/API.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Relevant contract: the existing PDF 200/206 endpoint, authenticated Reader
+context, manual Cache Storage cache and PDF.js range loading remain the only
+PDF delivery path. This block adds no schema or durable telemetry storage.
+
+## Completed READER-TRANSPORT-1 Boundary
+
+- `backend/app/api/papers.py`
+- `backend/app/services/paper_files.py`
+- `backend/tests/test_pdf_range.py`
+- `frontend/src/components/PdfViewer.vue`
+- `frontend/src/utils/pdfCache.ts`
+- `frontend/src/views/PaperReader.vue`
+- `frontend/src/api/paper.ts`
+
+Phase 22 acceptance passed at source/build level and in the rebuilt backend
+image: PDF 200/206 responses now use exact lengths and revalidation, range
+reads reject short bodies, PDF.js has one bounded full-download recovery path,
+stale local cache bytes are discarded, and Reader progress saves are
+bounded/deduplicated during teardown. The running services still reference
+the previous images; recreate them before browser-level acceptance. The
+handoff and deployment checks are recorded in
+`IMPLEMENTATION_PROGRESS.md`.
+
+## Completed NAV-1 Boundary
+
+- `frontend/src/router/index.ts`
+- `frontend/src/router/reader.ts`
+- `frontend/src/components/ProductHeader.vue`
+- `frontend/src/components/PaperUploadModal.vue`
+- `frontend/src/components/project/ProjectHeader.vue`
+- `frontend/src/components/project/ProjectShell.vue`
+- `frontend/src/components/project/WritingProposalCard.vue`
+- `frontend/src/components/project/WritingDocumentEditor.vue`
+- `frontend/src/views/PaperList.vue`
+- `frontend/src/views/PaperReader.vue`
+- `frontend/src/views/ProjectPapers.vue`
+- `frontend/src/views/Home.vue`
+- `frontend/src/views/Guide.vue`
+- focused route, Header, upload, project-paper and writing-link tests
+
+Phase 21 acceptance passed: Standalone Reader and Project Reader use explicit
+semantic contexts with one Reader implementation; named Back and breadcrumb
+locations preserve the correct destination; legacy project query links are
+compatible and normalize to the project route; project-only actions and
+cross-paper evidence links retain project identity; Project Papers uploads
+attach ready papers in the current project; global and project terminology is
+consistent; frontend tests, lint, typecheck and production build pass.
+
+## Completed GUIDE-7 Boundary
+
+- `frontend/DESIGN_SYSTEM.md`
+- `frontend/src/components/ProductHeader.vue`
+- `frontend/src/views/Guide.vue`
+- `frontend/src/views/PublicGuidance.spec.ts`
+
+Phase 20 acceptance passed: the Guide top navigation and sidebar are fixed,
+the main content reserves both navigation surfaces without overlap, and the
+main horizontal gutter is three pixels on desktop and mobile.
+
+## Completed GUIDE-6 Boundary
+
+- `frontend/src/views/Guide.vue`
+- `frontend/src/views/PublicGuidance.spec.ts`
+
+Phase 19 acceptance passed: the Guide content starts directly below
+`ProductHeader`, the main document has square corners with no card shadow, and
+the six-pixel horizontal gutter remains intact across responsive layouts.
+
+## Completed GUIDE-5 Boundary
+
+- `frontend/DESIGN_SYSTEM.md`
+- `frontend/src/views/Guide.vue`
+- `frontend/src/views/PublicGuidance.spec.ts`
+
+Phase 18 acceptance passed: sidebar group titles are visibly distinct from
+chapter links, the desktop main surface has only a six-pixel horizontal gutter,
+and existing route-driven content and responsive behavior remain intact.
+
+## Completed GUIDE-4 Boundary
+
+- `docs/spec-v2/product/PRODUCT_SCOPE.md`
+- `docs/spec-v2/frontend/UI_SYSTEM.md`
+- `frontend/DESIGN_SYSTEM.md`
+- `frontend/src/views/Guide.vue`
+- `frontend/src/router/index.ts`
+- `frontend/src/views/PublicGuidance.spec.ts`
+- `frontend/src/router/routes.spec.ts`
+
+Phase 17 acceptance passed: Guide modules use distinct route URLs, the
+sidebar is edge-aligned and full-height on desktop, and all seven pages carry
+task-oriented entry, action, outcome and recovery guidance. No product API or
+backend contract changed.
 
 ## Completed GUIDE-3 Boundary
 

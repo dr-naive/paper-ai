@@ -111,6 +111,7 @@ class ProjectEvidenceRetrievalService:
         intent: str = "general",
         max_candidates: int = 5,
         top_k: int = 10,
+        allowed_paper_ids: list[str] | None = None,
     ) -> tuple[str, list[CandidatePaperContext], list[EvidenceCandidateContext]]:
         selection = await self.selector.select(
             project_id=project_id,
@@ -119,6 +120,7 @@ class ProjectEvidenceRetrievalService:
             instruction=instruction,
             current_section_title=current_section_title,
             limit=max_candidates,
+            **({"allowed_paper_ids": allowed_paper_ids} if allowed_paper_ids is not None else {}),
         )
         if selection.imported_paper_count == 0:
             return "no_imported_papers", [], []

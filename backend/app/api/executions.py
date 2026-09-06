@@ -7,7 +7,9 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from app.research.task_contracts import GoalInput
+from app.application.research_orchestrator import ResearchOrchestrator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,14 +30,20 @@ async def current_user_id(authorization: str | None = Header(None), db: AsyncSes
 
 
 class ExecutionCreate(BaseModel):
-    agent_type: Literal["writing_generate"] = "writing_generate"
+    agent_type: Literal["writing_generate", "research_goal"] = "writing_generate"
     goal: str = Field(min_length=1, max_length=20000)
-    input: WritingGenerateRequest
+    input: WritingGenerateRequest | GoalInput
     conversation_id: str | None = None
     max_tool_calls: int = Field(default=30, ge=0, le=1000)
     max_model_calls: int = Field(default=20, ge=0, le=1000)
     max_tokens: int = Field(default=100000, ge=1)
     max_seconds: int = Field(default=1800, ge=1, le=86400)
+
+    @model_validator(mode='after')
+    def match_input(self):
+        if (self.agent_type == 'writing_generate') != isinstance(self.input, WritingGenerateRequest):
+            raise ValueError('Execution type and input do not match')
+        return self
 
 
 def require_runtime() -> None:
@@ -67,8 +75,23 @@ async def create_execution(project_id: str, body: ExecutionCreate, db: AsyncSess
     db.add(item)
     await db.commit()
     await db.refresh(item)
-    await append_event(db, item, "execution_queued", "执行已进入队列", stage="queued")
-    await enqueue_job("agent_execution_v2", {"execution_id": item.id}, job_id=item.id)
+    try:
+        if body.agent_type == "research_goal":
+            # Goal executions are planned and dispatched through the durable
+            # ResearchTask graph.  The incumbent writing execution remains on
+            # its existing WorkerJob contract for backwards compatibility.
+            await ResearchOrchestrator(db).initialize(item)
+        else:
+            await append_event(db, item, "execution_queued", "执行已排队", stage=item.status)
+            await enqueue_job("agent_execution_v2", {"execution_id": item.id}, job_id=item.id)
+    except (ValueError, LookupError) as exc:
+        await db.rollback()
+        await db.delete(item)
+        await db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if body.agent_type == "research_goal":
+        await append_event(db, item, "execution_plan_created", "执行计划已保存", stage=item.status,
+                           data={"plan_version": item.plan_version})
     return execution_dict(item)
 
 
@@ -163,6 +186,12 @@ async def stream_events(execution_id: str, after: int = Query(0, ge=0), db: Asyn
 async def control(execution_id: str, action: str, db: AsyncSession, user_id: str) -> dict[str, Any]:
     require_runtime()
     item = await owned_execution(db, execution_id, user_id)
+    if item.plan_version:
+        try:
+            await ResearchOrchestrator(db).control(item, action)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return execution_dict(item)
     if item.status in TERMINAL_EXECUTION_STATUSES:
         raise HTTPException(status_code=409, detail={"code": "EXECUTION_TERMINAL", "message": "执行已经结束"})
     if action == "cancel":
@@ -199,3 +228,21 @@ async def resume_execution(execution_id: str, db: AsyncSession = Depends(get_db)
 @router.post("/executions/{execution_id}/approve")
 async def approve_execution(execution_id: str, db: AsyncSession = Depends(get_db), user_id: str = Depends(current_user_id)):
     return await control(execution_id, "approve", db, user_id)
+
+
+class ExecutionResponseInput(BaseModel):
+    selected_result_ids: list[str] = Field(min_length=1, max_length=10)
+
+
+@router.post('/executions/{execution_id}/respond')
+async def respond_execution(execution_id: str, body: ExecutionResponseInput,
+                            db: AsyncSession = Depends(get_db), user_id: str = Depends(current_user_id)):
+    require_runtime()
+    item = await owned_execution(db, execution_id, user_id)
+    if not item.plan_version or item.status != 'waiting_user':
+        raise HTTPException(status_code=409, detail='EXECUTION_NOT_WAITING')
+    try:
+        await ResearchOrchestrator(db).control(item, 'approve', body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return execution_dict(item)

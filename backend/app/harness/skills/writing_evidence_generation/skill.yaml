@@ -28,3 +28,8 @@ completion:
     - reviewer_status
     - repair_count
     - completion_contract_ready
+
+supported_task_types: ['WRITE_SECTION']
+required_inputs: ['evidence', 'document']
+produced_artifacts: ['section_draft']
+max_model_calls: 20

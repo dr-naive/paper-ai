@@ -4,15 +4,602 @@ Status: COMPLETE
 
 ## Current State
 
-Current Phase: none
+Current Phase: Phase 23 — Goal-driven Research Orchestration
 
-Current Implementation Block: none
+Current Implementation Block: ORCH-1
 
 Current Block Status: COMPLETE
 
-Last Completed Phase: Phase 16 — Guide Audit Remediation
+Last Completed Phase: Phase 23 — Goal-driven Research Orchestration
 
-Last Completed Implementation Commit: `8d70d4a`
+Last Completed Implementation Block: ORCH-1 — Persistent Goal Plans and Business Tasks
+Hierarchy
+
+Last Completed Implementation Commit: `4985c30` baseline; all GUIDE/NAV,
+Reader transport, PDF performance and navigation hierarchy changes remain
+intentionally uncommitted at the user's request.
+
+## Completed Block — ORCH-1
+
+Start commit: `479acce28a8bdb24ee786d387cbd6951d18014d0`, with pre-existing
+uncommitted Reader/navigation changes preserved. End state: working tree remains
+uncommitted by explicit user instruction.
+
+Scope completed: AgentExecution was extended in place as the
+ResearchExecution/GoalExecution lifecycle; durable Execution Plan and typed
+ResearchTask were added; existing Redis Queue, WorkerJob, retry, dead-letter,
+checkpoint, trace, pause/cancel and recovery paths were reused. GoalResolver,
+ProjectStateReader, DependencyResolver, PlanBuilder, TaskDispatcher and
+CompletionEvaluator now form the lifecycle layer. Existing Discovery, import,
+paper processing/indexing, Lead Agent, WritingService, Evidence/RAG and citation
+final-gate capabilities are adapters, not duplicated implementations.
+
+Actual ORCH files changed:
+
+- `backend/alembic/versions/0007_research_tasks.py`
+- `backend/app/models/execution.py`
+- `backend/app/research/task_contracts.py`
+- `backend/app/application/research_planning.py`
+- `backend/app/application/research_orchestrator.py`
+- `backend/app/application/research_task_executors.py`
+- `backend/app/application/research_task_worker.py`
+- `backend/app/application/reading_execution_service.py`
+- `backend/app/application/execution_service.py`
+- `backend/app/api/executions.py`
+- `backend/app/worker.py`
+- `backend/app/harness/agents/lead_agent.py`
+- `backend/app/harness/runtime/task_context.py`
+- `backend/app/harness/runtime/task_scope.py`
+- `backend/app/harness/runtime/skill_runtime.py`
+- `backend/app/harness/skills/*/skill.yaml`
+- `frontend/src/api/executions.ts`
+- `frontend/src/stores/executions.ts`
+- `frontend/src/components/GlobalTaskCenter.vue`
+- `backend/tests/test_research_orchestrator.py`
+- `backend/tests/test_execution_runtime.py`
+- `backend/tests/test_database_migrations.py`
+- `docs/API.md`
+- `docs/architecture/SKILL_RUNTIME.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+
+Database: additive `0007_research_tasks` adds nullable
+`agent_executions.plan/progress/blockers/completion_reason`, non-null
+`plan_version` with default `0`, and `research_tasks` with structured refs,
+attempt/error/completion fields and execution indexes. Historical execution
+rows remain readable; local PostgreSQL was upgraded from `0006_execution_io`
+to `0007_research_tasks` through Alembic and schema preflight reports
+`compatible: true`.
+
+API: `research_goal` is accepted beside legacy `writing_generate` on the
+existing execution endpoint. Legacy writing continues to enqueue
+`agent_execution_v2`; Goal executions persist plans/tasks and use
+`/respond` for waiting-user recovery. Public execution serialization exposes
+progress/blocker projections but keeps the internal plan/DAG server-side.
+
+Tests and checks executed:
+
+- backend complete suite: `333 passed`;
+- focused Goal/Execution/Migration tests: included in the complete suite;
+- backend targeted Ruff check: passed;
+- frontend Vitest: `78 passed` across 19 files;
+- frontend typecheck: passed;
+- frontend ESLint: passed;
+- frontend production build: passed;
+- Docker builds: backend, worker, migrate and frontend passed;
+- `alembic current`: `0007_research_tasks (head)`;
+- `python -m scripts.check_schema_revision`: compatible;
+- `git diff --check`: passed;
+- live Docker health: backend, worker, PostgreSQL, Redis healthy; `/health`
+  returned healthy and frontend returned HTTP 200.
+
+Manual/chain acceptance:
+
+- `READ_PAPERS`: indexed papers reuse ready Paper Cards; incomplete papers
+  wait for the incumbent processing/index worker before the task retries;
+  Lead Agent is task-scoped and returns structured Paper Card refs.
+- `WRITE_SECTION`: existing Evidence skips BUILD_EVIDENCE; indexed-only
+  projects execute BUILD_EVIDENCE → WRITE_SECTION → AUDIT_DRAFT; no usable
+  papers persist a blocked execution and never auto-discover.
+- `DISCOVER_AND_IMPORT`: DISCOVER returns normalized structured results;
+  IMPORT_PAPER waits for selection by default and resumes the same execution,
+  rather than importing every result.
+- Duplicate queue delivery, interrupted workers, task retry, partial output,
+  cancel, pause/resume, blocked dependencies, waiting-user response and
+  startup recovery are covered by isolated PostgreSQL integration tests.
+
+Deviations from spec: no separate RecoveryManager or new provider/runtime was
+introduced. `paused` remains as a compatibility execution/task state.
+
+Remaining risks: the three adapter chains are validated with deterministic
+fixtures/mocked provider/model responses; live model/provider acceptance still
+depends on the deployment's configured LLM credentials and provider quota.
+No new external dependency was added.
+
+Exact next action: none for ORCH-1. If the user requests a new block, start
+from this ledger and keep the existing uncommitted Reader/navigation changes.
+
+## Completed Block — READER-TRANSPORT-1
+
+Start Commit: `4985c30` baseline plus the existing uncommitted GUIDE/NAV
+working tree
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Scope: make PDF delivery resilient to stale/partial range responses and make
+Reader progress persistence safe during route teardown, without adding a new
+Reader implementation or changing the paper/status API payload contract.
+
+Actual files changed:
+
+- `backend/app/api/papers.py`
+- `backend/app/services/paper_files.py`
+- `backend/tests/test_pdf_range.py`
+- `frontend/src/components/PdfViewer.vue`
+- `frontend/src/utils/pdfCache.ts`
+- `frontend/src/views/PaperReader.vue`
+- `frontend/src/api/paper.ts`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+
+Database migrations: none.
+
+API changes: no request/response schema changes. PDF responses now use
+revalidating cache headers, explicitly advertise the full-body length, and
+materialize a verified 206 range body before sending it. A file mutation while
+reading a range returns a retryable 503 instead of a mismatched body.
+
+Tests and checks executed:
+
+- frontend typecheck: passed;
+- frontend ESLint: passed;
+- complete frontend suite: `69 passed` across 16 files;
+- frontend production build: passed;
+- `node --check` on the generated PDF worker and PdfViewer chunks: passed;
+- `python3 -m py_compile` on changed backend modules/tests: passed;
+- `docker compose build backend worker frontend`: passed;
+- targeted tests in the rebuilt backend image (`test_pdf_range.py`,
+  `test_app.py`, `test_paper_router_structure.py`): `10 passed`;
+- `git diff --check`: passed;
+
+Manual acceptance:
+
+- PDF.js keeps range loading as the fast path and automatically retries once
+  with a cache-busted complete PDF when a range/network response fails;
+- the manual PDF cache uses a new namespace, rejects non-PDF cached bytes and
+  no longer stores a hand-written `Content-Length` header;
+- the Reader adds a stable transport-version query parameter to invalidate
+  old immutable browser cache entries;
+- reading progress uses a dedicated 8-second timeout, reuses an in-flight
+  save during unmount and falls back to localStorage without logging a teardown
+  timeout as an application error.
+
+Deviations from spec: none.
+
+Remaining risks: the new images are built, but the currently running backend,
+worker and frontend containers still reference the previous image IDs because
+services were not recreated in this session. No browser network trace was
+available. The deployed environment must recreate the three services once,
+then verify a PDF request's 200/206 `Content-Length` against the received byte
+count.
+
+Historical handoff action completed by PDF-PERF-1: Docker images were rebuilt,
+the three services were recreated, and the running Reader transport was
+verified from the new backend/frontend images.
+
+## Completed Block — PDF-PERF-1
+
+Start Commit: `4985c30` baseline plus the existing uncommitted GUIDE/NAV and
+Reader transport working tree
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Block Status: COMPLETE
+
+Scope: restore a reusable PDF cache fast path (including safe legacy-cache
+migration), keep the range path resilient while reducing avoidable requests,
+remove access tokens from new PDF URLs, expose client first-page timing to the
+backend, add server timing/request logs, and recreate the services with the
+current source.
+
+Target files:
+
+- `backend/app/api/papers.py`
+- `backend/app/main.py`
+- `backend/tests/test_pdf_range.py`
+- `frontend/nginx.conf`
+- `frontend/src/components/PdfViewer.vue`
+- `frontend/src/utils/pdfCache.ts`
+- `frontend/src/views/PaperReader.vue`
+- `frontend/src/api/paper.ts`
+- `frontend/src/utils/pdfCache.spec.ts`
+- `docs/API.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Database migrations: none planned.
+
+API changes: add the authenticated, best-effort
+`POST /api/v1/papers/{paper_id}/pdf/telemetry` log-only endpoint for client
+load metrics. Existing PDF request and response contracts remain compatible.
+
+Tests and checks executed:
+
+- frontend PDF cache tests: `5 passed`;
+- complete frontend suite: `74 passed` across 17 files;
+- frontend ESLint: passed;
+- frontend typecheck: passed;
+- frontend production build: passed;
+- backend complete suite: `308 passed`;
+- backend PDF/route targeted suite: `7 passed`;
+- backend changed-file `py_compile`: passed;
+- Docker image build for `backend worker frontend`: passed;
+- `docker compose config --quiet`: passed;
+- running frontend `nginx -t`: passed;
+- running backend OpenAPI contains the telemetry route: passed;
+- PDF route smoke returned `Server-Timing`;
+- `git diff --check`: passed.
+
+Manual acceptance:
+
+- backend, worker and frontend were force-recreated from the new images;
+- all three application services are running, and backend/worker healthchecks
+  report healthy; database, Redis and data volumes were preserved;
+- the PDF URL now stays stable and contains no access token; PDF.js sends the
+  token through `Authorization` headers;
+- valid v1 Cache Storage entries remain readable and are promoted to v2;
+  invalid entries are removed; network PDFs are warmed during idle time after
+  the first page is usable;
+- PDF.js keeps a resilient 2 MiB range path, reports real loading progress,
+  and emits cache/document/first-page timings;
+- backend logs expose `pdf_request` app latency and
+  `pdf_client_load` user-visible latency; Nginx logs expose request and
+  upstream durations without query strings.
+
+Deviations from spec: none. Telemetry is internal log-only observability and
+does not create a new product surface or durable data model.
+
+Remaining risks: browser-level visual interaction was not automated because
+the available Chromium image lacks a required system library. Cache Storage
+may still be unavailable on an insecure non-localhost origin; the existing
+browser HTTP cache and PDF.js range path remain the fallback. The repository's
+optional targeted `ruff check` still reports its pre-existing E402/F401/F541
+violations outside this block.
+
+Exact next action: hard-refresh the browser once, open one Project Paper twice,
+and inspect the second open for `pdf_client_load ... source=cache`; use
+`docker compose logs -f backend frontend` to watch `app_ms`, `request_time`,
+`upstream_time` and `total_ms` without exposing URL tokens.
+
+## Completed Block — NAV-2
+
+Start Commit: `4985c30` baseline plus the existing uncommitted working tree
+
+Scope: separate the global Home entry from the Project/Independent Reading
+workspace navigation, keep Recent Projects as contextual navigation, remove
+the duplicate Independent Reading footer link, and preserve collapsed-sidebar
+behavior and route semantics.
+
+Actual files changed:
+
+- `frontend/src/components/project/ProjectShell.vue`
+- `frontend/src/components/project/ProjectShell.spec.ts`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Database migrations: none.
+
+API changes: none.
+
+Tests and checks executed:
+
+- focused ProjectShell test: `2 passed`;
+- complete frontend suite: `76 passed` across 18 files;
+- frontend typecheck: passed;
+- frontend ESLint: passed;
+- frontend production build: passed;
+- `git diff --check`: passed;
+- frontend Docker image build and forced container recreation: passed;
+- running frontend `nginx -t`: passed;
+- runtime smoke checks: frontend HTTP 200; backend, database, Redis and worker
+  healthy.
+
+Manual acceptance:
+
+- 首页 is now a standalone global entry;
+- 项目 and 独立阅读 are grouped under 工作区;
+- 最近项目 remains contextual to the project workspace;
+- the duplicate footer 独立阅读 entry is removed;
+- route targets, current-project highlighting and collapsed-sidebar behavior
+  remain unchanged.
+
+Deviations from spec: none. No API or database changes.
+
+Remaining risks: browser-level visual interaction was not automated because
+the available Chromium image lacks a required system library. Source tests,
+production build and the rebuilt running frontend container passed.
+
+Exact next action: hard-refresh the browser and inspect the updated Project
+Shell sidebar once.
+
+## Completed Block — NAV-1
+
+Start Commit: `4985c30` baseline plus the uncommitted GUIDE-4/5/6/7 working tree
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Scope: establish explicit Standalone Reader and Project Reader navigation
+contexts while keeping one `PaperReader.vue` implementation; make Back and
+breadcrumb inputs typed Vue Router locations; preserve project identity and
+Project-only actions; keep legacy `/paper/:id` deep links compatible; and make
+local PDF upload from Project Papers upload and attach the paper in the active
+Project instead of redirecting to `/library`.
+
+Actual files changed:
+
+- `frontend/src/router/index.ts`
+- `frontend/src/router/reader.ts`
+- `frontend/src/components/ProductHeader.vue`
+- `frontend/src/components/ProductHeader.spec.ts`
+- `frontend/src/components/PaperUploadModal.vue`
+- `frontend/src/components/PaperUploadModal.spec.ts`
+- `frontend/src/components/project/ProjectHeader.vue`
+- `frontend/src/components/project/ProjectShell.vue`
+- `frontend/src/components/project/WritingProposalCard.vue`
+- `frontend/src/components/project/WritingProposalCard.spec.ts`
+- `frontend/src/components/project/WritingDocumentEditor.vue`
+- `frontend/src/views/PaperList.vue`
+- `frontend/src/views/PaperReader.vue`
+- `frontend/src/views/ProjectPapers.vue`
+- `frontend/src/views/ProjectPapers.spec.ts`
+- `frontend/src/views/ProjectOverview.vue`
+- `frontend/src/views/ResearchProjectList.vue`
+- `frontend/src/views/Home.vue`
+- `frontend/src/views/Guide.vue`
+- `frontend/src/views/PublicGuidance.spec.ts`
+- `frontend/src/api/paper.ts`
+- `frontend/src/router/routes.spec.ts`
+- `docs/spec-v2/frontend/UI_SYSTEM.md`
+- execution documents in `docs/spec-v2/execution/`
+
+Database migrations: none.
+
+API changes: none. The existing paper upload/task-status and
+`POST /api/v1/projects/{project_id}/papers` contracts are reused.
+
+Tests and checks executed:
+
+- focused navigation/upload/writing link tests: `26 passed`;
+- complete frontend suite: `69 passed` across 16 files;
+- `npm run lint`: passed;
+- `npm run typecheck`: passed;
+- `npm run build`: passed;
+- `git diff --check`: passed;
+- Impeccable v4.1.1 detector: one pre-existing Writing editor blockquote
+  `border-left` warning; no new finding in the changed navigation/upload UI;
+- Docker manual check was not available because this execution account cannot
+  access `/var/run/docker.sock` (`permission denied`).
+
+Manual acceptance:
+
+- Independent Reading enters `/paper/:id`, displays an `独立阅读 → 阅读`
+  hierarchy and returns to the named `PaperList` location.
+- Project Papers enters `/projects/:projectId/papers/:paperId/read`, renders
+  the same Reader component, loads the project title, preserves project-only
+  evidence/note/compare actions and returns to the named current Project
+  Papers location.
+- Legacy `/paper/:id?project_id=...` links redirect to the semantic project
+  route while preserving session/message/prompt query state.
+- Cross-paper citation links choose the current Reader context rather than
+  opening a standalone page from a Project Reader.
+- Project Papers local upload stays in the project, waits for the real task
+  terminal-ready state, attaches the paper, emits a refresh and uses project
+  terminology; Independent Reading reuses the same upload modal without
+  changing its global context.
+
+Deviations from spec: none.
+
+Remaining risks: browser screenshot/manual visual verification was not run in
+this container; Docker daemon access is required for container-level smoke
+checks. A user navigating away before a project upload reaches ready still
+needs the existing task recovery surface to reattach it, because the current
+backend upload contract has no atomic project-id field.
+
+Exact next action: review the two Reader deep links and the Project Papers
+upload flow in a browser with the normal Docker/dev environment; no commit was
+created.
+
+## Completed Block — GUIDE-7
+
+Start Commit: `4985c30` baseline plus the uncommitted GUIDE-4/5/6 working tree
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Scope: fix the Guide top navigation and desktop/sidebar navigation to the
+viewport, reserve their layout space, and reduce the main surface's horizontal
+gutter to three pixels without changing Guide routes or content.
+
+Actual files changed:
+
+- `frontend/src/views/Guide.vue`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Tests and checks executed:
+
+- focused Guide/router tests: `21 passed`;
+- frontend ESLint: passed;
+- frontend typecheck: passed;
+- frontend production build: passed;
+- Impeccable v4.1.1 detector: `[]` for `Guide.vue`;
+- Docker frontend image build and `docker compose up -d --no-deps frontend`:
+  passed;
+- `GET /guide/overview` and `GET /guide/discover`: HTTP `200`.
+
+Manual acceptance: the top navigation stays fixed at the viewport top; the
+sidebar stays fixed below it on desktop and transforms into a fixed horizontal
+navigation strip on smaller screens; the main document starts after the fixed
+navigation stack, has square corners and keeps a three-pixel horizontal
+gutter.
+
+Database migrations: none.
+
+API changes: none.
+
+Deviations from spec: none.
+
+Remaining risk: automated pixel screenshots remain unavailable because the
+container Chromium lacks `libatk-1.0.so.0`; source, tests, build and live HTTP
+checks passed.
+
+Exact next action: review the fixed Guide at `/guide/overview`; no commit has
+been created.
+
+## Completed Block — GUIDE-6
+
+Start Commit: `4985c30` baseline plus the uncommitted GUIDE-4/5 working tree
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Scope: remove the Guide main area's top gray gap and rounded-card treatment so
+the reading surface connects directly below the global header, while retaining
+the small horizontal gutter.
+
+Actual files changed:
+
+- `frontend/src/views/Guide.vue`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Tests and checks executed:
+
+- focused Guide/router tests: `21 passed`;
+- frontend ESLint: passed;
+- frontend typecheck: passed;
+- frontend production build: passed;
+- Impeccable v4.1.1 detector: `[]` for `Guide.vue`;
+- Docker frontend image build and `docker compose up -d --no-deps frontend`:
+  passed;
+- `GET /guide/overview` and `GET /guide/writing`: HTTP `200`.
+
+Manual acceptance: the Guide begins immediately beneath the global header,
+the main document has square corners and no card shadow, and the six-pixel
+horizontal gutter remains on desktop and mobile.
+
+Database migrations: none.
+
+API changes: none.
+
+Deviations from spec: none.
+
+Remaining risk: automated pixel screenshots remain unavailable because the
+container Chromium lacks `libatk-1.0.so.0`; source, tests, build and live HTTP
+checks passed.
+
+Exact next action: review the updated Guide in the browser; no commit has been
+created.
+
+## Completed Block — GUIDE-5
+
+Start Commit: `4985c30` baseline plus the uncommitted GUIDE-4 working tree
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Scope: increase the visual distinction between sidebar group headings and
+chapter links, and reduce the desktop Guide main surface's horizontal gutter to
+only a few pixels while preserving responsive behavior.
+
+Actual files changed:
+
+- `frontend/src/views/Guide.vue`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Tests and checks executed:
+
+- focused Guide/router tests: `21 passed`;
+- frontend ESLint: passed;
+- frontend typecheck: passed;
+- frontend production build: passed;
+- Impeccable v4.1.1 detector: `[]` for `Guide.vue`;
+- Docker frontend image build and `docker compose up -d --no-deps frontend`:
+  passed;
+- `GET /guide/overview` and `GET /guide/writing`: HTTP `200`.
+
+Manual acceptance: desktop sidebar group titles now have stronger typography
+and a neutral divider, chapter links are visibly indented beneath them, and
+the main document runs almost edge-to-edge with a six-pixel horizontal gutter.
+
+Database migrations: none.
+
+API changes: none.
+
+Deviations from spec: none.
+
+Remaining risk: automated pixel screenshots remain unavailable because the
+container Chromium lacks `libatk-1.0.so.0`; source, tests, build and live HTTP
+checks passed.
+
+Exact next action: review the updated Guide in the browser; no commit has been
+created.
+
+## Completed Block — GUIDE-4
+
+Start Commit: `4985c30`
+
+End Commit: working tree (uncommitted by explicit user instruction)
+
+Scope: replace the same-page Guide anchor list with distinct documentation
+routes and an edge-aligned full-height sidebar. Rewrite each module as a
+task-oriented page with entry point, ordered actions, expected result and
+recovery/limitations guidance.
+
+Actual files changed:
+
+- `frontend/src/views/Guide.vue`
+- `frontend/src/router/index.ts`
+- `frontend/src/views/PublicGuidance.spec.ts`
+- `frontend/src/router/routes.spec.ts`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Tests and checks executed:
+
+- focused Guide/router tests: `21 passed`;
+- complete frontend suite: `63 passed` across 13 files;
+- frontend ESLint: passed;
+- frontend typecheck: passed;
+- frontend production build: passed;
+- Impeccable v4.1.1 detector: `[]` for `Guide.vue`;
+- Docker frontend image build and `docker compose up -d --no-deps frontend`:
+  passed;
+- `GET /guide` and `GET /guide/discover`: HTTP `200`.
+
+Manual acceptance: desktop navigation is flush with the left viewport edge and
+fills the area below the global header; Overview, Discover, Papers, Writing,
+PDF Reader, Evidence/task status and Troubleshooting each have a distinct URL;
+sidebar and previous/next links navigate between pages; page content explains
+where to enter, what to do, what success looks like and how to recover.
+
+Database migrations: none.
+
+API changes: none.
+
+Deviations from spec: none.
+
+Remaining risk: automated pixel screenshots remain unavailable because the
+container Chromium lacks `libatk-1.0.so.0`; source, tests, build and live HTTP
+checks passed.
+
+Exact next action: review `/guide/overview`, `/guide/discover`,
+`/guide/papers` and `/guide/writing` in the browser; commit only if the user
+explicitly requests it or this work is promoted to a larger refactor.
 
 ## Completed Block — GUIDE-3
 

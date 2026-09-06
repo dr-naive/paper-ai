@@ -110,6 +110,7 @@ import { useExecutionsStore } from '@/stores/executions'
 import { useWritingStore, type WritingProposal } from '@/stores/writing'
 import { deriveWritingContext, type WritingOutlineItem } from '@/utils/writingContext'
 import { citationPlaceholder, copyTextToClipboard, proposalInlineContent, proposalPlainText, selectionAnchorIsCurrent, type SelectionAnchor } from '@/utils/writingProposal'
+import { projectReaderPath } from '@/router/reader'
 import WritingAgentPanel from './WritingAgentPanel.vue'
 import WritingOutlinePanel from './WritingOutlinePanel.vue'
 
@@ -355,7 +356,7 @@ const replaceProposal = async () => {
 }
 const runCitationAudit = async () => { if (!activeDocument.value) return; auditing.value = true; try { citationAudit.value = await auditCitations(activeDocument.value.id) } finally { auditing.value = false } }
 const insertCitation = (item: EvidenceItem) => editor.value?.chain().focus().insertContent({ type: 'citation', attrs: { paper_id: item.paper_id, evidence_id: item.id, citation_key: `${item.source_title.slice(0, 18)}${item.source_year ? `, ${item.source_year}` : ''}` } }).run()
-const openEvidence = (item: EvidenceItem) => window.open(`/paper/${item.paper_id}?project_id=${encodeURIComponent(props.projectId)}`, '_blank', 'noopener')
+const openEvidence = (item: EvidenceItem) => window.open(projectReaderPath(props.projectId, item.paper_id), '_blank', 'noopener')
 
 watch(() => props.projectId, load)
 onMounted(load)

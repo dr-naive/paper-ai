@@ -17,7 +17,7 @@ from app.models.execution import AgentEvent, AgentExecution, EXECUTION_STATUSES
 
 
 def test_execution_contract_has_all_required_states_and_budget_fields():
-    assert EXECUTION_STATUSES == {"queued", "running", "waiting_user", "paused", "completed", "failed", "cancelled"}
+    assert {"pending", "queued", "running", "waiting_user", "paused", "retrying", "completed", "partial", "blocked", "failed", "cancelled"} == EXECUTION_STATUSES
     columns = set(AgentExecution.__table__.columns.keys())
     assert {"max_tool_calls", "max_model_calls", "max_tokens", "max_seconds"} <= columns
     assert {"tool_call_count", "model_call_count", "input_tokens", "output_tokens"} <= columns
@@ -34,10 +34,11 @@ def test_public_event_envelope_excludes_private_reasoning():
 
 def test_execution_serialization_is_json_safe():
     item = AgentExecution(id="execution-1", user_id="user-1", project_id="project-1",
-                          agent_type="mock_agent", goal="test")
+                          agent_type="mock_agent", goal="test", plan={"tasks": [{"task_type": "READ_PAPER"}]})
     payload = execution_dict(item)
     assert payload["id"] == "execution-1"
     assert payload["status"] is None  # SQL defaults are applied on insert.
+    assert "plan" not in payload  # Internal DAG stays server-side; progress is the public projection.
 
 
 def _writing_proposal(status: str = "ready", citation_status: str = "verified") -> WritingGenerationProposal:
@@ -119,6 +120,7 @@ def test_execution_api_routes_are_registered():
     assert "/api/v1/executions/{execution_id}/stream" in paths
     for action in ("cancel", "pause", "resume", "approve"):
         assert f"/api/v1/executions/{{execution_id}}/{action}" in paths
+    assert "/api/v1/executions/{execution_id}/respond" in paths
 
 
 def test_execution_trace_is_ordered_quality_aware_and_privacy_safe():

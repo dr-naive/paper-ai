@@ -1160,34 +1160,12 @@ async def start_reading_execution(
 ):
     user_id = await get_current_user_id(authorization, db)
     await _get_owned_project(db, project_id, user_id)
-    rows = (await db.execute(
-        select(ProjectPaper).where(ProjectPaper.project_id == project_id)
-    )).scalars().all()
-    queued = [pp for pp in rows if (pp.reading_plan or {}).get("status") in {"pending", "reading", "failed"}]
-    if not queued:
-        raise HTTPException(status_code=400, detail="没有可执行的精读任务，请先生成阅读计划")
-    task_id = str(uuid.uuid4())
-    data = {
-        "task_id": task_id,
-        "project_id": project_id,
-        "user_id": user_id,
-        "status": "queued",
-        "control": "run",
-        "total": min(len(queued), body.max_items),
-        "completed": 0,
-        "current_paper_id": None,
-        "results": [],
-        "error": None,
-        "max_items": body.max_items,
-        "created_at": time.time(),
-        "updated_at": time.time(),
-    }
-    await set_json(f"{READING_EXECUTION_PREFIX}{task_id}", data, READING_EXECUTION_TTL)
-    await enqueue_job(
-        "project_reading_execution",
-        {"task_id": task_id, "project_id": project_id, "user_id": user_id},
-    )
-    return data
+    from app.application.reading_execution_service import start_reading
+    try:
+        return await start_reading(db, project_id, user_id, body.max_items)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 
 async def _owned_execution(task_id: str, project_id: str, user_id: str) -> dict[str, Any]:
@@ -1206,6 +1184,10 @@ async def get_reading_execution(
 ):
     user_id = await get_current_user_id(authorization, db)
     await _get_owned_project(db, project_id, user_id)
+    from app.application.reading_execution_service import find_reading, reading_projection
+    item = await find_reading(db, task_id, project_id, user_id)
+    if item:
+        return await reading_projection(db, item)
     return await _owned_execution(task_id, project_id, user_id)
 
 
@@ -1215,6 +1197,15 @@ async def pause_reading_execution(
 ):
     user_id = await get_current_user_id(authorization, db)
     await _get_owned_project(db, project_id, user_id)
+    from app.application.reading_execution_service import find_reading, reading_projection
+    from app.application.research_orchestrator import ResearchOrchestrator
+    item = await find_reading(db, task_id, project_id, user_id)
+    if item:
+        try:
+            await ResearchOrchestrator(db).control(item, 'pause')
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return await reading_projection(db, item)
     data = await _owned_execution(task_id, project_id, user_id)
     if data.get("status") not in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="当前任务不可暂停")
@@ -1229,6 +1220,15 @@ async def resume_reading_execution(
 ):
     user_id = await get_current_user_id(authorization, db)
     await _get_owned_project(db, project_id, user_id)
+    from app.application.reading_execution_service import find_reading, reading_projection
+    from app.application.research_orchestrator import ResearchOrchestrator
+    item = await find_reading(db, task_id, project_id, user_id)
+    if item:
+        try:
+            await ResearchOrchestrator(db).control(item, 'resume')
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return await reading_projection(db, item)
     data = await _owned_execution(task_id, project_id, user_id)
     if data.get("status") not in {"paused", "failed"}:
         raise HTTPException(status_code=409, detail="当前任务不可继续或重试")

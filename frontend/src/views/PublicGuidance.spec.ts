@@ -4,10 +4,11 @@ import Guide from './Guide.vue'
 import Home from './Home.vue'
 
 const routerPush = vi.hoisted(() => vi.fn())
+const routeState = vi.hoisted(() => ({ params: { section: 'overview' } }))
 
 vi.mock('vue-router', async () => {
   const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
-  return { ...actual, useRouter: () => ({ push: routerPush }) }
+  return { ...actual, useRouter: () => ({ push: routerPush }), useRoute: () => routeState }
 })
 
 vi.mock('@/stores/auth', () => ({
@@ -37,25 +38,37 @@ const global = {
 
 afterEach(() => {
   routerPush.mockReset()
+  routeState.params.section = 'overview'
   vi.clearAllTimers()
 })
 
 describe('public product guidance', () => {
-  it('separates the Guide into the implemented user-facing modules', () => {
+  it('renders a real documentation shell with task-oriented overview content', () => {
     const wrapper = mount(Guide, { global })
 
-    expect(wrapper.findAll('.guide-content > section').map(section => section.attributes('id'))).toEqual([
-      'overview', 'discover', 'papers', 'writing', 'reader', 'evidence', 'troubleshooting',
-    ])
-    expect(wrapper.find('.guide-intro').exists()).toBe(false)
-    expect(wrapper.find('.entry-paths').exists()).toBe(false)
-    expect(wrapper.get('h1').classes()).toContain('pa-sr-only')
-    expect(wrapper.get('.guide-nav a').attributes('aria-current')).toBe('location')
-    expect(wrapper.text()).toContain('收藏只保存检索元数据')
-    expect(wrapper.text()).toContain('明确选择“替换”或“复制”')
-    expect(wrapper.text()).toContain('bbox')
+    expect(wrapper.find('.guide-workspace').exists()).toBe(true)
+    expect(wrapper.find('.guide-sidebar').exists()).toBe(true)
+    expect(wrapper.find('.guide-document').exists()).toBe(true)
+    expect(wrapper.findAll('.guide-nav__link')).toHaveLength(7)
+    expect(wrapper.get('.guide-nav__link').attributes('aria-current')).toBe('page')
+    expect(wrapper.get('h1').text()).toBe('把研究问题变成一个项目')
+    expect(wrapper.findAll('.guide-steps li')).toHaveLength(4)
+    expect(wrapper.text()).toContain('从哪里开始')
+    expect(wrapper.text()).toContain('完成后你会看到')
+    expect(wrapper.text()).toContain('点击“创建项目”')
     expect(wrapper.text()).not.toContain('Agent Center')
     expect(wrapper.text()).not.toContain('Skill Runtime')
+  })
+
+  it('renders each guide module from its own route section', () => {
+    routeState.params.section = 'discover'
+    const wrapper = mount(Guide, { global })
+
+    expect(wrapper.get('h1').text()).toBe('在项目中发现真实文献')
+    expect(wrapper.findAll('.guide-steps li')).toHaveLength(4)
+    expect(wrapper.text()).toContain('收藏、下载和导入的区别')
+    expect(wrapper.text()).toContain('年份、语言、领域和出版类型')
+    expect(wrapper.get('.guide-nav__link.is-active').text()).toBe('文献发现')
   })
 
   it('keeps homepage claims and actions aligned with both product modes', async () => {
@@ -68,7 +81,7 @@ describe('public product guidance', () => {
     expect(wrapper.text()).toContain('论文结构化解析')
     expect(wrapper.text()).toContain('证据支持的写作')
     expect(wrapper.text()).toContain('可追踪的质量检查')
-    expect(wrapper.text()).toContain('本地论文库')
+    expect(wrapper.text()).toContain('独立阅读')
 
     await wrapper.find('.hero-actions button').trigger('click')
     expect(routerPush).toHaveBeenCalledWith('/projects')

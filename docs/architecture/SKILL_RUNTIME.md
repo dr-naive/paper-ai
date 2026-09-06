@@ -16,3 +16,9 @@ SemVer、重复工具、工具是否注册，以及 network/destructive 权限�
 可解释的 `SkillCompletionReport`。Writing durable execution 必须先激活
 `writing_evidence_generation`，Reviewer 通过或完成最多一次 repair 后执行 completion eval；
 只有 completion report 通过，Completion Gate 才允许执行进入 `completed`。
+
+Goal-driven Task 还声明 `supported_task_types`、`required_inputs`、`produced_artifacts`、
+`allowed_tools`、`completion_criteria`、`max_tool_calls` 和 `max_model_calls`。Task executor
+在执行前校验 Task 类型与输入，Lead Agent 每次 ToolCall 再执行 task scope、Project/Paper
+ownership 与预算校验；越界调用拒绝并写入 execution trace。Skill 只约束当前 Task，不拥有整个
+ResearchExecution 的生命周期。

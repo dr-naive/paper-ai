@@ -10,8 +10,8 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 
-EXECUTION_STATUSES = {"queued", "running", "waiting_user", "paused", "completed", "failed", "cancelled"}
-TERMINAL_EXECUTION_STATUSES = {"completed", "failed", "cancelled"}
+EXECUTION_STATUSES = {"pending", "queued", "running", "waiting_user", "paused", "retrying", "completed", "partial", "blocked", "failed", "cancelled"}
+TERMINAL_EXECUTION_STATUSES = {"completed", "partial", "failed", "cancelled"}
 
 
 class AgentExecution(Base):
@@ -30,6 +30,11 @@ class AgentExecution(Base):
     goal = Column(Text, nullable=False)
     input_payload = Column(JSON, nullable=False, default=dict)
     result_payload = Column(JSON, nullable=True)
+    plan = Column(JSON, nullable=True)
+    plan_version = Column(Integer, nullable=False, default=0, server_default="0")
+    progress = Column(JSON, nullable=True)
+    blockers = Column(JSON, nullable=True)
+    completion_reason = Column(Text, nullable=True)
     status = Column(String(30), nullable=False, default="queued")
     current_stage = Column(String(100), nullable=True)
     active_skill = Column(String(120), nullable=True)
@@ -51,6 +56,7 @@ class AgentExecution(Base):
 
     events = relationship("AgentEvent", back_populates="execution", cascade="all, delete-orphan")
     tool_calls = relationship("ToolCall", back_populates="execution", cascade="all, delete-orphan")
+    research_tasks = relationship("ResearchTask", back_populates="execution", cascade="all, delete-orphan")
 
 
 class AgentEvent(Base):
@@ -97,3 +103,38 @@ class ToolCall(Base):
     idempotency_key = Column(String(160), nullable=True)
 
     execution = relationship("AgentExecution", back_populates="tool_calls")
+
+
+# Semantic aliases, deliberately the same mapper/table and status column.
+ResearchExecution = AgentExecution
+GoalExecution = AgentExecution
+
+
+class ResearchTask(Base):
+    __tablename__ = "research_tasks"
+    __table_args__ = (
+        Index("idx_research_tasks_execution_status", "execution_id", "status"),
+        Index("idx_research_tasks_execution_created", "execution_id", "created_at"),
+    )
+
+    task_id = Column(String(36), primary_key=True)
+    execution_id = Column(String(36), ForeignKey("agent_executions.id", ondelete="CASCADE"), nullable=False)
+    task_type = Column(String(40), nullable=False)
+    status = Column(String(30), nullable=False, default="pending")
+    dependencies = Column(JSON, nullable=False, default=list)
+    input_refs = Column(JSON, nullable=False, default=list)
+    output_refs = Column(JSON, nullable=False, default=list)
+    executor_type = Column(String(30), nullable=False)
+    skill_id = Column(String(120), nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=4)
+    completion_payload = Column(JSON, nullable=True)
+    blocker_reason = Column(JSON, nullable=True)
+    error_code = Column(String(80), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    execution = relationship("AgentExecution", back_populates="research_tasks")

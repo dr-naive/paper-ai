@@ -2,7 +2,7 @@
   <ProjectShell :recent-projects="projects">
     <ProductHeader context="项目" :show-brand="false">
       <template #actions>
-        <a-button size="small" @click="router.push('/library')">打开论文库</a-button>
+        <a-button size="small" @click="router.push('/library')">进入独立阅读</a-button>
       </template>
     </ProductHeader>
 

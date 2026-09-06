@@ -39,7 +39,7 @@
             <span class="entry-card__index">02</span>
             <div>
               <h2>查看项目论文</h2>
-              <p>集中查看已加入项目的论文，并继续进入 Reader。</p>
+              <p>集中查看已加入项目的论文，并继续阅读。</p>
             </div>
             <span class="entry-card__action">打开项目论文 <IconRight aria-hidden="true" /></span>
           </RouterLink>

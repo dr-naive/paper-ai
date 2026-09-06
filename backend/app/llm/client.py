@@ -93,11 +93,15 @@ class LLMClient:
                 kwargs["response_format"] = {"type": "json_object"}
             if enable_thinking is not None and self.provider == "qwen":
                 kwargs["extra_body"] = {"enable_thinking": enable_thinking}
+            from app.harness.runtime.task_context import account
+            for _ in prompts:
+                await account('model_call')
             response = await asyncio.wait_for(
                 self.client.agenerate(message_lists, **kwargs),
                 timeout=settings.LLM_TIMEOUT_SECONDS + 5,
             )
             usage = (getattr(response, "llm_output", None) or {}).get("token_usage", {})
+            await account('token_usage', usage)
             logger.info(
                 "LLM 请求完成 request_id=%s cost_ms=%.0f prompt_tokens=%s completion_tokens=%s",
                 request_id,
@@ -341,7 +345,11 @@ async def invoke_with_retry(
     last_exc = None
     for attempt in range(max_retries + 1):  # 0..max_retries,首次 attempt=0 不算重试
         try:
-            return await llm_runnable.ainvoke(messages)
+            from app.harness.runtime.task_context import account
+            await account('model_call')
+            response = await llm_runnable.ainvoke(messages)
+            await account('token_usage', (getattr(response, 'response_metadata', None) or {}).get('token_usage', {}))
+            return response
         except Exception as exc:
             last_exc = exc
             if not is_retryable_error(exc) or attempt == max_retries:

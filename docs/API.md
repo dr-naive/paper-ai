@@ -60,6 +60,7 @@ Router：`backend/app/api/papers.py`
 | POST | `/api/v1/papers/tasks/{task_id}/retry` | 重试当前用户失败的导入任务，或仅重试已可用论文失败的图表增强阶段 |
 | GET | `/api/v1/papers/{paper_id}` | 获取论文详情 |
 | GET | `/api/v1/papers/{paper_id}/pdf` | 获取论文 PDF 文件 |
+| POST | `/api/v1/papers/{paper_id}/pdf/telemetry` | 上报本次 PDF 阅读首屏加载耗时（仅写日志，不持久化） |
 | GET | `/api/v1/papers/{paper_id}/sections` | 获取论文章节 |
 | GET | `/api/v1/papers/{paper_id}/elements` | 获取可定位的正文/媒体元素 |
 | POST | `/api/v1/papers/{paper_id}/sections/rebuild` | 按当前解析结果重建章节 |
@@ -221,11 +222,21 @@ revision。`verified`、`weak`、`unsupported` 等 Citation 状态保持结构�
 Router：`backend/app/api/executions.py`。接口受 `ENABLE_AGENT_RUNTIME_V2` 保护，所有执行按用户
 和 Project 所有权校验；事件可通过分页接口重放，也可通过 SSE 持续读取。
 
-V1 创建契约只接受 `agent_type: "writing_generate"`。请求同时包含用户可读的 `goal` 与类型化
-`input`（字段与 `WritingGenerateRequest` 一致）。服务端持久化输入、真实 Writing proposal、
-Citation Verification 结果和 Completion Gate 摘要；只有单段输出、结构化引用映射及无
-`unsupported` 引用同时成立时，执行才会进入 `completed`。公开事件仅包含阶段、计数和状态，
-不包含 prompt、模型原始响应或推理过程。
+创建契约同时兼容既有 `agent_type: "writing_generate"` 和 Goal-driven
+`agent_type: "research_goal"`。前者继续直接进入既有 Writing WorkerJob；后者将用户目标
+持久化为同一张 `AgentExecution`（语义别名为 ResearchExecution/GoalExecution），生成持久化
+Execution Plan 与 `ResearchTask` 图，再通过现有 Redis Queue/Worker 执行。公开事件仅包含阶段、
+计数和状态，不包含 prompt、模型原始响应或推理过程。
+
+`research_goal` 的 `input.goal_type` 目前为 `READ_PAPERS`、`WRITE_SECTION` 或
+`DISCOVER_AND_IMPORT`。规划按“目标所需能力 - 可复用 Project 资产 + 缺失 Hard Dependency”
+裁剪；`ResearchTask` 是可恢复的业务步骤，`WorkerJob` 只是队列载体。任务结果统一返回
+`task_id/status/output_refs/completion/metrics/error`，产物引用使用结构化的
+`artifact_type/artifact_id/project_id/source_task_id`。
+
+三类目标的用户可见进度分别映射为“精读项目论文”“整理可用论文证据”“生成章节草稿”“检查引用可靠性”等
+ProgressStep。论文列表确认使用 `POST /api/v1/executions/{execution_id}/respond` 恢复同一执行，
+不会创建新的执行链。
 
 `writing_generate` durable execution 会激活版本化
 `writing_evidence_generation` Skill，并持久化 `skill_activated`、Reviewer、一次有限修复和
@@ -247,6 +258,7 @@ Citation Verification 结果和 Completion Gate 摘要；只有单段输出、�
 | POST | `/api/v1/executions/{execution_id}/pause` | 暂停执行 |
 | POST | `/api/v1/executions/{execution_id}/resume` | 恢复执行 |
 | POST | `/api/v1/executions/{execution_id}/approve` | 通过等待用户审批的执行 |
+| POST | `/api/v1/executions/{execution_id}/respond` | 提交等待中的论文选择并恢复同一 Goal Execution |
 
 Trace 报告由 PostgreSQL 中的 `AgentExecution + AgentEvent` 确定性投影，包含有序 stage
 span、耗时、暂停/恢复/取消转换、预算使用和 Completion Gate 质量摘要。报告只保留文档 ID、

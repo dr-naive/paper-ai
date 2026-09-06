@@ -1,9 +1,9 @@
 """论文 API 模块"""
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header, Query, BackgroundTasks
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 import os
 import uuid
 import logging
@@ -12,6 +12,7 @@ import json
 import time
 from datetime import datetime
 from email.utils import formatdate, parsedate_to_datetime
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,10 @@ from app.services.paper_files import (
     extract_pdf_page_texts as _extract_pdf_page_texts,
     extract_pdf_text as _extract_pdf_text,
     find_content_page as _find_content_page,
-    iter_file_range as _iter_file_range,
     normalize_page_text as _normalize_page_text,
     parse_byte_range as _parse_byte_range,
     save_validated_pdf as _save_validated_pdf,
+    read_file_range as _read_file_range,
 )
 from app.services.paper_indexing import (
     build_complete_text_chunks as _build_complete_text_chunks,
@@ -66,13 +67,31 @@ from app.services.table_structure import (
 router = APIRouter(prefix="/api/v1/papers")
 
 
+class PdfLoadTelemetry(BaseModel):
+    """Client-side PDF timings used for log-based performance monitoring."""
+
+    outcome: Literal["success", "error"]
+    source: Literal["cache", "range", "fallback"]
+    total_ms: float = Field(ge=0, le=300_000)
+    cache_lookup_ms: float = Field(default=0, ge=0, le=300_000)
+    document_ms: float = Field(default=0, ge=0, le=300_000)
+    first_page_render_ms: float = Field(default=0, ge=0, le=300_000)
+    pages: int = Field(default=0, ge=0, le=100_000)
+    network_requests: int = Field(default=0, ge=0, le=10_000)
+    cache_bytes: int = Field(default=0, ge=0, le=500_000_000)
+    error: Optional[str] = Field(default=None, max_length=160)
+
+
 def _build_pdf_cache_headers(file_path: str, paper_id: str) -> Dict[str, str]:
     stat = os.stat(file_path)
     etag = f'"{paper_id}-{stat.st_size:x}-{stat.st_mtime_ns:x}"'
     return {
         "Accept-Ranges": "bytes",
         "Content-Disposition": f'inline; filename="{paper_id}.pdf"',
-        "Cache-Control": "private, max-age=86400, immutable",
+        # Keep a private browser cache for a day so repeated Reader opens do
+        # not re-download the same paper. The ETag still allows revalidation
+        # after expiry, while omitting `immutable` keeps file replacement safe.
+        "Cache-Control": "private, max-age=86400",
         "ETag": etag,
         "Last-Modified": formatdate(stat.st_mtime, usegmt=True),
         "Vary": "Authorization",
@@ -262,22 +281,69 @@ async def get_paper_pdf(
             )
 
         start, end = byte_range
-        return StreamingResponse(
-            _iter_file_range(paper.pdf_path, start, end),
+        try:
+            # Keep the range bounded to the requested chunk (normally 1 MiB)
+            # and materialise it before setting Content-Length.  This avoids
+            # advertising more bytes than a streaming iterator could deliver
+            # if the backing file is replaced during a retry/import.
+            range_body = await asyncio.to_thread(
+                _read_file_range, paper.pdf_path, start, end
+            )
+        except (OSError, ValueError) as exc:
+            logger.warning("读取 PDF 范围失败 paper_id=%s: %s", paper_id, exc)
+            raise HTTPException(status_code=503, detail="PDF 文件正在更新，请稍后重试") from exc
+
+        return Response(
+            content=range_body,
             status_code=206,
             media_type="application/pdf",
             headers={
                 **common_headers,
                 "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Content-Length": str(end - start + 1),
+                "Content-Length": str(len(range_body)),
             },
         )
 
     return FileResponse(
         paper.pdf_path,
         media_type="application/pdf",
-        headers=common_headers,
+        headers={**common_headers, "Content-Length": str(file_size)},
     )
+
+
+@router.post("/{paper_id}/pdf/telemetry", status_code=204, response_class=Response)
+async def record_pdf_load_telemetry(
+    paper_id: str,
+    metric: PdfLoadTelemetry,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Log client-visible PDF loading timings without persisting telemetry."""
+    user_id = await get_current_user_id(authorization, db)
+    result = await db.execute(
+        select(Paper).where(Paper.id == paper_id, Paper.user_id == user_id)
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="论文不存在")
+
+    error = (metric.error or "-").replace("\n", " ").replace("\r", " ")[:160]
+    logger.info(
+        "pdf_client_load paper_id=%s outcome=%s source=%s total_ms=%.1f "
+        "cache_lookup_ms=%.1f document_ms=%.1f first_page_render_ms=%.1f "
+        "pages=%d network_requests=%d cache_bytes=%d error=%s",
+        paper_id,
+        metric.outcome,
+        metric.source,
+        metric.total_ms,
+        metric.cache_lookup_ms,
+        metric.document_ms,
+        metric.first_page_render_ms,
+        metric.pages,
+        metric.network_requests,
+        metric.cache_bytes,
+        error,
+    )
+    return Response(status_code=204)
 
 
 @router.get("/{paper_id}/sections")

@@ -24,3 +24,8 @@ completion:
     - query
     - candidate_count
     - stopping_reason
+
+supported_task_types: ['DISCOVER']
+required_inputs: ['goal']
+produced_artifacts: ['discovery_results']
+max_model_calls: 12

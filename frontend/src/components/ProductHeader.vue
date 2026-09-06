@@ -8,7 +8,7 @@
       <BrandMark :size="28" />
     </button>
 
-    <template v-if="backTo || context || $slots.navigation">
+    <template v-if="backTo || context || breadcrumbs?.length || $slots.navigation">
       <span v-if="showBrand" class="product-header__divider" aria-hidden="true"></span>
       <button
         v-if="backTo"
@@ -21,12 +21,19 @@
         <IconLeft class="product-header__back-icon" aria-hidden="true" />
         <span>{{ backLabel }}</span>
       </button>
-      <span
-        v-if="backTo && context"
-        class="product-header__sub-divider"
-        aria-hidden="true"
-      ></span>
-      <span v-if="context" class="product-header__context">{{ context }}</span>
+      <span v-if="backTo && (context || breadcrumbs?.length)" class="product-header__sub-divider" aria-hidden="true"></span>
+      <nav v-if="breadcrumbs?.length" class="product-header__breadcrumbs" aria-label="页面层级">
+        <template v-for="(breadcrumb, index) in breadcrumbs" :key="`${breadcrumb.label}-${index}`">
+          <IconRight v-if="index > 0" class="product-header__breadcrumb-separator" aria-hidden="true" />
+          <RouterLink v-if="breadcrumb.to" class="product-header__breadcrumb" :to="breadcrumb.to">
+            {{ breadcrumb.label }}
+          </RouterLink>
+          <span v-else class="product-header__breadcrumb product-header__breadcrumb--current" :aria-current="index === breadcrumbs.length - 1 ? 'page' : undefined">
+            {{ breadcrumb.label }}
+          </span>
+        </template>
+      </nav>
+      <span v-else-if="context" class="product-header__context">{{ context }}</span>
     </template>
 
     <div class="product-header__main"><slot /></div>
@@ -40,19 +47,26 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import { IconLeft } from '@arco-design/web-vue/es/icon'
+import type { RouteLocationRaw } from 'vue-router'
+import { IconLeft, IconRight } from '@arco-design/web-vue/es/icon'
 import BrandMark from './BrandMark.vue'
 import GlobalTaskCenter from './GlobalTaskCenter.vue'
+
+export interface ProductHeaderBreadcrumb {
+  label: string
+  to?: RouteLocationRaw
+}
 
 withDefaults(defineProps<{
   context?: string
   edge?: boolean
-  backTo?: string
+  backTo?: RouteLocationRaw | null
   backLabel?: string
   showBrand?: boolean
+  breadcrumbs?: ProductHeaderBreadcrumb[]
 }>(), {
   edge: false,
-  backTo: '',
+  backTo: null,
   backLabel: '上一页',
   showBrand: true,
 })
@@ -154,6 +168,43 @@ const router = useRouter()
   font-weight: 650;
 }
 
+.product-header__breadcrumbs {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--pa-muted);
+  font-size: 13px;
+}
+
+.product-header__breadcrumb {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  color: var(--pa-muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.product-header__breadcrumb:hover {
+  color: var(--pa-primary-hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.product-header__breadcrumb--current {
+  overflow: hidden;
+  color: var(--pa-ink);
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+
+.product-header__breadcrumb-separator {
+  flex: none;
+  color: var(--pa-border-strong);
+  font-size: 14px;
+}
+
 .product-header__navigation {
   display: flex;
   align-items: center;
@@ -167,8 +218,13 @@ const router = useRouter()
 }
 
 .product-header__back + .product-header__main,
-.product-header__context + .product-header__main {
+.product-header__context + .product-header__main,
+.product-header__breadcrumbs + .product-header__main {
   margin-left: 12px;
+}
+
+.product-header__back + .product-header__breadcrumbs {
+  min-width: 0;
 }
 
 .product-header__main + .product-header__navigation {
@@ -192,6 +248,10 @@ const router = useRouter()
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .product-header__breadcrumbs {
+    max-width: min(48vw, 300px);
+    overflow: hidden;
   }
   .product-header__actions {
     width: 100%;

@@ -153,6 +153,7 @@ class ProjectContextManager:
         intent: str = "general",
         max_candidates: int = 5,
         top_k: int = 10,
+        allowed_paper_ids: list[str] | None = None,
     ) -> WritingRetrievalContext:
         """Build one bounded writing context through candidate-restricted retrieval."""
         project = await self._owned_project(project_id, user_id)
@@ -187,6 +188,7 @@ class ProjectContextManager:
             intent=intent,
             max_candidates=max_candidates,
             top_k=top_k,
+            **({"allowed_paper_ids": allowed_paper_ids} if allowed_paper_ids is not None else {}),
         )
         return WritingRetrievalContext(
             status=status,

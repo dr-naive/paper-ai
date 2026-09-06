@@ -46,6 +46,18 @@ class SkillDefinition(BaseModel):
     permissions: SkillPermissions
     budget: SkillBudget
     completion: SkillCompletion
+    supported_task_types: list[str] = Field(default_factory=list)
+    required_inputs: list[str] = Field(default_factory=list)
+    produced_artifacts: list[str] = Field(default_factory=list)
+    max_model_calls: int = Field(default=20, ge=0, le=1000)
+
+    @property
+    def completion_criteria(self) -> list[str]:
+        return self.completion.criteria
+
+    @property
+    def max_tool_calls(self) -> int:
+        return self.budget.max_tool_calls
 
     @model_validator(mode="after")
     def validate_definition(self):

@@ -1,7 +1,12 @@
 <template>
   <div class="paper-reader">
     <!-- 顶部工具栏 -->
-    <ProductHeader edge back-to="/library" back-label="我的论文">
+    <ProductHeader
+      edge
+      :back-to="readerBackTo"
+      :back-label="readerBackLabel"
+      :breadcrumbs="readerBreadcrumbs"
+    >
       <div class="paper-title-bar">
         <h2 class="paper-title">{{ paper?.title || '加载中...' }}</h2>
         <span class="paper-authors">{{ paper?.authors }}</span>
@@ -64,6 +69,7 @@
           @page-change="handlePdfPageChange"
           @load-error="pdfError = true"
           @load-success="handlePdfLoaded"
+          @load-metrics="handlePdfLoadMetrics"
         />
         <div v-if="pdfError" class="pdf-error">
           <a-result status="warning" title="PDF 加载失败">
@@ -662,29 +668,64 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import type { RouteLocationRaw } from 'vue-router'
 import { Message, Modal } from '@arco-design/web-vue'
 import { IconRefresh, IconDelete, IconEdit } from '@arco-design/web-vue/es/icon'
 import type PdfViewerComponent from '@/components/PdfViewer.vue'
 import type { OutlineNode } from '@/components/PaperOutlineNode.vue'
 import PaperOutline from '@/components/PaperOutline.vue'
-import ProductHeader from '@/components/ProductHeader.vue'
+import ProductHeader, { type ProductHeaderBreadcrumb } from '@/components/ProductHeader.vue'
 import { renderMarkdown } from '@/utils/markdown'
 import {
   getPaper, getPaperSections, rebuildPaperSections,
   updateReadingStatus,
+  recordPdfLoadTelemetry,
   listSessions, createSession, deleteSession, deleteSessionMessage, getSessionMessages,
   getAnswerTask, resumeAnswerTask, stopAnswerTask, streamAskInSession,
   generateSummary, getSummaryCache,
   interpretPaper, getInterpretCache
 } from '@/api/paper'
-import type { AskStreamHandlers } from '@/api/paper'
-import { createEvidence, createResearchNote } from '@/api/projects'
+import type { AskStreamHandlers, PdfLoadTelemetry } from '@/api/paper'
+import { createEvidence, createResearchNote, getProject, type ResearchProject } from '@/api/projects'
+import {
+  projectReaderLocation,
+  readerContextFromRoute,
+  readerPaperIdFromRoute,
+  readerProjectIdFromRoute,
+  standaloneReaderLocation,
+} from '@/router/reader'
 
 const route = useRoute()
 const router = useRouter()
 const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
-const paperId = route.params.id as string
-const projectId = computed(() => String(route.query.project_id || ''))
+const readerContext = computed(() => readerContextFromRoute(route))
+// `project_id` is read only as a compatibility bridge for old bookmarks and
+// links. New navigation always uses the semantic project route.
+const projectId = computed(() => readerProjectIdFromRoute(route))
+const isProjectReader = computed(() => readerContext.value === 'project')
+const paperId = readerPaperIdFromRoute(route)
+const projectContext = ref<ResearchProject | null>(null)
+const readerBackTo = computed<RouteLocationRaw>(() => (
+  isProjectReader.value
+    ? { name: 'ProjectPapers', params: { projectId: projectId.value } }
+    : { name: 'PaperList' }
+))
+const readerBackLabel = computed(() => isProjectReader.value ? '项目论文' : '独立阅读')
+const readerBreadcrumbs = computed<ProductHeaderBreadcrumb[]>(() => {
+  if (!isProjectReader.value) {
+    return [
+      { label: '独立阅读', to: { name: 'PaperList' } },
+      { label: '阅读' },
+    ]
+  }
+  const title = projectContext.value?.title || '项目'
+  return [
+    { label: '项目', to: { name: 'ResearchProjects' } },
+    { label: title, to: { name: 'ProjectOverview', params: { projectId: projectId.value } } },
+    { label: '项目论文', to: { name: 'ProjectPapers', params: { projectId: projectId.value } } },
+    { label: '阅读' },
+  ]
+})
 const paper = ref<any>(null)
 const pdfUrl = ref('')
 const pdfError = ref(false)
@@ -717,6 +758,7 @@ const outlineCollapsed = ref(false)
 const currentPdfPage = ref(1)
 const totalPdfPages = ref(0)
 let readingProgressTimer: number | null = null
+let readingProgressRequest: Promise<void> | null = null
 
 // 结构化摘要相关
 const structuredSummary = ref<any>(null)
@@ -849,7 +891,10 @@ const saveAnswerAsNote = async (qa: any) => {
   } catch (error: any) { Message.error(error?.response?.data?.detail || '保存笔记失败') }
 }
 
-const compareInProject = () => router.push({ name: 'ProjectPapers', params: { projectId: projectId.value } })
+const compareInProject = () => {
+  if (!projectId.value) return
+  return router.push({ name: 'ProjectPapers', params: { projectId: projectId.value } })
+}
 
 const toggleCitationGroup = (qaId: string | number) => {
   const next = new Set(expandedCitationGroups.value)
@@ -872,7 +917,7 @@ const navigateToSection = async (section: OutlineNode) => {
 
 const readingPositionKey = `paperai:reading-position:${paperId}`
 
-const persistReadingProgress = async () => {
+const persistReadingProgress = async ({ silent = true } = {}) => {
   if (!totalPdfPages.value) return
   const progress = Math.min(
     100,
@@ -884,18 +929,33 @@ const persistReadingProgress = async () => {
     total: totalPdfPages.value,
     updatedAt: new Date().toISOString()
   }))
-  try {
-    await updateReadingStatus(paperId, { progress, status })
-  } catch (error) {
-    console.error('保存阅读进度失败:', error)
-  }
+  // A page change and component teardown can happen together. Reuse the
+  // in-flight request so teardown does not create a second 30s request.
+  if (readingProgressRequest) return readingProgressRequest
+
+  readingProgressRequest = updateReadingStatus(
+    paperId,
+    { progress, status },
+    { timeout: 8000 },
+  )
+    .then(() => undefined)
+    .catch((error) => {
+      // LocalStorage remains the immediate recovery source for the next
+      // Reader visit. Keep background/unmount failures out of the console as
+      // errors; a failed progress write must not make PDF reading look broken.
+      if (!silent) console.debug('保存阅读进度失败:', error)
+    })
+    .finally(() => {
+      readingProgressRequest = null
+    })
+  return readingProgressRequest
 }
 
 const scheduleReadingProgressSave = () => {
   if (readingProgressTimer !== null) window.clearTimeout(readingProgressTimer)
   readingProgressTimer = window.setTimeout(() => {
     readingProgressTimer = null
-    void persistReadingProgress()
+    void persistReadingProgress({ silent: true })
   }, 800)
 }
 
@@ -920,6 +980,13 @@ const handlePdfLoaded = async (pages: number) => {
     // Ignore a damaged local reading-position record and start from page one.
   }
   scheduleReadingProgressSave()
+}
+
+const handlePdfLoadMetrics = (metric: PdfLoadTelemetry) => {
+  // Observability is deliberately fire-and-forget. A slow or unavailable
+  // metrics endpoint must never delay the first page or surface as a Reader
+  // error.
+  void recordPdfLoadTelemetry(paperId, metric).catch(() => undefined)
 }
 
 // 加载会话列表
@@ -1122,18 +1189,38 @@ const loadPaper = async () => {
     const response = await getPaper(paperId)
     paper.value = response
     pdfError.value = false
-    const token = localStorage.getItem('access_token')
-    pdfUrl.value = `/api/v1/papers/${paperId}/pdf?token=${token}`
+    pdfUrl.value = pdfUrlForPaper()
   } catch (error) {
     console.error('加载论文失败:', error)
     Message.error('加载论文失败')
   }
 }
 
+const loadProjectContext = async () => {
+  if (!isProjectReader.value || !projectId.value) return
+  try {
+    projectContext.value = await getProject(projectId.value)
+  } catch (error) {
+    // The Reader remains usable for the paper itself, but project actions stay
+    // scoped to the route-provided project and never fall back to another one.
+    projectContext.value = null
+    console.error('加载项目上下文失败:', error)
+  }
+}
+
+const pdfUrlForPaper = (forceReload = false) => {
+  const params = new URLSearchParams({
+    // Keep a stable, cacheable URL. PdfViewer sends the access token in the
+    // Authorization header so JWTs never appear in browser/server URLs.
+    v: '3'
+  })
+  if (forceReload) params.set('t', String(Date.now()))
+  return `/api/v1/papers/${paperId}/pdf?${params.toString()}`
+}
+
 const retryLoadPdf = () => {
   pdfError.value = false
-  const token = localStorage.getItem('access_token')
-  pdfUrl.value = `/api/v1/papers/${paperId}/pdf?token=${token}&t=${Date.now()}`
+  pdfUrl.value = pdfUrlForPaper(true)
 }
 
 const normalizeLocationText = (value: unknown) => String(value || '')
@@ -1205,7 +1292,7 @@ const locateInPdf = async (cite: any, key: string) => {
   }
 
   if (!pdfViewerRef.value) {
-    Message.warning('PDF 阅读器尚未加载完成')
+    Message.warning('阅读页面尚未加载完成')
     return
   }
 
@@ -1255,7 +1342,10 @@ const locateInPdf = async (cite: any, key: string) => {
 const handleCitationClick = async (cite: any, key: string) => {
   const sourcePaperId = String(cite?.paper_id || '')
   if (sourcePaperId && sourcePaperId !== paperId) {
-    const target = router.resolve({ name: 'PaperReader', params: { id: sourcePaperId } })
+    const targetLocation = isProjectReader.value && projectId.value
+      ? projectReaderLocation(projectId.value, sourcePaperId)
+      : standaloneReaderLocation(sourcePaperId)
+    const target = router.resolve(targetLocation)
     window.open(target.href, '_blank', 'noopener,noreferrer')
     Message.info(`已打开来源论文：${cite.paper_title || sourcePaperId}`)
     return
@@ -1691,6 +1781,7 @@ onMounted(() => {
   applyLayoutPreset('compare')
   outlineCollapsed.value = window.innerWidth <= 1100
   window.addEventListener('resize', handleWindowResize)
+  loadProjectContext()
   loadPaper()
   loadSections()
   loadSessions()
@@ -1702,7 +1793,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleWindowResize)
   qaAbortController?.abort()
   if (readingProgressTimer !== null) window.clearTimeout(readingProgressTimer)
-  void persistReadingProgress()
+  void persistReadingProgress({ silent: true })
 })
 
 // 监听解读类型变化，加载对应缓存

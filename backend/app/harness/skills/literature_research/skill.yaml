@@ -31,3 +31,8 @@ completion:
     - source_ids
     - open_questions
     - stopping_reason
+
+supported_task_types: []
+required_inputs: []
+produced_artifacts: []
+max_model_calls: 20

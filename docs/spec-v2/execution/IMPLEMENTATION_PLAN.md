@@ -1,14 +1,168 @@
 # PaperAI Implementation Plan
 
-Status: COMPLETE
+Status: IN_PROGRESS
+
+## Phase 23 — Goal-driven Research Orchestration
+
+ORCH-1 is one coherent block: extend AgentExecution in place; persist typed
+ResearchTask and plans; adapt existing capabilities through Queue/Worker;
+centralize deterministic state/completion; scope Lead tools; expose compatible
+progress and resumable user input. Acceptance covers READ_PAPERS, WRITE_SECTION,
+DISCOVER_AND_IMPORT, asset reuse, retry, duplicate consumption, interruption,
+waiting_user, blocked, partial and cancel plus existing regressions.
+
+ORCH-1 acceptance result: COMPLETE. Backend `333 passed`, frontend `78 passed`,
+frontend typecheck/lint/build passed, Alembic head `0007_research_tasks` and
+schema preflight passed. See `IMPLEMENTATION_PROGRESS.md` for the exact file,
+chain, migration and remaining-risk handoff.
 
 ## Current Phase
 
-None. Phase 16 — Guide Audit Remediation is complete.
+Phase 23 — Goal-driven Research Orchestration.
 
 ## Current Implementation Block
 
-None.
+ORCH-1.
+
+## Phase 22 Goal
+
+Make the shared Reader tolerant of stale or truncated PDF responses and avoid
+unbounded progress-save requests when a user leaves the Reader. Preserve the
+existing PDF range endpoint, manual cache, Reader implementation and status
+payload contract.
+
+## Phase 22 Acceptance
+
+- PDF 200 and 206 responses advertise the exact body length and revalidate
+  instead of treating partial responses as immutable;
+- range delivery detects a short read before returning the body;
+- PDF.js keeps the range fast path and has one bounded complete-download
+  recovery path for a network/worker failure;
+- stale/manual PDF cache entries are isolated by a new namespace and invalid
+  bytes are discarded;
+- Reader progress saves have a bounded timeout, do not duplicate a request on
+  teardown and do not surface background teardown failures as application
+  errors;
+- frontend tests, lint, typecheck, build and backend syntax/range checks pass.
+
+## Phase 22 Block
+
+1. READER-TRANSPORT-1 — PDF delivery/recovery and progress persistence
+
+## Phase 21 Goal
+
+Make navigation context explicit across Independent Reading, Project Papers
+and the shared Reader. Reuse Reader and upload capabilities without leaking the
+wrong business context, losing project identity, or sending project users to
+the global paper library.
+
+## Phase 21 Acceptance
+
+- the canonical Standalone Reader route is `/paper/:id` and the canonical
+  Project Reader route is `/projects/:projectId/papers/:paperId/read`;
+- both routes render the same `PaperReader.vue` implementation;
+- a Standalone Reader returns to Independent Reading, while a Project Reader
+  returns to the current Project Papers page with project identity intact;
+- ProductHeader accepts Vue Router `RouteLocationRaw` Back and breadcrumb
+  locations and exposes a consistent header hierarchy;
+- Project-only Reader actions, project title/context and cross-paper evidence
+  links remain scoped to the active project;
+- local upload from Project Papers uses the existing paper upload pipeline and
+  attaches the ready paper to the current project before refreshing the list;
+- legacy project query links remain compatible without being the primary
+  navigation model;
+- focused route, deep-link, Reader-context, Header and project-upload tests,
+  frontend lint, typecheck and production build pass.
+
+## Phase 21 Block
+
+1. NAV-1 — Semantic Reader Context and Project Upload.
+
+## Phase 20 Goal
+
+Keep the Guide's top navigation and desktop sidebar visible while the reader
+scrolls, reserve their occupied space in the layout, and reduce the main
+surface's horizontal gutter to exactly three pixels.
+
+## Phase 20 Acceptance
+
+- the Guide top navigation is fixed to the viewport;
+- the desktop sidebar is fixed below the top navigation;
+- content begins below the fixed header and beside the fixed sidebar without
+  overlap;
+- the horizontal main gutter is three pixels at desktop and mobile widths;
+- responsive navigation and existing Guide routes/content remain intact;
+- focused frontend tests, ESLint, typecheck and production build pass.
+
+## Phase 20 Block
+
+1. GUIDE-7 — Fixed Header and Sidebar.
+
+## Phase 19 Goal
+
+Connect the Guide reading surface directly to the global header. Remove the
+remaining top gray band and rounded-card treatment while keeping the small
+horizontal gutter requested for the main content.
+
+## Phase 19 Acceptance
+
+- the main content begins immediately below the global header;
+- the Guide document has no rounded top or card-like corner treatment;
+- the six-pixel horizontal gutter remains on desktop;
+- tablet and mobile layouts do not reintroduce a top gray gap;
+- existing Guide routes, navigation states and content remain intact;
+- focused frontend tests, ESLint, typecheck and production build pass.
+
+## Phase 19 Block
+
+1. GUIDE-6 — Remove Top Gap and Card Corners.
+
+## Phase 18 Goal
+
+Make the documentation hierarchy immediately legible and remove the excessive
+gray framing around the Guide document. Group titles should read as section
+headers, while chapter links remain the navigable items. The main document
+surface should run almost to the content area's edges with only a small gutter.
+
+## Phase 18 Acceptance
+
+- sidebar group titles have a clearly stronger typographic and structural
+  treatment than their chapter links;
+- desktop main content keeps only a small horizontal gutter and no broad gray
+  side bands;
+- responsive navigation still collapses cleanly without horizontal page
+  overflow;
+- existing Guide routes, content and accessibility states remain intact;
+- frontend tests, ESLint, typecheck and production build pass.
+
+## Phase 18 Block
+
+1. GUIDE-5 — Sidebar Hierarchy and Main Surface Spacing.
+
+## Phase 17 Goal
+
+Turn the public Guide into a true documentation workspace. Each user-facing
+module must have its own URL and a concise task sequence that explains where to
+start, what to do, what success looks like and how to recover from common
+failures. The sidebar must be an edge-aligned, full-height navigation surface
+rather than an inset table of contents.
+
+## Phase 17 Acceptance
+
+- `/guide` redirects to the Overview guide page and each guide module resolves
+  at a distinct `/guide/:section` URL;
+- Overview, Discover, Papers and Writing are separate navigable pages;
+- Reader, Evidence and troubleshooting remain separate navigable pages;
+- every page includes concrete entry instructions, ordered actions, expected
+  outcomes and relevant limits/recovery guidance;
+- the sidebar is flush with the viewport edge below the global header and uses
+  a full-height documentation layout on desktop;
+- responsive navigation remains usable at tablet and mobile widths;
+- focused content/router tests, ESLint, typecheck and production build pass.
+
+## Phase 17 Block
+
+1. GUIDE-4 — Multi-page Guide Shell and Task-oriented Content.
 
 ## Phase 16 Goal
 

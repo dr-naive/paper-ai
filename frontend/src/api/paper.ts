@@ -1,10 +1,22 @@
 import request from './index'
+import type { AxiosRequestConfig } from 'axios'
+
+export interface PaperUploadResponse {
+  task_id: string
+  paper_id: string
+  /** Legacy response aliases accepted while older API deployments roll over. */
+  taskId?: string
+  paperId?: string
+  message: string
+  status_url: string
+  duplicate?: boolean
+}
 
 export const uploadPaper = (file: File) => {
   const formData = new FormData()
   formData.append('file', file)
   const token = localStorage.getItem('access_token')
-  return request.post('/api/v1/papers/upload', formData, { 
+  return request.post<PaperUploadResponse>('/api/v1/papers/upload', formData, {
     timeout: 900000,
     headers: { 
       'Authorization': token ? `Bearer ${token}` : undefined,
@@ -39,6 +51,27 @@ export const retryPaperTask = (taskId: string) =>
 
 export const getPaper = (paperId: string) => request.get(`/api/v1/papers/${paperId}`)
 
+export interface PdfLoadTelemetry {
+  outcome: 'success' | 'error'
+  source: 'cache' | 'range' | 'fallback'
+  total_ms: number
+  cache_lookup_ms: number
+  document_ms: number
+  first_page_render_ms: number
+  pages: number
+  network_requests: number
+  cache_bytes: number
+  error?: string
+}
+
+/** Best-effort client timing report; a telemetry failure must not affect reading. */
+export const recordPdfLoadTelemetry = (paperId: string, metric: PdfLoadTelemetry) =>
+  request.post<void>(
+    `/api/v1/papers/${encodeURIComponent(paperId)}/pdf/telemetry`,
+    metric,
+    { timeout: 1500 },
+  )
+
 export const getPaperSections = (paperId: string) => request.get(`/api/v1/papers/${paperId}/sections`)
 
 export const rebuildPaperSections = (paperId: string) =>
@@ -66,8 +99,11 @@ export const getTaskStatus = (taskId: string) => {
   })
 }
 
-export const updateReadingStatus = (paperId: string, data: { status?: string; progress?: number; favorite?: boolean }) =>
-  request.patch(`/api/v1/papers/${paperId}/status`, data)
+export const updateReadingStatus = (
+  paperId: string,
+  data: { status?: string; progress?: number; favorite?: boolean },
+  config?: AxiosRequestConfig,
+) => request.patch(`/api/v1/papers/${paperId}/status`, data, config)
 
 // 对话会话管理
 export const listSessions = (paperId?: string, skip = 0, limit = 20) =>

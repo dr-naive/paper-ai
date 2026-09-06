@@ -108,7 +108,16 @@ class EvidenceService:
         page_number = candidate.page_number or (element.page_number if element else None)
         bbox = candidate.bbox or (element.bbox if element else None)
         source_fingerprint = await self.source_fingerprint(paper)
+        from app.harness.runtime.task_context import current_task_id
+        from uuid import uuid5, NAMESPACE_URL
+        task_id = current_task_id.get()
+        stable_id = str(uuid5(NAMESPACE_URL, f'{task_id}:{candidate.paper_id}:{candidate.chunk_id}')) if task_id else None
+        if stable_id:
+            existing = await self.db.get(EvidenceItem, stable_id)
+            if existing is not None:
+                return existing
         item = EvidenceItem(
+            **({'id': stable_id} if stable_id else {}),
             project_id=candidate.project_id,
             paper_id=candidate.paper_id,
             section_id=str(section.id) if section else None,

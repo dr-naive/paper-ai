@@ -56,6 +56,29 @@ def iter_file_range(
             yield data
 
 
+def read_file_range(file_path: str, start: int, end: int) -> bytes:
+    """Read one byte range as an exact, bounded response body.
+
+    A range response advertises its length before the body is sent.  Returning
+    a concrete byte string lets the HTTP response layer verify that the body
+    really contains the advertised number of bytes instead of silently ending
+    a streaming generator early when a file changes underneath it.
+    """
+    expected = end - start + 1
+    if expected <= 0:
+        raise ValueError("invalid file range")
+
+    with open(file_path, "rb") as file_obj:
+        file_obj.seek(start)
+        data = file_obj.read(expected)
+
+    if len(data) != expected:
+        raise OSError(
+            f"PDF range changed while reading: expected {expected} bytes, got {len(data)}"
+        )
+    return data
+
+
 async def save_validated_pdf(upload: UploadFile, file_path: str, max_size: int) -> int:
     filename = str(upload.filename or "")
     if not filename.lower().endswith(".pdf"):

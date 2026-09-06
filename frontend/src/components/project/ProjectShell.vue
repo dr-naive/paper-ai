@@ -5,19 +5,25 @@
         <BrandMark :size="28" />
       </RouterLink>
 
-      <nav class="global-nav" aria-label="主导航">
+      <div class="sidebar-home">
         <RouterLink to="/home" class="global-nav__item" active-class="is-active" title="首页">
           <span class="global-nav__icon" aria-hidden="true"><IconHome /></span>
           <span>首页</span>
         </RouterLink>
-        <RouterLink to="/projects" class="global-nav__item" active-class="is-active" title="项目">
-          <span class="global-nav__icon" aria-hidden="true"><IconApps /></span>
-          <span>项目</span>
-        </RouterLink>
-        <RouterLink to="/library" class="global-nav__item" active-class="is-active" title="独立阅读">
-          <span class="global-nav__icon" aria-hidden="true"><IconBook /></span>
-          <span>独立阅读</span>
-        </RouterLink>
+      </div>
+
+      <nav class="global-nav" aria-label="工作区导航">
+        <div class="global-nav__group" aria-labelledby="workspace-navigation-label">
+          <p id="workspace-navigation-label" class="sidebar-label global-nav__section-label">工作区</p>
+          <RouterLink to="/projects" class="global-nav__item" active-class="is-active" title="项目">
+            <span class="global-nav__icon" aria-hidden="true"><IconApps /></span>
+            <span>项目</span>
+          </RouterLink>
+          <RouterLink to="/library" class="global-nav__item" active-class="is-active" title="独立阅读">
+            <span class="global-nav__icon" aria-hidden="true"><IconBook /></span>
+            <span>独立阅读</span>
+          </RouterLink>
+        </div>
       </nav>
 
       <div v-if="recentProjects.length" class="recent-projects">
@@ -34,9 +40,6 @@
         </RouterLink>
       </div>
 
-      <div class="sidebar-footer">
-        <RouterLink class="sidebar-footer__link" to="/library">打开论文库</RouterLink>
-      </div>
     </aside>
 
     <div class="project-shell__content">
@@ -87,17 +90,29 @@ const isCurrentProject = (projectId: string) => String(route.params.projectId ||
 }
 
 .sidebar-brand:focus-visible,
+.sidebar-home .global-nav__item:focus-visible,
 .global-nav__item:focus-visible,
-.recent-project:focus-visible,
-.sidebar-footer__link:focus-visible {
+.recent-project:focus-visible {
   outline: 2px solid var(--pa-primary);
   outline-offset: 3px;
 }
 
+.sidebar-home {
+  padding: var(--pa-space-3) 10px var(--pa-space-2);
+}
+
 .global-nav {
+  padding: var(--pa-space-2) 10px var(--pa-space-3);
+  border-top: 1px solid var(--pa-border);
+}
+
+.global-nav__group {
   display: grid;
   gap: var(--pa-space-1);
-  padding: var(--pa-space-3) 10px var(--pa-space-2);
+}
+
+.global-nav__section-label {
+  margin: 0 10px 4px;
 }
 
 .global-nav__item {
@@ -135,6 +150,8 @@ const isCurrentProject = (projectId: string) => String(route.params.projectId ||
 }
 
 .recent-projects {
+  margin-top: var(--pa-space-2);
+  border-top: 1px solid var(--pa-border);
   display: grid;
   gap: 3px;
   padding: var(--pa-space-3) 10px 0;
@@ -182,22 +199,6 @@ const isCurrentProject = (projectId: string) => String(route.params.projectId ||
   background: var(--pa-primary);
 }
 
-.sidebar-footer {
-  margin-top: auto;
-  padding: 12px 16px 16px;
-  border-top: 1px solid var(--pa-border);
-}
-
-.sidebar-footer__link {
-  color: var(--pa-muted);
-  font-size: 12px;
-  text-decoration: none;
-}
-
-.sidebar-footer__link:hover {
-  color: var(--pa-primary-hover);
-}
-
 .project-shell__content {
   min-width: 0;
   flex: 1;
@@ -218,14 +219,16 @@ const isCurrentProject = (projectId: string) => String(route.params.projectId ||
     padding-inline: 10px;
   }
 
+  .sidebar-home .global-nav__item,
   .global-nav__item {
     justify-content: center;
     padding-inline: 0;
   }
 
+  .sidebar-home .global-nav__item > span:last-child,
   .global-nav__item > span:last-child,
-  .recent-projects,
-  .sidebar-footer {
+  .global-nav__section-label,
+  .recent-projects {
     display: none;
   }
 }

@@ -334,6 +334,13 @@ class PaperKnowledgeBase:
             )
         return self._vectorstore
     
+    async def has_paper_index(self, paper_id: str) -> bool:
+        """Read existing index metadata without an embedding/provider request."""
+        import asyncio
+        result = await asyncio.to_thread(self.vectorstore._collection.get,
+                                         where={'paper_id': str(paper_id)}, limit=1, include=[])
+        return bool(result.get('ids'))
+
     async def add_paper_chunks(self, paper_id: str, chunks: List[Dict[str, Any]]) -> bool:
         """添加论文片段到知识库，支持层级分块"""
         try:

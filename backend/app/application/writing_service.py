@@ -701,6 +701,7 @@ class WritingService:
         user_id: str,
         request: WritingGenerateRequest,
         on_progress: WritingProgressCallback | None = None,
+        prepared_context: WritingRetrievalContext | None = None,
     ) -> WritingGenerationProposal:
         document = await self._owned_document(
             project_id=project_id,
@@ -718,7 +719,7 @@ class WritingService:
 
         await emit("context_started")
         current_section_title = request.section_path[-1] if request.section_path else ""
-        context = await self.context_manager.build_writing_context(
+        context = prepared_context or await self.context_manager.build_writing_context(
             project_id=project_id,
             user_id=user_id,
             instruction=request.instruction,

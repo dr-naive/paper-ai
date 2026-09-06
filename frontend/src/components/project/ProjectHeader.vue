@@ -1,5 +1,13 @@
 <template>
-  <ProductHeader :context="project.title" :show-brand="false" back-to="/projects" back-label="项目列表">
+  <ProductHeader
+    :show-brand="false"
+    :back-to="{ name: 'ResearchProjects' }"
+    back-label="项目列表"
+    :breadcrumbs="[
+      { label: '项目', to: { name: 'ResearchProjects' } },
+      { label: project.title },
+    ]"
+  >
     <template #navigation>
       <nav class="project-tabs" aria-label="项目导航">
         <RouterLink

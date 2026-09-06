@@ -496,6 +496,15 @@ Phase regression
 = broader regression after all Blocks in the Phase are complete
 ```
 
+## Git 提交与远程推送规范
+
+- 面向用户的回复、commit message、Pull Request 说明、推送说明和执行摘要统一使用中文；代码、API、库名和标准术语可保留原文。
+- 需要提交或推送时，先检查当前分支、目标远程与分支、变更范围以及敏感文件，避免把 `.env`、密钥、凭证或构建产物提交到仓库。
+- 远程推送前，必须向用户展示拟使用的提交标题、提交正文或推送说明、目标远程/分支、主要变更摘要，以及是否会改写远程历史。
+- 在用户明确同意前，不得执行 `git push`、`git push --force` 或 `git push --force-with-lease`。
+- 未获同意时可以本地编辑、测试、暂存或创建本地提交，但不得推送远端。
+- 如果需要修正已经推送的错误提交，必须先在本地准备修正版，明确说明是否需要强制推送，并等待用户确认后再同步远端。
+
 ## Compatibility contracts to protect
 
 Do not break without an explicit migration plan:
