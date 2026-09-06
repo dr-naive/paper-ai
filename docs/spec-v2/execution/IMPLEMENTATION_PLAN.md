@@ -2,6 +2,19 @@
 
 Status: COMPLETE
 
+## Phase 25 Maintenance Block — Agent Runtime 报告可读性与覆盖增强
+
+EVAL-OBS-2 在不新增执行基础设施、不改变 Agent Runtime 生命周期的前提下，
+扩展既有报告读取范围：默认读取筛选范围内全部 Execution，加入 durable
+AgentEvent、Execution 全状态分布、历史累计计数与明细追踪的覆盖对照，并同时
+输出结构化 JSON 和中文 Markdown。Markdown 必须解释主要指标、显示样本范围、
+空样本限制、取消/阻塞/等待用户状态和 Execution/Task 明细；没有分母的比例
+指标显示“暂无数据”。
+
+验收：报告命令默认不静默截断，显式 `--limit` 时记录截断信息；旧 JSON 消费者
+和静态面板继续可用；空报告、历史 Execution、Task/Tool/Model 明细、AgentEvent、
+取消状态、累计计数缺少明细和失败 Execution 均有测试覆盖。
+
 ## Phase 25 — Agent Evaluation & Observability
 
 EVAL-OBS-1 is one coherent internal engineering block. Reuse the existing

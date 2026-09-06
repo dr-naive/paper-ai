@@ -23,6 +23,40 @@ Phase 25 — Agent Evaluation & Observability.
 
 ## Current Implementation Block
 
+EVAL-OBS-2 — 扩展 Agent Runtime 报告的真实数据覆盖、状态诊断和中文可读输出。
+
+EVAL-OBS-2 status: IN_PROGRESS. This maintenance block preserves the existing
+runtime and report schema direction, adds AgentEvent and legacy counter
+coverage, defaults to the full Execution sample, and emits a human-readable
+Chinese Markdown report alongside JSON.
+
+## EVAL-OBS-2 Reading Boundary
+
+- `backend/evals/agent_runtime_metrics.py`
+- `backend/evals/agent_runtime_markdown.py`
+- `backend/evals/run_agent_runtime_report.py`
+- `backend/evals/build_dashboard.py`
+- `backend/tests/test_agent_runtime_observability.py`
+- `backend/tests/test_eval_dashboard.py`
+- `backend/evals/README.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Acceptance boundary:
+
+- Default report reads all Execution rows in the selected time/filter range;
+  an explicit limit is recorded as truncation.
+- Durable AgentEvent, ResearchTask, ToolCall and ModelCall records are
+  included, together with legacy AgentExecution counters and their coverage
+  gaps.
+- JSON remains machine-readable and the static dashboard remains compatible;
+  a Chinese Markdown report includes definitions, status distribution,
+  coverage diagnostics and execution/task drilldown.
+- Empty denominators render as “暂无数据” in Markdown and do not imply a
+  zero success rate.
+
+## EVAL-OBS-1 Reading Boundary
+
 EVAL-OBS-1 — add internal Agent Runtime evaluation and observability on the
 existing GoalExecution/ResearchTask/Worker path.
 

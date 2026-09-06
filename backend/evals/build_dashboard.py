@@ -207,21 +207,32 @@ def render_html(data: dict[str, Any]) -> str:
       const report = DATA.agent_runtime;
       if (!report) return;
       const s = report.summary || {{}}, b = s.budget || {{}};
+      const sample = report.sample_size || {{}};
       const failure = report.failures && report.failures.failure_reason_distribution || {{}};
+      const pctWhenObserved = (value, count) => count ? pct(value) : '暂无数据';
       const items = [
-        ['Task Success Rate', pct(s.task_success_rate)],
-        ['Tool Failure Rate', pct(s.failure_rate)],
+        ['Execution 完成率', pctWhenObserved(s.completed_rate, sample.executions)],
+        ['Execution 取消率', pctWhenObserved(s.cancelled_rate, sample.executions)],
+        ['Task 完成率', pctWhenObserved(s.task_success_rate, sample.tasks)],
+        ['Tool 失败率', pctWhenObserved(s.failure_rate, sample.tool_calls)],
         ['重复调用率', pct(s.duplicate_rate)],
-        ['平均调用/任务', num(s.calls_per_task)],
-        ['平均 Token/任务', num((s.avg_input_tokens_per_task || 0) + (s.avg_output_tokens_per_task || 0))],
-        ['平均预算使用率', pct(b.avg_token_utilization)],
+        ['平均工具调用/任务', sample.tool_calls ? num(s.calls_per_task) : '暂无数据'],
+        ['平均 Token/任务', sample.model_calls ? num((s.avg_input_tokens_per_task || 0) + (s.avg_output_tokens_per_task || 0)) : '暂无数据'],
+        ['Token 预算使用率', pctWhenObserved(b.avg_token_utilization, sample.executions)],
       ];
       document.querySelector('#agentRuntimePanel').hidden = false;
       document.querySelector('#agentRuntimeSource').textContent = report.source_file || '';
       document.querySelector('#agentRuntimeMetrics').innerHTML = items.map(([label,value]) => `<div class="metric"><span>${{label}}</span><strong>${{value}}</strong></div>`).join('');
       const failureRows = Object.entries(failure).map(([name,count]) => `<tr><td>${{esc(name)}}</td><td class="num">${{count}}</td></tr>`).join('');
+      const statusLabels = {{pending:'等待调度',queued:'已入队',running:'执行中',waiting_user:'等待用户',paused:'已暂停',retrying:'重试中',completed:'已完成',partial:'部分完成',blocked:'已阻塞',failed:'失败',cancelled:'已取消'}};
+      const statusRows = Object.entries(s.status_counts || {{}}).map(([name,count]) => `<tr><td>${{esc(statusLabels[name] || name)}}</td><td class="num">${{count}}</td></tr>`).join('');
+      const coverageRows = [
+        ['Execution', sample.executions || 0], ['AgentEvent', sample.events || 0],
+        ['ResearchTask', sample.tasks || 0], ['ToolCall', sample.tool_calls || 0],
+        ['ModelCall', sample.model_calls || 0],
+      ].map(([name,count]) => `<tr><td>${{name}}</td><td class="num">${{count}}</td></tr>`).join('');
       const details = (report.failures && report.failures.details || []).slice(0, 30).map(item => `<tr><td>${{esc(item.reason)}}</td><td>${{esc(item.execution_id)}}</td><td>${{esc(item.task_id || '—')}}</td><td>${{esc(item.trace_id || '—')}}</td><td>${{esc(item.error_code || '—')}}</td></tr>`).join('');
-      document.querySelector('#agentRuntimeDetails').innerHTML = `<h3>失败分类</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>次数</th></tr></thead><tbody>${{failureRows || '<tr><td colspan="2">暂无失败记录</td></tr>'}}</tbody></table></div><h3>失败追踪（最多 30 条）</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>Execution</th><th>Task</th><th>Trace</th><th>错误码</th></tr></thead><tbody>${{details || '<tr><td colspan="5">暂无可下钻记录</td></tr>'}}</tbody></table></div>`;
+      document.querySelector('#agentRuntimeDetails').innerHTML = `<h3>数据覆盖</h3><div class="table-wrap"><table><thead><tr><th>数据对象</th><th>样本数</th></tr></thead><tbody>${{coverageRows}}</tbody></table></div><h3>Execution 状态</h3><div class="table-wrap"><table><thead><tr><th>状态</th><th>数量</th></tr></thead><tbody>${{statusRows || '<tr><td colspan="2">暂无 Execution</td></tr>'}}</tbody></table></div><h3>失败分类</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>次数</th></tr></thead><tbody>${{failureRows || '<tr><td colspan="2">暂无失败记录</td></tr>'}}</tbody></table></div><h3>失败追踪（最多 30 条）</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>Execution</th><th>Task</th><th>Trace</th><th>错误码</th></tr></thead><tbody>${{details || '<tr><td colspan="5">暂无可下钻记录</td></tr>'}}</tbody></table></div>`;
     }}
 
     function renderMetrics(run) {{

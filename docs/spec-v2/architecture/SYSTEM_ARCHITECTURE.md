@@ -505,7 +505,7 @@ ResearchExecution (AgentExecution)
 | Artifact / Evidence | 可被后续任务通过结构化引用复用的项目产物 |
 | ModelCall | ResearchTask 范围内的无提示词模型调用事实记录 |
 | ToolCall | 原子工具调用事实记录；可关联 ResearchTask/Skill，不是业务任务 |
-| Agent Runtime 报告 | 从 PostgreSQL Execution/Task/ToolCall/ModelCall 聚合的开发评测产物 |
+| Agent Runtime 报告 | 从 PostgreSQL Execution/Task/ToolCall/ModelCall/AgentEvent 聚合的开发评测产物；同时输出机器可读 JSON 与中文 Markdown |
 
 第一版任务类型只包括 `DISCOVER`、`IMPORT_PAPER`、`READ_PAPER`、`BUILD_EVIDENCE`、
 `WRITE_SECTION`、`AUDIT_DRAFT`；ToolCall 不拆成 ResearchTask。确定性搜索过滤、导入、解析/索引、
@@ -519,16 +519,19 @@ task/artifact ID、Project advisory lock 和输出复用保持幂等。用户确
 ### 15.2 Agent Evaluation & Observability
 
 内部观测不改变上述生命周期，也不新增 Agent Runtime。`backend/evals` 的通用
-报告只做确定性聚合：Execution/Task 成功与失败率、Skill/Executor/Task 类型
-切片、Tool/Model 延迟与调用量、预算使用、同一 ResearchTask 内的重复成功
-ToolCall，以及可由错误码直接映射的失败分类。重试后的失败调用不会被误报为
-重复动作；没有稳定证据的分类记为 `UNKNOWN`。
+报告只做确定性聚合：Execution 全状态分布、Task 成功与失败率、Skill/Executor/Task
+类型切片、AgentEvent 类型、Tool/Model 延迟与调用量、预算使用、累计计数与明细
+追踪覆盖率、同一 ResearchTask 内的重复成功 ToolCall，以及可由错误码直接映射的
+失败分类。重试后的失败调用不会被误报为重复动作；没有稳定证据的分类记为
+`UNKNOWN`。没有对应样本的比例指标在中文报告中显示为“暂无数据”，避免将缺失观测
+误解为零成功率。
 
-报告包含样本量和可下钻的 `execution_id`、`task_id`、`trace_id`，不包含完整
+报告包含样本量、采集范围、观测覆盖率和可下钻的 `execution_id`、`task_id`、`trace_id`，不包含完整
 prompt、chain-of-thought、认证信息或原始 Provider payload。现有 Writing
 `execution_trace_report()` / `evaluate_execution_trace()` 仍是 Writing 专用评估
 入口，Agent Runtime 报告只扩展运行事实，不替换或复制它。现有静态评测面板
-仅增加开发/评测用 Agent Runtime 区块，不进入产品导航。
+仅增加开发/评测用 Agent Runtime 区块，不进入产品导航；Markdown 报告用于人工阅读，
+JSON 报告用于面板和离线工具。
 
 ### 项目级 Goal 与即时交互边界
 

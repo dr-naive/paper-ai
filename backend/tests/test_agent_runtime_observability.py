@@ -11,6 +11,7 @@ from evals.agent_runtime_metrics import (
     classify_failure,
     detect_duplicate_tool_calls,
 )
+from evals.agent_runtime_markdown import render_runtime_report_markdown
 
 
 def _execution(status="completed"):
@@ -104,7 +105,9 @@ def test_runtime_report_aggregates_slices_and_model_budget_metrics():
             "completed_at": datetime(2026, 1, 1, 0, 0, 1),
         }],
     )
-    assert report["sample_size"] == {"executions": 1, "tasks": 1, "tool_calls": 2, "model_calls": 1, "failure_records": 1}
+    assert report["sample_size"] == {
+        "executions": 1, "tasks": 1, "tool_calls": 2, "model_calls": 1, "events": 0, "failure_records": 1,
+    }
     assert report["summary"]["task_success_rate"] == 1
     assert report["summary"]["calls_per_task"] == 2
     assert report["summary"]["model_calls_per_task"] == 1
@@ -151,7 +154,41 @@ def test_failure_taxonomy_is_deterministic_and_incomplete_task_is_not_success():
 
 def test_empty_runtime_report_is_explicit_and_safe():
     report = build_runtime_report()
-    assert report["sample_size"] == {"executions": 0, "tasks": 0, "tool_calls": 0, "model_calls": 0, "failure_records": 0}
+    assert report["sample_size"] == {
+        "executions": 0, "tasks": 0, "tool_calls": 0, "model_calls": 0, "events": 0, "failure_records": 0,
+    }
     assert report["summary"]["execution_count"] == 0
     assert report["summary"]["task_success_rate"] == 0
     assert report["failures"]["unknown_count"] == 0
+
+
+def test_runtime_report_covers_execution_statuses_events_and_legacy_counters():
+    report = build_runtime_report(
+        executions=[
+            _execution("completed"),
+            {**_execution("cancelled"), "id": "execution-2", "created_at": datetime(2026, 1, 1, 0, 0, 3),
+             "tool_call_count": 2, "model_call_count": 1},
+        ],
+        events=[
+            {"id": "event-1", "execution_id": "execution-1", "event_type": "execution_completed"},
+            {"id": "event-2", "execution_id": "execution-2", "event_type": "execution_cancelled"},
+        ],
+    )
+    assert report["summary"]["status_counts"] == {"cancelled": 1, "completed": 1}
+    assert report["summary"]["cancelled_rate"] == 0.5
+    assert report["event_metrics"]["event_type_counts"] == {
+        "execution_cancelled": 1,
+        "execution_completed": 1,
+    }
+    assert report["observability"]["counter_only_tool_execution_count"] == 1
+    assert report["observability"]["counter_only_model_execution_count"] == 1
+    assert report["execution_cases"][0]["execution_id"] == "execution-2"
+
+
+def test_runtime_report_markdown_explains_metrics_and_empty_samples():
+    report = build_runtime_report()
+    markdown = render_runtime_report_markdown(report)
+    assert "# PaperAI Agent 运行观测报告" in markdown
+    assert "当前筛选范围没有 Execution" in markdown
+    assert "暂无数据" in markdown
+    assert "指标说明" in markdown

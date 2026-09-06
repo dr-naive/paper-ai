@@ -32,6 +32,67 @@ TERMINAL_TASK_STATUSES = {"completed", "partial", "blocked", "failed", "cancelle
 SUCCESS_TOOL_STATUSES = {"completed", "success", "succeeded", "ok"}
 FAILURE_TOOL_STATUSES = {"failed", "failure", "error", "timeout"}
 SUCCESS_MODEL_STATUSES = {"completed", "success", "succeeded", "ok"}
+KNOWN_EXECUTION_STATUSES = (
+    "pending",
+    "queued",
+    "running",
+    "waiting_user",
+    "paused",
+    "retrying",
+    "completed",
+    "partial",
+    "blocked",
+    "failed",
+    "cancelled",
+)
+TERMINAL_EXECUTION_STATUSES = {"completed", "partial", "failed", "cancelled"}
+
+# These descriptions are deliberately stored with the report.  A JSON report
+# is also consumed by the dashboard and by future offline tooling, so the
+# meaning of a metric must not live only in a separate document.
+REPORT_DEFINITIONS = {
+    "sample_size.executions": "纳入本次统计的 Execution 数量。",
+    "sample_size.tasks": "这些 Execution 关联的 ResearchTask 数量。",
+    "sample_size.tool_calls": "这些 Execution 关联的 ToolCall 原子工具调用数量。",
+    "sample_size.model_calls": "这些 Execution 关联的 ModelCall 模型调用数量。",
+    "sample_size.events": "这些 Execution 关联的 AgentEvent 生命周期事件数量。",
+    "sample_size.failure_records": "报告根据失败状态、错误码和重复动作整理出的失败记录数量。",
+    "collection.total_execution_count": "满足时间和其他 Execution 筛选条件的总数量。",
+    "collection.selected_execution_count": "实际纳入本次统计的 Execution 数量。",
+    "collection.truncated": "由于显式 limit 小于筛选范围总量而发生截断时为 true。",
+    "event_metrics.event_count": "纳入统计的 AgentEvent 总数量。",
+    "event_metrics.event_type_counts": "按 event_type 汇总的 AgentEvent 数量。",
+    "event_metrics.event_execution_coverage": "至少有一条 AgentEvent 的 Execution 占全部 Execution 的比例。",
+    "event_metrics.events_per_execution": "每个 Execution 的 AgentEvent 平均数量。",
+    "summary.status_counts": "每种 Execution 状态的绝对数量；状态占比以全部 Execution 为分母。",
+    "summary.completed_rate": "状态为 completed 的 Execution 占全部 Execution 的比例。",
+    "summary.partial_rate": "状态为 partial 的 Execution 占全部 Execution 的比例。",
+    "summary.failed_rate": "状态为 failed 的 Execution 占全部 Execution 的比例。",
+    "summary.blocked_rate": "状态为 blocked 的 Execution 占全部 Execution 的比例。",
+    "summary.waiting_user_rate": "等待用户输入的 Execution 占全部 Execution 的比例。",
+    "summary.cancelled_rate": "状态为 cancelled 的 Execution 占全部 Execution 的比例。",
+    "summary.avg_duration_ms": "Execution 从开始到结束（或最后更新时间）的平均耗时，单位为毫秒。",
+    "summary.p50_duration_ms": "Execution 耗时的中位数，50% 的样本不超过该值，单位为毫秒。",
+    "summary.p95_duration_ms": "Execution 耗时的 95 分位值，95% 的样本不超过该值，单位为毫秒。",
+    "summary.task_success_rate": "状态为 completed 的 ResearchTask 占全部 ResearchTask 的比例。",
+    "summary.retry_rate": "发生过重试的 ResearchTask 占全部 ResearchTask 的比例。",
+    "summary.success_rate": "成功 ToolCall 占全部 ToolCall 的比例。",
+    "summary.failure_rate": "失败、超时或未完成 ToolCall 占全部 ToolCall 的比例。",
+    "summary.calls_per_task": "有工具调用记录的 Task 中，平均每个 Task 的 ToolCall 数量。",
+    "summary.model_calls_per_task": "有模型调用记录的 Task（旧路径会回退到 Execution）中，平均模型调用数量。",
+    "summary.model_error_rate": "失败 ModelCall 占全部 ModelCall 的比例。",
+    "summary.event_count": "纳入统计的 AgentEvent 总数量。",
+    "summary.duplicate_rate": "同一 Task 内连续重复成功 ToolCall 占全部 ToolCall 的比例。",
+    "summary.budget": "按照 Execution/Task 已持久化计数，与配置上限计算出的预算使用情况。",
+    "events.event_type_counts": "按事件类型统计的 AgentEvent 数量；不包含事件原始 payload。",
+    "observability.executions_with_tasks": "至少关联一个 ResearchTask 的 Execution 数量。",
+    "observability.executions_with_tool_calls": "至少关联一条 ToolCall 记录的 Execution 数量。",
+    "observability.executions_with_model_calls": "至少关联一条 ModelCall 记录的 Execution 数量。",
+    "observability.tool_calls_without_task_id": "没有 ResearchTask 关联的历史或即时路径 ToolCall 数量。",
+    "observability.model_calls_without_task_id": "没有 ResearchTask 关联的历史或即时路径 ModelCall 数量。",
+    "observability.counter_only_tool_execution_count": "Execution 累计 ToolCall 计数大于 0，但没有对应明细 ToolCall 记录的数量。",
+    "observability.counter_only_model_execution_count": "Execution 累计 ModelCall 计数大于 0，但没有对应明细 ModelCall 记录的数量。",
+}
 
 
 def _get(row: Any, key: str, default: Any = None) -> Any:
@@ -215,13 +276,25 @@ def _execution_metrics(executions: list[Any]) -> dict[str, Any]:
     count = len(executions)
     statuses = Counter(str(_get(row, "status", "")) for row in executions)
     durations = [value for row in executions if (value := _duration_ms(row)) is not None]
-    return {
+    metrics = {
         "execution_count": count,
+        "status_counts": dict(sorted(statuses.items())),
         "completed_rate": _rate(statuses["completed"], count),
         "partial_rate": _rate(statuses["partial"], count),
         "failed_rate": _rate(statuses["failed"], count),
         "blocked_rate": _rate(statuses["blocked"], count),
         "waiting_user_rate": _rate(statuses["waiting_user"], count),
+        "cancelled_rate": _rate(statuses["cancelled"], count),
+        "pending_rate": _rate(statuses["pending"], count),
+        "queued_rate": _rate(statuses["queued"], count),
+        "running_rate": _rate(statuses["running"], count),
+        "retrying_rate": _rate(statuses["retrying"], count),
+        "paused_rate": _rate(statuses["paused"], count),
+        "active_count": sum(statuses[status] for status in KNOWN_EXECUTION_STATUSES
+                             if status not in TERMINAL_EXECUTION_STATUSES),
+        "terminal_count": sum(statuses[status] for status in TERMINAL_EXECUTION_STATUSES),
+        "unknown_status_count": sum(count for status, count in statuses.items()
+                                     if status not in KNOWN_EXECUTION_STATUSES),
         "avg_duration": _avg(durations),
         "p50_duration": percentile(durations, 0.50),
         "p95_duration": percentile(durations, 0.95),
@@ -230,6 +303,127 @@ def _execution_metrics(executions: list[Any]) -> dict[str, Any]:
         "p95_duration_ms": percentile(durations, 0.95),
         "duration_unit": "ms",
     }
+    metrics["terminal_rate"] = _rate(metrics["terminal_count"], count)
+    return metrics
+
+
+def _event_metrics(events: list[Any], executions: list[Any]) -> dict[str, Any]:
+    execution_ids = {str(_get(row, "id", "")) for row in executions}
+    event_execution_ids = {
+        str(_get(row, "execution_id", "")) for row in events
+        if str(_get(row, "execution_id", "")) in execution_ids
+    }
+    event_types = Counter(str(_get(row, "event_type", "未设置")) for row in events)
+    return {
+        "event_count": len(events),
+        "event_type_counts": dict(sorted(event_types.items())),
+        "executions_with_events": len(event_execution_ids),
+        "event_execution_coverage": _rate(len(event_execution_ids), len(executions)),
+        "events_per_execution": round(len(events) / len(execution_ids), 2) if execution_ids else 0.0,
+    }
+
+
+def _execution_slice(executions: list[Any], key: str) -> dict[str, Any]:
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for execution in executions:
+        grouped[str(_get(execution, key) or "未设置")].append(execution)
+    return {name: _execution_metrics(rows) for name, rows in sorted(grouped.items())}
+
+
+def _observability_coverage(executions: list[Any], tasks: list[Any],
+                            tool_calls: list[Any], model_calls: list[Any],
+                            events: list[Any]) -> dict[str, Any]:
+    execution_ids = {str(_get(row, "id", "")) for row in executions}
+
+    def execution_ids_from(rows: list[Any]) -> set[str]:
+        return {
+            str(_get(row, "execution_id", "")) for row in rows
+            if str(_get(row, "execution_id", "")) in execution_ids
+        }
+
+    task_execution_ids = execution_ids_from(tasks)
+    tool_execution_ids = execution_ids_from(tool_calls)
+    model_execution_ids = execution_ids_from(model_calls)
+    event_execution_ids = execution_ids_from(events)
+    observed_tools_by_execution = Counter(str(_get(row, "execution_id", "")) for row in tool_calls)
+    observed_models_by_execution = Counter(str(_get(row, "execution_id", "")) for row in model_calls)
+
+    tool_counter_total = sum(_integer(_get(row, "tool_call_count"), 0) for row in executions)
+    model_counter_total = sum(_integer(_get(row, "model_call_count"), 0) for row in executions)
+    input_token_counter_total = sum(_integer(_get(row, "input_tokens"), 0) for row in executions)
+    output_token_counter_total = sum(_integer(_get(row, "output_tokens"), 0) for row in executions)
+    observed_input_tokens = sum(_integer(_get(row, "input_tokens"), 0) for row in model_calls)
+    observed_output_tokens = sum(_integer(_get(row, "output_tokens"), 0) for row in model_calls)
+
+    counter_only_tools = sum(
+        _integer(_get(row, "tool_call_count"), 0) > 0
+        and observed_tools_by_execution[str(_get(row, "id", ""))] == 0
+        for row in executions
+    )
+    counter_only_models = sum(
+        _integer(_get(row, "model_call_count"), 0) > 0
+        and observed_models_by_execution[str(_get(row, "id", ""))] == 0
+        for row in executions
+    )
+    return {
+        "execution_count": len(executions),
+        "executions_with_events": len(event_execution_ids),
+        "executions_with_tasks": len(task_execution_ids),
+        "executions_with_tool_calls": len(tool_execution_ids),
+        "executions_with_model_calls": len(model_execution_ids),
+        "event_execution_coverage": _rate(len(event_execution_ids), len(executions)),
+        "task_execution_coverage": _rate(len(task_execution_ids), len(executions)),
+        "tool_execution_coverage": _rate(len(tool_execution_ids), len(executions)),
+        "model_execution_coverage": _rate(len(model_execution_ids), len(executions)),
+        "tool_calls_with_task_id": sum(bool(_get(row, "task_id")) for row in tool_calls),
+        "tool_calls_without_task_id": sum(not bool(_get(row, "task_id")) for row in tool_calls),
+        "model_calls_with_task_id": sum(bool(_get(row, "task_id")) for row in model_calls),
+        "model_calls_without_task_id": sum(not bool(_get(row, "task_id")) for row in model_calls),
+        "execution_counter_tool_calls": tool_counter_total,
+        "observed_tool_calls": len(tool_calls),
+        "execution_counter_model_calls": model_counter_total,
+        "observed_model_calls": len(model_calls),
+        "execution_counter_input_tokens": input_token_counter_total,
+        "observed_input_tokens": observed_input_tokens,
+        "execution_counter_output_tokens": output_token_counter_total,
+        "observed_output_tokens": observed_output_tokens,
+        "counter_only_tool_execution_count": counter_only_tools,
+        "counter_only_model_execution_count": counter_only_models,
+        "coverage_unit": "ratio",
+    }
+
+
+def _execution_cases(executions: list[Any], tasks: list[Any],
+                     tool_calls: list[Any], model_calls: list[Any],
+                     events: list[Any]) -> list[dict[str, Any]]:
+    task_counts = Counter(str(_get(row, "execution_id", "")) for row in tasks)
+    tool_counts = Counter(str(_get(row, "execution_id", "")) for row in tool_calls)
+    model_counts = Counter(str(_get(row, "execution_id", "")) for row in model_calls)
+    event_counts = Counter(str(_get(row, "execution_id", "")) for row in events)
+    rows = sorted(executions, key=lambda row: _sort_datetime(_get(row, "created_at")), reverse=True)
+    return [
+        {
+            "execution_id": str(_get(row, "id", "")),
+            "status": _get(row, "status"),
+            "agent_type": _get(row, "agent_type"),
+            "runtime_version": _get(row, "runtime_version"),
+            "project_id": _get(row, "project_id"),
+            "created_at": _get(row, "created_at"),
+            "started_at": _get(row, "started_at"),
+            "completed_at": _get(row, "completed_at"),
+            "duration_ms": _duration_ms(row),
+            "task_count": task_counts[str(_get(row, "id", ""))],
+            "tool_call_count": tool_counts[str(_get(row, "id", ""))],
+            "model_call_count": model_counts[str(_get(row, "id", ""))],
+            "event_count": event_counts[str(_get(row, "id", ""))],
+            "counter_tool_call_count": _integer(_get(row, "tool_call_count"), 0),
+            "counter_model_call_count": _integer(_get(row, "model_call_count"), 0),
+            "input_tokens": _integer(_get(row, "input_tokens"), 0),
+            "output_tokens": _integer(_get(row, "output_tokens"), 0),
+            "error_code": _get(row, "error_code"),
+        }
+        for row in rows
+    ]
 
 
 def _task_metrics(tasks: list[Any]) -> dict[str, Any]:
@@ -421,13 +615,20 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
                          tasks: Iterable[Any] | None = None,
                          tool_calls: Iterable[Any] | None = None,
                          model_calls: Iterable[Any] | None = None,
-                         filters: dict[str, Any] | None = None) -> dict[str, Any]:
+                         events: Iterable[Any] | None = None,
+                         filters: dict[str, Any] | None = None,
+                         collection: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build a privacy-safe report from durable runtime rows."""
     executions = _as_list(executions)
     tasks = _as_list(tasks)
     tool_calls = _as_list(tool_calls)
     model_calls = _as_list(model_calls)
+    events = _as_list(events)
     filters = filters or {}
+    collection = dict(collection or {})
+    collection.setdefault("total_execution_count", len(executions))
+    collection.setdefault("selected_execution_count", len(executions))
+    collection.setdefault("truncated", False)
 
     task_types = set(filters.get("task_types") or filters.get("task_type") or [])
     skill_id = filters.get("skill_id")
@@ -438,12 +639,14 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
         executions = [row for row in executions if str(_get(row, "id")) in execution_ids]
         tool_calls = [row for row in tool_calls if str(_get(row, "task_id")) in task_ids]
         model_calls = [row for row in model_calls if str(_get(row, "task_id")) in task_ids]
+        events = [row for row in events if str(_get(row, "execution_id")) in execution_ids]
     if skill_id:
         tasks = [row for row in tasks if str(_get(row, "skill_id")) == str(skill_id)]
         execution_ids = {str(_get(row, "execution_id")) for row in tasks}
         executions = [row for row in executions if str(_get(row, "id")) in execution_ids]
         tool_calls = [row for row in tool_calls if str(_get(row, "skill_id")) == str(skill_id)]
         model_calls = [row for row in model_calls if str(_get(row, "skill_id")) == str(skill_id)]
+        events = [row for row in events if str(_get(row, "execution_id")) in execution_ids]
 
     duplicate = detect_duplicate_tool_calls(tool_calls)
     duplicate_ids = {call_id for item in duplicate["duplicates"] for call_id in item["duplicate_call_ids"]}
@@ -451,6 +654,7 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
     for row in tool_calls:
         if not _tool_ok(row):
             failures.append({
+                "scope": "tool",
                 "reason": classify_failure(tool_call=row),
                 "execution_id": str(_get(row, "execution_id", "")),
                 "task_id": _get(row, "task_id"),
@@ -461,6 +665,7 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
     for row in model_calls:
         if not _model_ok(row):
             failures.append({
+                "scope": "model",
                 "reason": "UNKNOWN",
                 "execution_id": str(_get(row, "execution_id", "")),
                 "task_id": _get(row, "task_id"),
@@ -472,6 +677,7 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
         row = next((item for item in tool_calls if str(_get(item, "id", "")) == call_id), None)
         if row is not None:
             failures.append({
+                "scope": "tool",
                 "reason": "DUPLICATE_ACTION",
                 "execution_id": str(_get(row, "execution_id", "")),
                 "task_id": _get(row, "task_id"),
@@ -482,10 +688,23 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
     for row in tasks:
         if str(_get(row, "status", "")) == "failed":
             failures.append({
+                "scope": "task",
                 "reason": classify_failure(task=row),
                 "execution_id": str(_get(row, "execution_id", "")),
                 "task_id": _get(row, "task_id"),
                 "trace_id": _get(row, "task_id"),
+                "error_code": _get(row, "error_code"),
+                "tool_name": None,
+            })
+    for row in executions:
+        if str(_get(row, "status", "")) == "failed":
+            error_code = str(_get(row, "error_code") or "")
+            failures.append({
+                "scope": "execution",
+                "reason": FAILURE_REASON_MAP.get(error_code, "EXECUTION_FAILED"),
+                "execution_id": str(_get(row, "id", "")),
+                "task_id": None,
+                "trace_id": str(_get(row, "id", "")),
                 "error_code": _get(row, "error_code"),
                 "tool_name": None,
             })
@@ -495,6 +714,8 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
     task_metrics = _task_metrics(tasks)
     tool_metrics = _tool_metrics(tool_calls, tasks)
     model_metrics = _model_metrics(model_calls, tasks)
+    event_metrics = _event_metrics(events, executions)
+    observability = _observability_coverage(executions, tasks, tool_calls, model_calls, events)
     budget = _budget_metrics(executions, tasks, tool_calls, model_calls)
     task_type_slices = _task_slice(tasks, "task_type")
     skill_slices = _task_usage_slice(tasks, "skill_id", tool_calls, model_calls)
@@ -519,6 +740,9 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
         "duplicate_rate": duplicate["duplicate_rate"],
         "failure_count": len(failures),
         "failure_reason_distribution": dict(sorted(failure_distribution.items())),
+        "event_count": event_metrics["event_count"],
+        "status_counts": execution_metrics["status_counts"],
+        "observability": observability,
         "budget": budget,
         "budget_utilization": {
             "tool": budget["avg_tool_utilization"],
@@ -541,6 +765,7 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
         "task": task_metrics,
         "tool": tool_metrics,
         "model": model_metrics,
+        "events": event_metrics,
     }
     traces = [
         {**_safe_ref(row), "kind": "model", "model": _get(row, "model"), "purpose": _get(row, "purpose"),
@@ -549,19 +774,43 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
     ] + [
         {**_safe_ref(row, include_tool=True), "kind": "tool"}
         for row in tool_calls
+    ] + [
+        {
+            "id": str(_get(row, "id", "")),
+            "execution_id": str(_get(row, "execution_id", "")),
+            "kind": "event",
+            "seq": _get(row, "seq"),
+            "event_type": _get(row, "event_type"),
+            "stage": _get(row, "stage"),
+            "created_at": _get(row, "created_at"),
+        }
+        for row in events
     ]
     return {
         "report_type": "agent_runtime",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": {
+            "storage": "PostgreSQL",
+            "tables": ["agent_executions", "research_tasks", "tool_calls", "model_calls", "agent_events"],
+            "calculation": "deterministic",
+            "prompt_or_reasoning_included": False,
+            "provider_payload_included": False,
+        },
+        "collection": collection,
         "sample_size": {
             "executions": len(executions),
             "tasks": len(tasks),
             "tool_calls": len(tool_calls),
             "model_calls": len(model_calls),
+            "events": len(events),
             "failure_records": len(failures),
         },
         "filters": filters,
         "summary": summary,
+        "observability": observability,
+        "event_metrics": event_metrics,
+        "execution_types": _execution_slice(executions, "agent_type"),
+        "runtime_versions": _execution_slice(executions, "runtime_version"),
         "task_types": task_type_slices,
         "skills": skill_slices,
         "executors": _task_slice(tasks, "executor_type"),
@@ -578,6 +827,8 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
             "details": failures,
             "unknown_count": failure_distribution.get("UNKNOWN", 0),
         },
+        "definitions": REPORT_DEFINITIONS,
+        "execution_cases": _execution_cases(executions, tasks, tool_calls, model_calls, events),
         "cases": [
             {
                 "execution_id": str(_get(row, "execution_id", "")),

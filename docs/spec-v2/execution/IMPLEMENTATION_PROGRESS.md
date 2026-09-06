@@ -2,6 +2,65 @@
 
 Status: COMPLETE
 
+## Current Maintenance Block — EVAL-OBS-2
+
+Status: COMPLETE
+
+Baseline commit: `a446d66` (`完善运行评测和监控`).
+
+Scope: 扩展 Agent Runtime 报告的真实数据覆盖和中文可读输出，不新增执行基础设施，
+不改变 AgentExecution、ResearchTask、Worker、Queue 或现有评测生命周期。
+
+End commit: 本次本地提交（提交标题：`完善运行观测报告`，具体哈希以当前 Git HEAD 为准）。推送远端前仍需单独确认。
+
+Actual changes:
+
+- 默认读取筛选范围内全部 Execution；显式 `--limit` 时记录总量、实际纳入量和截断状态。
+- 报告新增 AgentEvent、全部 Execution 状态、Execution 类型/Runtime 版本切片、历史累计
+  Tool/Model 计数与明细追踪覆盖诊断、Execution/Task 明细。
+- 新增中文 Markdown 渲染器；JSON 继续作为机器和静态面板输入，Markdown 解释指标、样本
+  范围、空样本、状态、覆盖率、失败和限制。
+- 空分母在 Markdown 中显示“暂无数据”；Dashboard 的 Agent Runtime 区块改为中文并增加
+  状态与数据覆盖表。
+- 未新增或修改数据库表、迁移和公开 API；旧 JSON 加载和旧 Execution 读取保持兼容。
+
+Validation:
+
+- 定向报告与 Dashboard 测试：`12 passed`。
+- 后端完整测试：`350 passed`。
+- 目标文件 Ruff：通过。
+- Alembic current：`0008_agent_runtime_observability (head)`。
+- Schema preflight：`compatible: true`。
+- 真实本地数据库报告：生成 JSON 和中文 Markdown；当前样本为 5 条 Execution、25 条
+  AgentEvent、0 条 ResearchTask、0 条 ToolCall、0 条 ModelCall。
+
+Manual acceptance:
+
+- 报告默认不静默截断，当前数据库 5/5 条 Execution 均纳入。
+- 取消状态、历史事件、Execution 明细和 mock 样本限制在 Markdown 中可读展示。
+- 没有 Task/Tool/Model 样本时不再显示为可误解的成功率 0%，而显示“暂无数据”。
+
+Remaining risks:
+
+- 当前本地数据库只有 `mock_agent` 历史 Execution，没有真实 ResearchTask/ToolCall/ModelCall
+  样本，因此仍不能据此评价真实模型、工具或三条 Goal 链路的运行质量。
+- 旧即时 Reader/Chat 路径仍可能只有 Execution 累计计数，没有任务级明细；报告会将这种
+  覆盖差异显式列出，但不会凭空补造调用记录。
+
+Target files:
+
+- `backend/evals/agent_runtime_metrics.py`
+- `backend/evals/agent_runtime_markdown.py`
+- `backend/evals/run_agent_runtime_report.py`
+- `backend/evals/build_dashboard.py`
+- `backend/tests/test_agent_runtime_observability.py`
+- `backend/tests/test_eval_dashboard.py`
+- `backend/evals/README.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+
+
 ## Current State
 
 Current Phase: Phase 25 — Agent Evaluation & Observability

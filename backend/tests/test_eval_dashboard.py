@@ -72,6 +72,7 @@ def test_dashboard_embeds_existing_agent_runtime_report_without_new_navigation(t
 
     html = output.read_text(encoding="utf-8")
     assert "Agent Runtime 运行观测" in html
-    assert "Task Success Rate" in html
+    assert "Task 完成率" in html
+    assert "数据覆盖" in html
     assert "TOOL_TIMEOUT" in html
     assert "Worker" not in html
