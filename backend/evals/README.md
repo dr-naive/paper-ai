@@ -66,6 +66,45 @@ ModelCall，并将 Execution 的累计调用计数与明细记录分开，避免
 “没有调用”。现有静态面板仍然只加载 JSON；也可以用 `--agent-runtime-report` 指定
 JSON 报告文件。
 
+## Agent Behavior V1 约束数据集
+
+`agent_behavior_v1.jsonl` 是基于现有 `paperqa_v1.jsonl` 和四个 Skill 的
+`evals/cases.yaml` 生成的行为约束集，覆盖三个核心 Goal：`READ_PAPERS`、
+`WRITE_SECTION`、`DISCOVER_AND_IMPORT`，当前固定为每个 Goal 12 条、共 36 条 Case。
+它描述 Goal 输入状态下允许和禁止的 Task/Executor/Skill/Tool、最短 Task DAG、完成
+条件、等待/阻塞语义和预算边界，不保存标准答案、reference claim、LLM judge 或自动
+评分字段。`source_refs` 只用于追溯已有 PaperQA/Skill Case，不把 PaperQA 的答案当成
+Agent 行为评分标准。
+
+生成和校验均为确定性脚本；校验器会检查来源 ID、Goal 与 Task 类型、DAG 循环、Skill
+支持的 Task/Tool、预算上限、状态与用户交互约束，以及禁止的评分字段。生成脚本在写出
+文件前也会执行同一套校验。
+
+在 `backend/` 目录运行：
+
+```bash
+python -m evals.generate_agent_behavior_dataset
+python -m evals.validate_agent_behavior_dataset
+```
+
+也可以显式指定来源和输出路径：
+
+```bash
+python -m evals.generate_agent_behavior_dataset \
+  --paperqa evals/datasets/paperqa_v1.jsonl \
+  --skills-root app/harness/skills \
+  --output evals/datasets/agent_behavior_v1.jsonl
+
+python -m evals.validate_agent_behavior_dataset \
+  --dataset evals/datasets/agent_behavior_v1.jsonl \
+  --paperqa evals/datasets/paperqa_v1.jsonl \
+  --skills-root app/harness/skills
+```
+
+Case 的约束字段固定为 `expected`、`allowed`、`forbidden`、`completion`、`budget`；
+`input` 保存可复现的项目状态和研究指令，`source_refs` 保存来源追踪。该数据集只用于
+离线行为契约检查，不会进入线上 Orchestrator、Queue、Worker 或 Runtime 生命周期。
+
 ## 1. 查看当前可用于评测的论文
 
 在 `backend/` 目录运行：

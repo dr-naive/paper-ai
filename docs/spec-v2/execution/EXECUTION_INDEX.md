@@ -23,6 +23,41 @@ Phase 25 — Agent Evaluation & Observability.
 
 ## Current Implementation Block
 
+EVAL-OBS-4 — 基于现有 PaperQA 与 Skill Case 建立 Agent 行为约束数据集。
+
+EVAL-OBS-4 status: COMPLETE。该评测数据集只描述三个核心 Goal 的
+expected、allowed、forbidden、completion 和 budget 约束，复用现有 PaperQA
+问题与 Skill `cases.yaml` 作为输入来源和行为场景，不引入 LLM 自动评分或新的
+运行时指标体系。
+
+## EVAL-OBS-4 Reading Boundary
+
+- `backend/evals/datasets/paperqa_v1.jsonl`
+- `backend/app/harness/skills/*/evals/cases.yaml`
+- `backend/app/harness/skills/*/skill.yaml`
+- `backend/app/research/task_contracts.py`
+- `backend/app/application/research_planning.py`
+- `backend/app/application/research_orchestrator.py`
+- `backend/evals/agent_behavior_dataset.py`
+- `backend/evals/generate_agent_behavior_dataset.py`
+- `backend/evals/validate_agent_behavior_dataset.py`
+- `backend/evals/datasets/agent_behavior_v1.jsonl`
+- `backend/tests/test_agent_behavior_dataset.py`
+- `backend/evals/README.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Acceptance boundary:
+
+- 生成约 30–45 条可复现 JSONL Case，平均覆盖 `READ_PAPERS`、
+  `WRITE_SECTION`、`DISCOVER_AND_IMPORT` 三个 Goal，并引用现有 PaperQA 与
+  Skill Case。
+- 每条 Case 只包含声明式 expected/allowed/forbidden/completion/budget 约束；
+  不保存 reference answer，不调用 LLM，不自动给 Agent 行为打分。
+- 校验器验证来源引用、Goal/task DAG、Skill 工具白名单、任务类型、预算上限、
+  用户等待/阻塞约束和禁止评分字段；现有评测数据与 Runtime 不受影响。
+
+## EVAL-OBS-3 Reading Boundary
+
 EVAL-OBS-3 — 将 Agent Runtime 报告收口为诊断优先输出。
 
 EVAL-OBS-3 status: COMPLETE。该维护块保留现有 PostgreSQL trace、运行指标、失败分类

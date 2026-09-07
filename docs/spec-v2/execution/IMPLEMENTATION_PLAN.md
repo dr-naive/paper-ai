@@ -2,6 +2,21 @@
 
 Status: COMPLETE
 
+## Phase 25 Maintenance Block — Agent Behavior V1 约束数据集
+
+EVAL-OBS-4 基于现有 `paperqa_v1.jsonl`、Skill `cases.yaml` 和三个核心 Goal，
+建立不依赖 LLM 评分的 Agent 行为约束数据集。第一版固定为三个 Goal 各 12 条、
+共 36 条 Case，约束范围仅包括 `expected`、`allowed`、`forbidden`、`completion`
+和 `budget`；`input` 与 `source_refs` 只保存可复现输入和已有数据来源。
+
+生成器必须使用稳定顺序和现有 PaperQA 问题，校验器必须确定性检查来源引用、Goal/task
+DAG、Skill 支持范围、工具白名单、预算上限、用户等待/阻塞语义和禁止的答案/LLM
+评分字段。该维护块不修改线上 Runtime、Queue、Worker、Orchestrator、数据库或公开 API。
+
+验收：生成命令可重复得到 30–45 条 JSONL；三个 Goal 均有覆盖；三条
+`WRITE_SECTION` 依赖路径、Reading 资产复用/处理阻塞、Discover 导入确认/重试/幂等
+均有 Case；校验命令通过；新增单元测试验证生成确定性、来源复用、DAG 和非法约束拒绝。
+
 ## Phase 25 Maintenance Block — Agent Runtime 诊断优先报告
 
 EVAL-OBS-3 在不新增指标体系、不重构 Agent Runtime 和不增加用户侧 Agent

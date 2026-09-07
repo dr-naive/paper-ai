@@ -2,6 +2,81 @@
 
 Status: COMPLETE
 
+## Current Maintenance Block — EVAL-OBS-4
+
+Status: COMPLETE
+
+Baseline commit: `a0b4af7`（`优化运行诊断报告`）。
+
+Scope: 基于现有 PaperQA 数据、Skill Case 和三个核心 Goal 建立第一版 Agent 行为
+约束数据集，不引入 LLM 自动评分，不修改线上 Runtime、Queue、Worker、Orchestrator、
+数据库或公开 API。
+
+Target files:
+
+- `backend/evals/agent_behavior_dataset.py`
+- `backend/evals/generate_agent_behavior_dataset.py`
+- `backend/evals/validate_agent_behavior_dataset.py`
+- `backend/evals/datasets/agent_behavior_v1.jsonl`
+- `backend/tests/test_agent_behavior_dataset.py`
+- `backend/evals/README.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Database changes: none. API changes: none. Runtime changes: none.
+
+End commit: 本次本地提交（提交标题：`新增 Agent 行为约束数据集`，具体哈希以当前 Git HEAD 为准）。未执行远程推送。
+
+Actual changes:
+
+- 新增确定性共享 Schema/校验模块、生成脚本和校验脚本；生成脚本读取现有
+  `paperqa_v1.jsonl`，并在写出前使用现有四个 Skill 的 `skill.yaml` 与 `cases.yaml`
+  做来源和能力校验。
+- 新增 `agent_behavior_v1.jsonl`，共 36 条 Case，`READ_PAPERS`、`WRITE_SECTION`、
+  `DISCOVER_AND_IMPORT` 各 12 条；覆盖资产复用、处理未完成、失败/重试、取消、
+  三种 Writing 依赖、用户确认/澄清、摘要边界、重复导入保护和幂等产物。
+- Case 只保存 expected/allowed/forbidden/completion/budget 约束，`input` 和
+  `source_refs` 只保存可复现输入及已有数据来源；没有标准答案、reference claim、
+  LLM judge 或自动评分结果。
+- 更新评测 README、执行索引、实施计划和进度台账；没有修改数据库、公开 API、Runtime、
+  Queue、Worker 或 Orchestrator。
+
+Database changes: none. API changes: none. Runtime changes: none.
+
+Validation:
+
+- backend 容器生成命令：通过，固定生成 36 条 Case。
+- backend 容器校验命令：通过；来源覆盖 27 条现有 PaperQA Case、20 条现有 Skill Case，
+  三个 Goal 各 12 条。
+- 新增数据集测试：`8 passed`。
+- backend 完整测试：`362 passed`。
+- 新增脚本、共享校验模块和测试的 Ruff 检查：通过。
+- `git diff --check`：通过。
+
+Manual acceptance:
+
+- `WRITE_SECTION` 已覆盖已有 Evidence 直接写作、仅有 indexed papers 时先 BUILD_EVIDENCE、
+  无可用论文时 blocked 三条依赖路径。
+- `READ_PAPERS` 已覆盖 indexed paper、已有 PaperCard 复用、处理中等待、处理失败 blocked、
+  外部论文越权 blocked 和取消后保留部分产物。
+- `DISCOVER_AND_IMPORT` 已覆盖 DISCOVER→IMPORT 顺序、用户确认/澄清等待、空结果、外部
+  API retry、摘要与全文边界、重复导入复用及确认后的幂等导入。
+- 非法 Task 类型、循环依赖、Skill 越权工具、超出 Skill 预算和 LLM/答案评分字段均能被
+  确定性校验器拒绝。
+
+Remaining risks:
+
+- 该 Block 只建立离线行为契约数据，不自动回放线上 Lead Agent，也不把 Case 直接接入
+  Runtime 评分；后续如需 replay/evaluator 需要另开实现块。
+- 当前 `literature_research` Skill 的 `supported_task_types` 仍为空，因此它在本数据集
+  中作为已有 Skill Case 的行为参考来源，不被错误绑定到具体 Task；这与当前 Skill 元数据
+  保持一致。
+- 未执行远程推送；如需推送，仍须先展示中文提交/推送说明并获得明确确认。
+
+Exact next action: 当前 EVAL-OBS-4 已完成；后续如需将这些约束接入实际 Agent replay，另行
+建立实现块并先更新执行索引。
+
 ## Current Maintenance Block — EVAL-OBS-3
 
 Status: COMPLETE
