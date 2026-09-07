@@ -206,33 +206,83 @@ def render_html(data: dict[str, Any]) -> str:
     function renderAgentRuntime() {{
       const report = DATA.agent_runtime;
       if (!report) return;
-      const s = report.summary || {{}}, b = s.budget || {{}};
+      const diagnostic = report.diagnostic || {{}};
+      const quality = diagnostic.sample_quality || {{}};
       const sample = report.sample_size || {{}};
-      const failure = report.failures && report.failures.failure_reason_distribution || {{}};
-      const pctWhenObserved = (value, count) => count ? pct(value) : '暂无数据';
-      const items = [
-        ['Execution 完成率', pctWhenObserved(s.completed_rate, sample.executions)],
-        ['Execution 取消率', pctWhenObserved(s.cancelled_rate, sample.executions)],
-        ['Task 完成率', pctWhenObserved(s.task_success_rate, sample.tasks)],
-        ['Tool 失败率', pctWhenObserved(s.failure_rate, sample.tool_calls)],
-        ['重复调用率', pct(s.duplicate_rate)],
-        ['平均工具调用/任务', sample.tool_calls ? num(s.calls_per_task) : '暂无数据'],
-        ['平均 Token/任务', sample.model_calls ? num((s.avg_input_tokens_per_task || 0) + (s.avg_output_tokens_per_task || 0)) : '暂无数据'],
-        ['Token 预算使用率', pctWhenObserved(b.avg_token_utilization, sample.executions)],
-      ];
+      const s = report.summary || {{}};
+      const b = s.budget || {{}};
+      const insufficient = diagnostic.analysis_mode !== 'diagnostic';
+      const text = value => value == null || value === '' ? '暂无数据' : esc(value);
+      const ratio = value => value == null ? '暂无数据' : `${{(Number(value) * 100).toFixed(2)}}%`;
+      const listText = value => Array.isArray(value) ? value.map(item => text(item)).join('；') : text(value);
+      const listLength = (object, key) => Array.isArray(object && object[key]) ? object[key].length : null;
+      const table = (headers, rows, empty = '暂无可比较数据。') => {{
+        if (!rows.length) return `<div class="empty">${{esc(empty)}}</div>`;
+        return `<div class="table-wrap"><table><thead><tr>${{headers.map(header => `<th>${{esc(header)}}</th>`).join('')}}</tr></thead><tbody>${{rows.map(row => `<tr>${{row.map(value => `<td>${{text(value)}}</td>`).join('')}}</tr>`).join('')}}</tbody></table></div>`;
+      }};
+      const statusLabels = {{pending:'等待调度',queued:'已入队',running:'执行中',waiting_user:'等待用户',paused:'已暂停',retrying:'重试中',completed:'已完成',partial:'部分完成',blocked:'已阻塞',failed:'失败',cancelled:'已取消'}};
+      const renderMetrics = items => document.querySelector('#agentRuntimeMetrics').innerHTML = items.map(([label,value]) => `<div class="metric"><span>${{esc(label)}}</span><strong>${{text(value)}}</strong></div>`).join('');
       document.querySelector('#agentRuntimePanel').hidden = false;
       document.querySelector('#agentRuntimeSource').textContent = report.source_file || '';
-      document.querySelector('#agentRuntimeMetrics').innerHTML = items.map(([label,value]) => `<div class="metric"><span>${{label}}</span><strong>${{value}}</strong></div>`).join('');
-      const failureRows = Object.entries(failure).map(([name,count]) => `<tr><td>${{esc(name)}}</td><td class="num">${{count}}</td></tr>`).join('');
-      const statusLabels = {{pending:'等待调度',queued:'已入队',running:'执行中',waiting_user:'等待用户',paused:'已暂停',retrying:'重试中',completed:'已完成',partial:'部分完成',blocked:'已阻塞',failed:'失败',cancelled:'已取消'}};
-      const statusRows = Object.entries(s.status_counts || {{}}).map(([name,count]) => `<tr><td>${{esc(statusLabels[name] || name)}}</td><td class="num">${{count}}</td></tr>`).join('');
-      const coverageRows = [
-        ['Execution', sample.executions || 0], ['AgentEvent', sample.events || 0],
-        ['ResearchTask', sample.tasks || 0], ['ToolCall', sample.tool_calls || 0],
-        ['ModelCall', sample.model_calls || 0],
-      ].map(([name,count]) => `<tr><td>${{name}}</td><td class="num">${{count}}</td></tr>`).join('');
-      const details = (report.failures && report.failures.details || []).slice(0, 30).map(item => `<tr><td>${{esc(item.reason)}}</td><td>${{esc(item.execution_id)}}</td><td>${{esc(item.task_id || '—')}}</td><td>${{esc(item.trace_id || '—')}}</td><td>${{esc(item.error_code || '—')}}</td></tr>`).join('');
-      document.querySelector('#agentRuntimeDetails').innerHTML = `<h3>数据覆盖</h3><div class="table-wrap"><table><thead><tr><th>数据对象</th><th>样本数</th></tr></thead><tbody>${{coverageRows}}</tbody></table></div><h3>Execution 状态</h3><div class="table-wrap"><table><thead><tr><th>状态</th><th>数量</th></tr></thead><tbody>${{statusRows || '<tr><td colspan="2">暂无 Execution</td></tr>'}}</tbody></table></div><h3>失败分类</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>次数</th></tr></thead><tbody>${{failureRows || '<tr><td colspan="2">暂无失败记录</td></tr>'}}</tbody></table></div><h3>失败追踪（最多 30 条）</h3><div class="table-wrap"><table><thead><tr><th>分类</th><th>Execution</th><th>Task</th><th>Trace</th><th>错误码</th></tr></thead><tbody>${{details || '<tr><td colspan="5">暂无可下钻记录</td></tr>'}}</tbody></table></div>`;
+      if (insufficient) {{
+        renderMetrics([
+          ['样本状态', quality.label || '样本不足，仅供调试'],
+          ['Execution 样本', sample.executions],
+          ['ResearchTask 样本', sample.tasks],
+          ['ToolCall 样本', sample.tool_calls],
+          ['ModelCall 样本', sample.model_calls],
+          ['疑似 Mock/测试 Execution', quality.mock_execution_count],
+        ]);
+        const reasonLabels = {{
+          NO_EXECUTIONS: '没有可分析的 Execution 样本。',
+          MOCK_ONLY: '现有 Execution 全部命中 Mock/测试标记，不能代表真实 Agent 链路。',
+          NO_RESEARCH_TASKS: '没有 ResearchTask，无法比较任务表现和资源消耗。',
+          NO_TOOL_CALLS: '没有 ToolCall 明细，无法判断工具失败、超时和重复调用。',
+          NO_MODEL_CALLS: '没有 ModelCall 明细，无法判断模型调用和 Token 消耗。',
+          TASK_SAMPLE_BELOW_TREND_THRESHOLD: 'ResearchTask 少于 20 个，暂时不能稳定观察趋势。',
+        }};
+        const reasons = (quality.reason_codes || []).map(reason => reasonLabels[reason] || reason);
+        const agents = (quality.samples_by_agent_type || []).map(row => [row.agent_type, row.sample_size, row.classification]);
+        const chains = (quality.recommended_real_chains || []).map((chain, index) => [index + 1, chain]);
+        const minTrend = quality.thresholds && quality.thresholds.min_tasks_for_trend || 20;
+        const minCompare = quality.thresholds && quality.thresholds.min_tasks_for_comparison || 50;
+        document.querySelector('#agentRuntimeDetails').innerHTML = `<h3>当前为什么无法评价真实 Agent</h3><ul>${{(reasons.length ? reasons : ['当前 JSON 未提供样本质量原因。']).map(item => `<li>${{esc(item)}}</li>`).join('')}}</ul><h3>当前有哪些真实/Mock 样本</h3><p class="meta">${{text(quality.real_sample_label)}}</p>${{table(['agent_type','Execution 样本','分类'], agents, '暂无可识别 agent_type 样本。')}}<h3>建议先运行的真实链路</h3>${{table(['优先级','建议链路'], chains)}}<h3>ResearchTask 样本阈值</h3>${{table(['数量','可得结论'], [['<' + minTrend,'样本不足，仅供调试'],[minTrend + '–' + minCompare,'可观察初步趋势'],['>' + minCompare,'可开始做 task_type / tool / failure 对比']])}}`;
+        return;
+      }}
+
+      const comparisons = diagnostic.task_type_comparison || [];
+      const worst = comparisons.slice().sort((a, b) => (a.success_rate ?? 1) - (b.success_rate ?? 1))[0];
+      const failedTools = diagnostic.top_failed_tools || [];
+      const duplicateTasks = diagnostic.duplicate_tasks || [];
+      const drilldownTargets = diagnostic.drilldown_targets || {{}};
+      const executionTargets = Array.isArray(drilldownTargets.executions) ? drilldownTargets.executions : null;
+      renderMetrics([
+        ['样本状态', quality.label || '可观察初步趋势'],
+        ['最差 Task 类型', worst && worst.task_type],
+        ['主要失败类别', diagnostic.failure_categories && diagnostic.failure_categories[0] && diagnostic.failure_categories[0].category],
+        ['最易失败工具', failedTools[0] && failedTools[0].tool_name],
+        ['重复最严重 Task', duplicateTasks[0] && duplicateTasks[0].task_id],
+        ['值得下钻 Execution', executionTargets && executionTargets.length],
+      ]);
+      const issueRows = (diagnostic.top_issues || []).map((item, index) => [index + 1, item.title, item.evidence, item.target]);
+      const taskComparisonRows = comparisons.map(row => [row.task_type, row.sample_size, ratio(row.success_rate), ratio(row.failure_rate), row.avg_duration == null ? null : num(row.avg_duration) + ' ms', row.avg_tool_calls, row.avg_model_calls, row.avg_tokens, ratio(row.duplicate_rate)]);
+      const failureRows = (diagnostic.failure_categories || []).map(row => [row.category, row.count, ratio(row.rate)]);
+      const toolRows = failedTools.map(row => [row.tool_name, row.sample_size, row.failure_count, ratio(row.failure_rate), row.timeout_count, ratio(row.timeout_rate)]);
+      const duplicateRows = duplicateTasks.map(row => [row.task_id, row.execution_id, row.task_type, row.duplicate_count, ratio(row.duplicate_rate), row.repeated_tools]);
+      const taskResources = diagnostic.resource_anomalies && diagnostic.resource_anomalies.task_types || {{}};
+      const skillResources = diagnostic.resource_anomalies && diagnostic.resource_anomalies.skills || {{}};
+      const resourceRows = [];
+      const resourceLabels = {{highest_avg_tool_calls:'平均 ToolCall 偏高', highest_avg_model_calls:'平均 ModelCall 偏高', highest_avg_tokens:'平均 Token 偏高'}};
+      [['Task 类型', taskResources], ['Skill', skillResources]].forEach(([dimension, groups]) => Object.entries(groups).forEach(([metric, rows]) => (rows || []).slice(0, 3).forEach(row => resourceRows.push([dimension, row.name, row.sample_size, row.avg_tool_calls, row.avg_model_calls, row.avg_tokens, resourceLabels[metric] || metric]))));
+      const heavyRows = ((diagnostic.resource_anomalies && diagnostic.resource_anomalies.resource_heavy_tasks) || []).map(row => [row.task_id, row.execution_id, row.task_type, row.skill_id, row.tool_calls, row.model_calls, row.tokens, listText(row.signals)]);
+      const budgetRows = [
+        ['接近预算的 Execution', listLength(b, 'near_budget_executions'), '任一已配置预算使用率达到 80%'],
+        ['接近预算的 Task', listLength(b, 'near_budget_tasks'), 'Task 级已记录计数达到 80%'],
+        ['预算超限率', ratio(b.budget_exceeded_rate), '至少一个已配置预算达到或超过上限'],
+      ];
+      const executionRows = (executionTargets || []).map(row => [row.execution_id, statusLabels[row.status] || row.status, row.agent_type, row.task_count, listText(row.reasons)]);
+      const taskRows = (Array.isArray(drilldownTargets.tasks) ? drilldownTargets.tasks : []).map(row => [row.task_id, row.execution_id, row.task_type, row.skill_id, statusLabels[row.status] || row.status, row.attempt_count, row.tool_calls, row.model_calls, listText(row.reasons)]);
+      document.querySelector('#agentRuntimeDetails').innerHTML = `<h3>当前最严重的 3 个问题</h3>${{table(['优先级','问题','证据','优先检查对象'], issueRows, '当前样本未识别出明确前三项问题。')}}<h3>Task 类型对比</h3>${{table(['task_type','sample_size','success_rate','failure_rate','avg_duration','avg_tool_calls','avg_model_calls','avg_tokens','duplicate_rate'], taskComparisonRows)}}<h3>Top Failure / Top Failed Tool / Duplicate</h3><h4>Failure Category</h4>${{table(['Failure Category','count','failure_records 占比'], failureRows)}}<h4>Top Failed Tool</h4>${{table(['tool_name','sample_size','failure_count','failure_rate','timeout_count','timeout_rate'], toolRows)}}<h4>Duplicate ToolCall 最严重的 Task</h4>${{table(['task_id','execution_id','task_type','duplicate_count','duplicate_rate','repeated_tools'], duplicateRows)}}<h3>资源与 Budget 异常</h3><h4>Task / Skill 资源偏高</h4>${{table(['维度','名称','样本','平均 ToolCall','平均 ModelCall','平均 Token','偏高指标'], resourceRows)}}<h4>资源异常 Task</h4>${{table(['task_id','execution_id','task_type','skill_id','ToolCall','ModelCall','Token','异常信号'], heavyRows)}}<h4>Budget</h4>${{table(['异常对象','数量/状态','说明'], budgetRows)}}<h3>值得下钻的 Execution / Task</h3><h4>Execution</h4>${{table(['execution_id','status','agent_type','task_count','优先检查原因'], executionRows)}}<h4>ResearchTask</h4>${{table(['task_id','execution_id','task_type','skill_id','status','attempt_count','ToolCall','ModelCall','优先检查原因'], taskRows)}}`;
     }}
 
     function renderMetrics(run) {{

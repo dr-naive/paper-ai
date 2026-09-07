@@ -23,9 +23,36 @@ Phase 25 — Agent Evaluation & Observability.
 
 ## Current Implementation Block
 
+EVAL-OBS-3 — 将 Agent Runtime 报告收口为诊断优先输出。
+
+EVAL-OBS-3 status: COMPLETE。该维护块保留现有 PostgreSQL trace、运行指标、失败分类
+和 Dashboard 基础，把样本有效性作为报告的第一判断。Markdown/HTML 不再默认展示
+空指标清单，而是优先回答哪个 Task、Failure、Tool 或资源最需要处理；JSON 继续保留
+完整原始指标。
+
+## EVAL-OBS-3 Reading Boundary
+
+- `backend/evals/agent_runtime_metrics.py`
+- `backend/evals/agent_runtime_markdown.py`
+- `backend/evals/build_dashboard.py`
+- `backend/tests/test_agent_runtime_observability.py`
+- `backend/tests/test_eval_dashboard.py`
+- `backend/evals/README.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Acceptance boundary:
+
+- 空样本、仅 Mock 和低于阈值的样本只输出数据质量诊断、缺失数据、真实/Mock 样本
+  分类、建议真实链路和 20/50 ResearchTask 阈值。
+- 样本充足时只输出六个诊断优先部分和要求的 Task 类型对比列；缺失指标不渲染为 0。
+- JSON 报告保留现有详细指标和 trace，静态 Dashboard 不新增用户侧 Agent 页面。
+
+## EVAL-OBS-2 Reading Boundary
+
 EVAL-OBS-2 — 扩展 Agent Runtime 报告的真实数据覆盖、状态诊断和中文可读输出。
 
-EVAL-OBS-2 status: IN_PROGRESS. This maintenance block preserves the existing
+EVAL-OBS-2 status: COMPLETE. This maintenance block preserves the existing
 runtime and report schema direction, adds AgentEvent and legacy counter
 coverage, defaults to the full Execution sample, and emits a human-readable
 Chinese Markdown report alongside JSON.

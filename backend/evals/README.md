@@ -29,10 +29,21 @@
 
 Agent Runtime 报告读取 PostgreSQL 中已有的 `AgentExecution`、`ResearchTask`、
 `ToolCall`、任务范围内的 `ModelCall` 以及 `AgentEvent`，只计算确定性运行事实，
-不做 LLM 评审，不读取完整提示词、思维链或 Provider 原始响应。报告包含全部
-Execution 状态、Execution/Task/Skill/Executor 切片、事件类型、历史累计计数与明细
-追踪覆盖率、Tool/Model 延迟与调用量、预算使用、同一任务内的重复成功工具调用及
-失败分类。
+不做 LLM 评审，不读取完整提示词、思维链或 Provider 原始响应。JSON 保留完整
+运行指标、失败记录和 trace，供 Dashboard 与离线工具使用；Markdown 改为诊断优先，
+只展示能够支持优化决策的结论，不新增第二套运行时或指标系统。
+
+报告先判断样本质量：没有 ResearchTask/ToolCall/ModelCall、全部命中 Mock/测试标记，
+或 ResearchTask 少于 20 个时，只说明为什么不能评价真实 Agent、缺少哪些数据、当前
+真实/Mock 样本、建议运行的真实链路和样本阈值，不输出大量空表或误导性的聚合指标。
+达到 20 个 ResearchTask 后进入初步趋势模式，超过 50 个后才适合做 task_type、tool
+和 failure 对比。缺失字段在 Markdown 中显示为“暂无数据”，不解释成 0。
+
+样本充足时，Markdown 固定压缩为六部分：样本有效性、最严重的 3 个问题、Task 类型
+对比、Top Failure/Failed Tool/Duplicate、资源与 Budget 异常、值得下钻的
+Execution/ResearchTask。Task 类型对比只保留 `task_type`、`sample_size`、
+`success_rate`、`failure_rate`、`avg_duration`、`avg_tool_calls`、`avg_model_calls`、
+`avg_tokens`、`duplicate_rate`。
 
 在 `backend/` 目录运行：
 
@@ -47,13 +58,13 @@ python -m evals.run_agent_runtime_report \
 路径时，默认同时生成：
 
 - `evals/reports/agent_runtime_<timestamp>.json`：机器和静态面板使用的结构化报告；
-- `evals/reports/agent_runtime_<timestamp>.md`：带中文指标解释、覆盖诊断、状态分布和
-  Execution/ResearchTask 明细的人读报告。
+- `evals/reports/agent_runtime_<timestamp>.md`：诊断优先的中文人读报告；样本不足时
+  只给出数据质量和下一步建议，样本充足时展示六部分诊断摘要。
 
-没有对应样本的比例指标在 Markdown 中显示为“暂无数据”，不能解读为 0%。报告会同时
-展示 AgentEvent、ResearchTask、ToolCall、ModelCall 的覆盖情况，并将 Execution 的
-累计调用计数与明细记录分开，避免把历史即时路径误判为“没有调用”。现有静态面板
-仍然只加载 JSON；也可以用 `--agent-runtime-report` 指定 JSON 报告文件。
+原始指标和细节仍保留在 JSON 中。报告会同时读取 AgentEvent、ResearchTask、ToolCall、
+ModelCall，并将 Execution 的累计调用计数与明细记录分开，避免把历史即时路径误判为
+“没有调用”。现有静态面板仍然只加载 JSON；也可以用 `--agent-runtime-report` 指定
+JSON 报告文件。
 
 ## 1. 查看当前可用于评测的论文
 

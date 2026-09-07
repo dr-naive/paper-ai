@@ -188,7 +188,111 @@ def test_runtime_report_covers_execution_statuses_events_and_legacy_counters():
 def test_runtime_report_markdown_explains_metrics_and_empty_samples():
     report = build_runtime_report()
     markdown = render_runtime_report_markdown(report)
-    assert "# PaperAI Agent 运行观测报告" in markdown
-    assert "当前筛选范围没有 Execution" in markdown
+    assert report["diagnostic"]["sample_quality"]["reason_codes"] == ["NO_EXECUTIONS"]
+    assert "# PaperAI Agent 运行诊断报告" in markdown
+    assert "当前为什么无法评价真实 Agent" in markdown
+    assert "建议先运行的真实链路" in markdown
+    assert "20–50" in markdown
     assert "暂无数据" in markdown
-    assert "指标说明" in markdown
+    assert "P50" not in markdown
+    assert "指标说明" not in markdown
+
+
+def test_runtime_report_lists_all_missing_runtime_sample_types():
+    report = build_runtime_report(executions=[_execution()])
+    assert report["diagnostic"]["sample_quality"]["reason_codes"] == [
+        "NO_RESEARCH_TASKS", "NO_TOOL_CALLS", "NO_MODEL_CALLS",
+    ]
+    markdown = render_runtime_report_markdown(report)
+    assert "没有 ResearchTask" in markdown
+    assert "没有 ToolCall" in markdown
+    assert "没有 ModelCall" in markdown
+
+
+def test_runtime_report_marks_mock_only_samples_as_debug_only():
+    report = build_runtime_report(
+        executions=[{**_execution(), "agent_type": "mock_agent"}],
+        tasks=[_task()],
+        tool_calls=[_tool("tool-1")],
+        model_calls=[{
+            "id": "model-1", "execution_id": "execution-1", "task_id": "task-1",
+            "model": "mock-model", "status": "completed", "input_tokens": 10,
+            "output_tokens": 5,
+        }],
+    )
+    quality = report["diagnostic"]["sample_quality"]
+    assert report["diagnostic"]["analysis_mode"] == "insufficient"
+    assert "MOCK_ONLY" in quality["reason_codes"]
+    assert "TASK_SAMPLE_BELOW_TREND_THRESHOLD" in quality["reason_codes"]
+    assert quality["mock_execution_count"] == 1
+    assert quality["real_execution_count"] == 0
+    markdown = render_runtime_report_markdown(report)
+    assert "仅有 Mock/测试样本，仅供调试" in markdown
+    assert "Task 类型对比" not in markdown
+    assert "预算" not in markdown
+
+
+def test_runtime_report_enters_diagnostic_mode_at_twenty_tasks():
+    tasks = [
+        {
+            **_task(task_id=f"task-{index}", task_type="READ_PAPER" if index % 2 else "BUILD_EVIDENCE"),
+            "status": "failed" if index == 0 else "completed",
+        }
+        for index in range(20)
+    ]
+    tool_calls = [
+        {**_tool(f"tool-{index}"), "task_id": f"task-{index}"}
+        for index in range(20)
+    ]
+    model_calls = [
+        {
+            "id": f"model-{index}", "execution_id": "execution-1", "task_id": f"task-{index}",
+            "model": "real-model", "status": "completed", "input_tokens": 100,
+            "output_tokens": 50,
+        }
+        for index in range(20)
+    ]
+    report = build_runtime_report(
+        executions=[{**_execution(), "agent_type": "research_agent"}],
+        tasks=tasks,
+        tool_calls=tool_calls,
+        model_calls=model_calls,
+    )
+    diagnostic = report["diagnostic"]
+    assert diagnostic["analysis_mode"] == "diagnostic"
+    assert diagnostic["sample_quality"]["level"] == "early_trend"
+    assert {row["task_type"] for row in diagnostic["task_type_comparison"]} == {
+        "READ_PAPER", "BUILD_EVIDENCE",
+    }
+    markdown = render_runtime_report_markdown(report)
+    assert "## 1. 样本有效性" in markdown
+    assert "## 6. 值得下钻的 Execution / Task" in markdown
+    assert "task_type" in markdown
+    assert "P50" not in markdown
+
+
+def test_runtime_report_marks_more_than_fifty_tasks_comparison_ready():
+    count = 51
+    tasks = [_task(task_id=f"task-{index}") for index in range(count)]
+    tool_calls = [
+        {**_tool(f"tool-{index}"), "task_id": f"task-{index}"}
+        for index in range(count)
+    ]
+    model_calls = [
+        {
+            "id": f"model-{index}", "execution_id": "execution-1", "task_id": f"task-{index}",
+            "model": "real-model", "status": "completed", "input_tokens": 100,
+            "output_tokens": 50,
+        }
+        for index in range(count)
+    ]
+    report = build_runtime_report(
+        executions=[{**_execution(), "agent_type": "research_agent"}],
+        tasks=tasks,
+        tool_calls=tool_calls,
+        model_calls=model_calls,
+    )
+    quality = report["diagnostic"]["sample_quality"]
+    assert report["diagnostic"]["analysis_mode"] == "diagnostic"
+    assert quality["level"] == "comparison_ready"
+    assert quality["label"] == "可开始做 task_type / tool / failure 对比"

@@ -1,4 +1,10 @@
-"""Render the deterministic Agent Runtime report as a human-readable Chinese Markdown file."""
+"""Render the Agent Runtime report as a diagnosis-first Chinese Markdown file.
+
+The JSON report keeps the complete deterministic metric set for offline
+analysis.  This renderer deliberately shows only the evidence needed to make
+an optimization decision.  It also refuses to manufacture a trend when the
+persisted sample is empty, mock-only, or too small.
+"""
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -19,18 +25,13 @@ STATUS_LABELS = {
     "cancelled": "已取消",
 }
 
-STATUS_MEANINGS = {
-    "pending": "尚未进入队列或等待前置条件。",
-    "queued": "已经进入队列，等待 Worker 执行。",
-    "running": "当前正在执行。",
-    "waiting_user": "需要用户补充输入后才能继续。",
-    "paused": "被用户或系统暂停，尚未结束。",
-    "retrying": "本次执行失败后仍有可用重试次数。",
-    "completed": "完成条件全部通过。",
-    "partial": "部分产物已经完成，但整体目标尚未完全满足。",
-    "blocked": "缺少硬依赖或被确定性规则阻塞。",
-    "failed": "执行失败且不能继续自动恢复。",
-    "cancelled": "被用户或系统取消。",
+REASON_LABELS = {
+    "NO_EXECUTIONS": "没有可分析的 Execution 样本。",
+    "MOCK_ONLY": "现有 Execution 全部命中 Mock/测试标记，不能代表真实 Agent 链路。",
+    "NO_RESEARCH_TASKS": "没有 ResearchTask，无法比较任务成功率、重试和任务级资源消耗。",
+    "NO_TOOL_CALLS": "没有 ToolCall 明细，无法判断工具失败、超时和重复调用。",
+    "NO_MODEL_CALLS": "没有 ModelCall 明细，无法判断模型调用和 Token 消耗。",
+    "TASK_SAMPLE_BELOW_TREND_THRESHOLD": "ResearchTask 少于 20 个，暂时不能稳定观察趋势。",
 }
 
 
@@ -43,18 +44,36 @@ def _number(value: Any, digits: int = 2) -> str:
     if value is None:
         return "暂无数据"
     try:
-        return f"{float(value):.{digits}f}".rstrip("0").rstrip(".")
+        formatted = f"{float(value):.{digits}f}"
+        return formatted if digits == 0 else formatted.rstrip("0").rstrip(".")
     except (TypeError, ValueError):
         return _escape(value)
 
 
-def _percentage(value: Any, denominator: int | float | None) -> str:
-    if not denominator:
+def _ratio_percentage(value: Any) -> str:
+    """Format a persisted ratio without converting missing data to zero."""
+    if value is None:
         return "暂无数据"
     try:
-        return f"{float(value or 0) * 100:.2f}%"
+        return f"{float(value) * 100:.2f}%"
     except (TypeError, ValueError):
         return "暂无数据"
+
+
+def _rate_percentage(value: Any, denominator: Any) -> str:
+    if value is None or denominator in (None, 0):
+        return "暂无数据"
+    return _ratio_percentage(value)
+
+
+def _count(value: Any) -> str:
+    """Show a known count while preserving an absent count as unknown."""
+    return "暂无数据" if value is None else _number(value, 0)
+
+
+def _length(mapping: dict[str, Any], key: str) -> int | None:
+    value = mapping.get(key)
+    return len(value) if isinstance(value, (list, tuple, set, dict)) else None
 
 
 def _date(value: Any) -> str:
@@ -65,370 +84,393 @@ def _date(value: Any) -> str:
 
 def _table(headers: Iterable[str], rows: Iterable[Iterable[Any]]) -> str:
     headers = list(headers)
+    materialized = list(rows)
+    if not materialized:
+        return "暂无可比较数据。"
     lines = [
         "| " + " | ".join(_escape(item) for item in headers) + " |",
         "| " + " | ".join("---" for _ in headers) + " |",
     ]
-    lines.extend("| " + " | ".join(_escape(item) for item in row) + " |" for row in rows)
-    return "\n".join(lines) if len(lines) > 2 else "暂无数据。"
+    lines.extend(
+        "| " + " | ".join(_escape(item) for item in row) + " |"
+        for row in materialized
+    )
+    return "\n".join(lines)
 
 
-def _conclusions(report: dict[str, Any]) -> list[str]:
+def _quality_fallback(report: dict[str, Any]) -> dict[str, Any]:
+    """Keep old JSON reports readable when they predate ``diagnostic``."""
     sample = report.get("sample_size") or {}
-    summary = report.get("summary") or {}
-    collection = report.get("collection") or {}
-    observations: list[str] = []
-    execution_count = int(sample.get("executions") or 0)
+    execution_types = report.get("execution_types") or {}
+    type_names = list(execution_types)
+    mock_type_names = [
+        name for name in type_names
+        if any(marker in str(name).lower() for marker in ("mock", "test", "fixture", "fake", "dummy", "sample"))
+    ]
+    all_mock = bool(type_names) and len(mock_type_names) == len(type_names)
+    execution_count = sample.get("executions")
+    task_count = sample.get("tasks")
+    tool_count = sample.get("tool_calls")
+    model_count = sample.get("model_calls")
+    if execution_count in (None, 0):
+        label = "没有可分析样本"
+        reasons = ["NO_EXECUTIONS"]
+    elif all_mock:
+        label = "仅有 Mock/测试样本，仅供调试"
+        reasons = ["MOCK_ONLY"]
+    elif not task_count:
+        label = "没有 ResearchTask，仅供调试"
+        reasons = ["NO_RESEARCH_TASKS"]
+    elif not tool_count:
+        label = "没有 ToolCall 明细，仅供调试"
+        reasons = ["NO_TOOL_CALLS"]
+    elif not model_count:
+        label = "没有 ModelCall 明细，仅供调试"
+        reasons = ["NO_MODEL_CALLS"]
+    elif task_count < 20:
+        label = "样本不足，仅供调试"
+        reasons = ["TASK_SAMPLE_BELOW_TREND_THRESHOLD"]
+    else:
+        label = "可观察初步趋势"
+        reasons = []
+    return {
+        "analysis_mode": "insufficient" if all_mock or task_count is None or task_count <= 50 else "diagnostic",
+        "level": "debug_only",
+        "label": label,
+        "reason_codes": reasons,
+        "execution_count": execution_count,
+        "task_count": task_count,
+        "tool_call_count": tool_count,
+        "model_call_count": model_count,
+        "mock_execution_count": execution_count if all_mock else None,
+        "real_execution_count": 0 if all_mock else None,
+        "mock_task_count": task_count if all_mock else None,
+        "real_task_count": 0 if all_mock else None,
+        "mock_tool_call_count": tool_count if all_mock else None,
+        "real_tool_call_count": 0 if all_mock else None,
+        "mock_model_call_count": model_count if all_mock else None,
+        "real_model_call_count": 0 if all_mock else None,
+        "real_sample_label": "旧报告未保存样本真实性分类。" if not all_mock else "旧报告的 Execution 类型全部命中 Mock/测试标记。",
+        "samples_by_agent_type": [
+            {
+                "agent_type": name,
+                "sample_size": (
+                    (execution_types.get(name) or {}).get("execution_count")
+                    if isinstance(execution_types.get(name), dict) else None
+                ),
+                "classification": "疑似 Mock/测试" if name in mock_type_names else "非 Mock（需结合业务确认）",
+            }
+            for name in type_names
+        ],
+        "thresholds": {"min_tasks_for_trend": 20, "min_tasks_for_comparison": 50},
+        "recommended_real_chains": [
+            "READ_PAPERS：使用已索引的真实项目论文完成一次项目级阅读。",
+            "WRITE_SECTION：使用真实 Evidence 生成一个章节，并完成 AUDIT_DRAFT。",
+            "DISCOVER_AND_IMPORT：执行真实论文发现，经过用户确认后导入论文。",
+        ],
+    }
 
-    if execution_count == 0:
-        observations.append("当前筛选范围没有 Execution，不能对系统运行质量下结论。")
-        return observations
-    if collection.get("truncated"):
-        observations.append(
-            f"报告被 limit 截断：只读取 {collection.get('selected_execution_count', execution_count)} 条，"
-            f"数据库筛选范围共有 {collection.get('total_execution_count', '未知')} 条 Execution。"
-        )
-    if not sample.get("tasks"):
-        observations.append("当前样本没有 ResearchTask，无法评价任务成功率、重试、Task DAG 和任务级预算。")
-    if not sample.get("tool_calls"):
-        observations.append("当前样本没有 ToolCall 明细，无法评价工具成功率、超时、失败和重复动作。")
-    if not sample.get("model_calls"):
-        observations.append("当前样本没有 ModelCall 明细，无法评价模型延迟、Token 和模型错误率。")
-    execution_types = list((report.get("execution_types") or {}).keys())
-    if execution_types and all("mock" in item.lower() for item in execution_types):
-        observations.append("当前样本的 Execution 类型全部是 mock 运行类型，不能直接代表真实用户流量或真实模型服务质量。")
-    cancelled = (summary.get("status_counts") or {}).get("cancelled", 0)
-    if cancelled:
-        observations.append(f"发现 {cancelled} 条已取消 Execution，占比 {_percentage(summary.get('cancelled_rate'), execution_count)}，需要结合取消原因判断是否异常。")
-    failed = (summary.get("status_counts") or {}).get("failed", 0)
-    if failed:
-        observations.append(f"发现 {failed} 条失败 Execution，占比 {_percentage(summary.get('failed_rate'), execution_count)}，请查看失败分类和 Execution 明细。")
-    blocked = (summary.get("status_counts") or {}).get("blocked", 0)
-    if blocked:
-        observations.append(f"发现 {blocked} 条被阻塞的 Execution，占比 {_percentage(summary.get('blocked_rate'), execution_count)}，不能将其计入完成。")
-    unknown_status = summary.get("unknown_status_count", 0)
-    if unknown_status:
-        observations.append(f"发现 {unknown_status} 条未知状态记录，说明状态枚举或历史兼容映射仍需检查。")
-    coverage = report.get("observability") or {}
-    if coverage.get("counter_only_tool_execution_count") or coverage.get("counter_only_model_execution_count"):
-        observations.append("部分 Execution 只有累计调用计数，没有对应的明细追踪记录，观测覆盖不完整。")
-    if not observations:
-        observations.append("当前样本具备 Execution、Task、ToolCall 和 ModelCall 明细，可以继续查看下方分项指标。")
-    return observations
+
+def _diagnostic_context(report: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str]:
+    diagnostic = report.get("diagnostic") or {}
+    quality = diagnostic.get("sample_quality") or _quality_fallback(report)
+    mode = diagnostic.get("analysis_mode") or quality.get("analysis_mode") or "insufficient"
+    return diagnostic, quality, mode
+
+
+def _sample_rows(report: dict[str, Any], quality: dict[str, Any]) -> list[list[Any]]:
+    sample = report.get("sample_size") or {}
+    return [
+        ["Execution", _count(sample.get("executions")), "一次目标或兼容执行生命周期"],
+        ["ResearchTask", _count(sample.get("tasks")), "一个可独立执行、可重试的业务任务"],
+        ["ToolCall", _count(sample.get("tool_calls")), "一次原子工具调用"],
+        ["ModelCall", _count(sample.get("model_calls")), "一次模型调用事实"],
+        ["AgentEvent", _count(sample.get("events")), "生命周期事件；不是 Agent 行为样本"],
+        ["疑似 Mock/测试 Execution", _count(quality.get("mock_execution_count")), "按 agent_type 标记识别"],
+        ["非 Mock Execution", _count(quality.get("real_execution_count")), "未命中 Mock 标记，仍需业务确认"],
+    ]
+
+
+def _quality_reasons(quality: dict[str, Any]) -> list[str]:
+    reasons = quality.get("reason_codes") or []
+    lines = [REASON_LABELS.get(str(reason), str(reason)) for reason in reasons]
+    if quality.get("real_sample_label"):
+        lines.append(str(quality["real_sample_label"]))
+    if not lines:
+        lines.append("当前样本满足基本数量条件，可继续查看下方诊断结论。")
+    return lines
+
+
+def _render_insufficient(report: dict[str, Any], quality: dict[str, Any]) -> str:
+    collection = report.get("collection") or {}
+    by_type = quality.get("samples_by_agent_type") or []
+    type_rows = [
+        [row.get("agent_type"), row.get("sample_size"), row.get("classification")]
+        for row in by_type
+    ]
+    if not type_rows:
+        type_rows = [["暂无可识别 agent_type", "暂无数据", "无法分类"]]
+    chain_rows = [[index, chain] for index, chain in enumerate(
+        quality.get("recommended_real_chains") or [], start=1
+    )]
+    thresholds = quality.get("thresholds") or {}
+    lines = [
+        "# PaperAI Agent 运行诊断报告",
+        "",
+        f"> 生成时间：{_date(report.get('generated_at'))}",
+        "> 数据来源：PostgreSQL 持久化运行记录；本报告不包含提示词、思维链或第三方原始响应。",
+        "",
+        "## 1. 样本有效性",
+        "",
+        f"**{_escape(quality.get('label'))}**。当前只判断样本是否足以分析，不把缺失观测解释成 0。",
+        "",
+        _table(["数据对象", "样本量", "代表什么"], _sample_rows(report, quality)),
+        "",
+        f"样本时间范围：{_date(collection.get('oldest_created_at'))} → {_date(collection.get('newest_created_at'))}。",
+        "",
+        "## 2. 当前为什么无法评价真实 Agent",
+        "",
+    ]
+    lines.extend(f"- {line}" for line in _quality_reasons(quality))
+    lines.extend([
+        "",
+        "## 3. 当前有哪些真实/Mock 样本",
+        "",
+        "> “非 Mock”只表示没有命中名称标记，不等同于已经完成真实线上流量验证。",
+        "",
+        _table(["agent_type", "Execution 样本", "分类"], type_rows),
+        "",
+        _table(
+            ["数据对象", "疑似 Mock/测试", "未命中 Mock 标记"],
+            [
+                ["Execution", quality.get("mock_execution_count"), quality.get("real_execution_count")],
+                ["ResearchTask", quality.get("mock_task_count"), quality.get("real_task_count")],
+                ["ToolCall", quality.get("mock_tool_call_count"), quality.get("real_tool_call_count")],
+                ["ModelCall", quality.get("mock_model_call_count"), quality.get("real_model_call_count")],
+            ],
+        ),
+        "",
+        "## 4. 建议先运行的真实链路",
+        "",
+        _table(["优先级", "建议链路"], chain_rows),
+        "",
+        "## 5. 至少需要多少 ResearchTask 后再看趋势",
+        "",
+        _table(
+            ["ResearchTask 数量", "可得结论"],
+            [
+                [f"<{thresholds.get('min_tasks_for_trend', 20)}", "样本不足，仅供调试"],
+                [
+                    f"{thresholds.get('min_tasks_for_trend', 20)}–{thresholds.get('min_tasks_for_comparison', 50)}",
+                    "可观察初步趋势",
+                ],
+                [f">{thresholds.get('min_tasks_for_comparison', 50)}", "可开始做 task_type / tool / failure 对比"],
+            ],
+        ),
+        "",
+        "> 详细原始指标、失败记录和 trace 仍保留在同名 JSON 报告中；当前 Markdown 只保留样本质量判断和下一步建议。",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def _render_issue_rows(issues: list[dict[str, Any]]) -> list[list[Any]]:
+    return [
+        [index, issue.get("title"), issue.get("evidence"), issue.get("target")]
+        for index, issue in enumerate(issues[:3], start=1)
+    ]
+
+
+def _resource_rows(resource_groups: dict[str, Any], dimension: str) -> list[list[Any]]:
+    metric_labels = {
+        "highest_avg_tool_calls": "平均 ToolCall 偏高",
+        "highest_avg_model_calls": "平均 ModelCall 偏高",
+        "highest_avg_tokens": "平均 Token 偏高",
+    }
+    grouped: dict[str, dict[str, Any]] = {}
+    for metric_key, metric_label in metric_labels.items():
+        for row in (resource_groups.get(metric_key) or [])[:3]:
+            name = str(row.get("name") or "未设置")
+            current = grouped.setdefault(name, {"row": row, "signals": []})
+            if metric_label not in current["signals"]:
+                current["signals"].append(metric_label)
+    return [
+        [
+            dimension, item["row"].get("name"), item["row"].get("sample_size"),
+            item["row"].get("avg_tool_calls"), item["row"].get("avg_model_calls"),
+            _number(item["row"].get("avg_tokens")), "、".join(item["signals"]),
+        ]
+        for item in grouped.values()
+    ]
+
+
+def _render_normal(report: dict[str, Any], diagnostic: dict[str, Any], quality: dict[str, Any]) -> str:
+    sample = report.get("sample_size") or {}
+    collection = report.get("collection") or {}
+    summary = report.get("summary") or {}
+    issues = diagnostic.get("top_issues") or []
+    task_rows = diagnostic.get("task_type_comparison") or []
+    failure_rows = diagnostic.get("failure_categories") or []
+    tool_rows = diagnostic.get("top_failed_tools") or []
+    duplicate_rows = diagnostic.get("duplicate_tasks") or []
+    resource = diagnostic.get("resource_anomalies") or {}
+    task_resources = resource.get("task_types") or {}
+    skill_resources = resource.get("skills") or {}
+    budget = summary.get("budget") or {}
+    drilldown = diagnostic.get("drilldown_targets") or {}
+
+    lines = [
+        "# PaperAI Agent 运行诊断报告",
+        "",
+        f"> 生成时间：{_date(report.get('generated_at'))}",
+        "> 数据来源：PostgreSQL 持久化运行记录；结论由确定性聚合生成。",
+        "",
+        "## 1. 样本有效性",
+        "",
+        f"**{_escape(quality.get('label'))}**。真实/非 Mock 样本仍需结合业务流量确认。",
+        "",
+        _table(
+            ["数据对象", "样本量", "说明"],
+            [
+                ["Execution", _count(sample.get("executions")), "目标生命周期"],
+                ["ResearchTask", _count(sample.get("tasks")), "业务执行单元"],
+                ["ToolCall", _count(sample.get("tool_calls")), "原子工具调用"],
+                ["ModelCall", _count(sample.get("model_calls")), "模型调用事实"],
+            ],
+        ),
+        "",
+        f"样本时间范围：{_date(collection.get('oldest_created_at'))} → {_date(collection.get('newest_created_at'))}；",
+        f"疑似 Mock/测试 Execution：{_count(quality.get('mock_execution_count'))}，未命中 Mock 标记：{_count(quality.get('real_execution_count'))}。",
+        "",
+        "## 2. 当前最严重的 3 个问题",
+        "",
+        _table(["优先级", "问题", "证据", "优先检查对象"], _render_issue_rows(issues))
+        if issues else "当前样本未识别出明确的前三项问题；这不等于系统没有问题。",
+        "",
+        "## 3. Task 类型对比",
+        "",
+        _table(
+            [
+                "task_type", "sample_size", "success_rate", "failure_rate", "avg_duration",
+                "avg_tool_calls", "avg_model_calls", "avg_tokens", "duplicate_rate",
+            ],
+            [
+                [
+                    row.get("task_type"), row.get("sample_size"),
+                    _rate_percentage(row.get("success_rate"), row.get("sample_size")),
+                    _rate_percentage(row.get("failure_rate"), row.get("sample_size")),
+                    f"{_number(row.get('avg_duration'))} ms" if row.get("avg_duration") is not None else "暂无数据",
+                    _number(row.get("avg_tool_calls")), _number(row.get("avg_model_calls")),
+                    _number(row.get("avg_tokens")),
+                    _rate_percentage(row.get("duplicate_rate"), row.get("sample_size")),
+                ]
+                for row in task_rows
+            ],
+        ),
+        "",
+        "## 4. Top Failure / Top Failed Tool / Duplicate",
+        "",
+        "### Failure Category",
+        "",
+        _table(
+            ["Failure Category", "count", "failure_records 占比"],
+            [[row.get("category"), row.get("count"), _ratio_percentage(row.get("rate"))] for row in failure_rows],
+        ),
+        "",
+        "### Top Failed Tool",
+        "",
+        _table(
+            ["tool_name", "sample_size", "failure_count", "failure_rate", "timeout_count", "timeout_rate"],
+            [
+                [
+                    row.get("tool_name"), row.get("sample_size"), row.get("failure_count"),
+                    _ratio_percentage(row.get("failure_rate")), row.get("timeout_count"),
+                    _ratio_percentage(row.get("timeout_rate")),
+                ]
+                for row in tool_rows
+            ],
+        ),
+        "",
+        "### Duplicate ToolCall 最严重的 Task",
+        "",
+        _table(
+            ["task_id", "execution_id", "task_type", "duplicate_count", "duplicate_rate", "repeated_tools"],
+            [
+                [
+                    row.get("task_id"), row.get("execution_id"), row.get("task_type"),
+                    row.get("duplicate_count"), _ratio_percentage(row.get("duplicate_rate")),
+                    row.get("repeated_tools"),
+                ]
+                for row in duplicate_rows
+            ],
+        ),
+        "",
+        "## 5. 资源与 Budget 异常",
+        "",
+        "### Task / Skill 资源偏高",
+        "",
+        _table(
+            ["维度", "名称", "样本", "平均 ToolCall", "平均 ModelCall", "平均 Token", "偏高指标"],
+            _resource_rows(task_resources, "Task 类型") + _resource_rows(skill_resources, "Skill"),
+        ),
+        "",
+        "### 资源异常 Task",
+        "",
+        _table(
+            ["task_id", "execution_id", "task_type", "skill_id", "ToolCall", "ModelCall", "Token", "异常信号"],
+            [
+                [
+                    row.get("task_id"), row.get("execution_id"), row.get("task_type"), row.get("skill_id"),
+                    row.get("tool_calls"), row.get("model_calls"), _number(row.get("tokens")), "、".join(row.get("signals") or []),
+                ]
+                for row in (resource.get("resource_heavy_tasks") or [])
+            ],
+        ),
+        "",
+        "### Budget",
+        "",
+        _table(
+            ["异常对象", "数量/状态", "说明"],
+            [
+                ["接近预算的 Execution", _length(budget, "near_budget_executions"), "任一已配置预算使用率达到 80%"],
+                ["接近预算的 Task", _length(budget, "near_budget_tasks"), "Task 级已记录计数达到 80%"],
+                ["预算超限率", _ratio_percentage(budget.get("budget_exceeded_rate")), "至少一个已配置预算达到或超过上限"],
+            ],
+        ),
+        "",
+        "## 6. 值得下钻的 Execution / Task",
+        "",
+        "### Execution",
+        "",
+        _table(
+            ["execution_id", "status", "agent_type", "task_count", "优先检查原因"],
+            [
+                [row.get("execution_id"), STATUS_LABELS.get(str(row.get("status")), row.get("status")), row.get("agent_type"), row.get("task_count"), "；".join(row.get("reasons") or [])]
+                for row in (drilldown.get("executions") or [])
+            ],
+        ),
+        "",
+        "### ResearchTask",
+        "",
+        _table(
+            ["task_id", "execution_id", "task_type", "skill_id", "status", "attempt_count", "ToolCall", "ModelCall", "优先检查原因"],
+            [
+                [
+                    row.get("task_id"), row.get("execution_id"), row.get("task_type"), row.get("skill_id"),
+                    STATUS_LABELS.get(str(row.get("status")), row.get("status")), row.get("attempt_count"),
+                    row.get("tool_calls"), row.get("model_calls"), "；".join(row.get("reasons") or []),
+                ]
+                for row in (drilldown.get("tasks") or [])
+            ],
+        ),
+        "",
+        "> 完整原始指标和 trace 仍保留在同名 JSON；Markdown 只保留用于优化决策的摘要。",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def render_runtime_report_markdown(report: dict[str, Any]) -> str:
-    """Render report JSON without exposing prompts, reasoning or provider payloads."""
-    sample = report.get("sample_size") or {}
-    summary = report.get("summary") or {}
-    execution = summary.get("execution") or summary
-    task = summary.get("task") or {}
-    tool = summary.get("tool") or {}
-    model = summary.get("model") or {}
-    events = report.get("event_metrics") or summary.get("events") or {}
-    coverage = report.get("observability") or summary.get("observability") or {}
-    collection = report.get("collection") or {}
-    execution_count = int(sample.get("executions") or 0)
-    task_count = int(sample.get("tasks") or 0)
-    tool_count = int(sample.get("tool_calls") or 0)
-    model_count = int(sample.get("model_calls") or 0)
-    total_execution_count = int(collection.get("total_execution_count") or execution_count or 0)
-    selected_execution_count = int(collection.get("selected_execution_count") or execution_count or 0)
-    execution_coverage = (
-        _percentage(selected_execution_count / total_execution_count, total_execution_count)
-        if total_execution_count else "暂无数据"
-    )
-
-    lines = [
-        "# PaperAI Agent 运行观测报告",
-        "",
-        f"> 生成时间：{_date(report.get('generated_at'))}",
-        "> 本报告由 PostgreSQL 中的持久化运行记录确定性聚合生成，不包含完整提示词、思维链或第三方原始响应。",
-        "",
-        "## 一、先看结论",
-        "",
-    ]
-    lines.extend(f"- {item}" for item in _conclusions(report))
-    lines.extend([
-        "",
-        "## 二、数据范围与覆盖情况",
-        "",
-        _table(
-            ["数据对象", "本次样本量", "含义", "覆盖情况"],
-            [
-                    ["Execution", sample.get("executions", 0), "一个用户目标或一次兼容执行生命周期", execution_coverage],
-                ["AgentEvent", sample.get("events", 0), "Execution 的排队、开始、阶段和结束事件", _percentage(events.get("event_execution_coverage"), execution_count)],
-                ["ResearchTask", sample.get("tasks", 0), "一个可独立执行、可重试的业务任务", _percentage(coverage.get("task_execution_coverage"), execution_count)],
-                ["ToolCall", sample.get("tool_calls", 0), "一次原子工具调用", _percentage(coverage.get("tool_execution_coverage"), execution_count)],
-                ["ModelCall", sample.get("model_calls", 0), "一次无提示词内容的模型调用事实", _percentage(coverage.get("model_execution_coverage"), execution_count)],
-                ["失败记录", sample.get("failure_records", 0), "从错误码、失败状态和重复动作整理出的记录", "—"],
-            ],
-        ),
-        "",
-        _table(
-            ["采集项", "值", "说明"],
-            [
-                ["数据库筛选范围", collection.get("total_execution_count", execution_count), "满足 since 等 Execution 筛选条件的总量"],
-                ["实际纳入统计", collection.get("selected_execution_count", execution_count), "真正参与本报告计算的 Execution 数量"],
-                ["最早 Execution", _date(collection.get("oldest_created_at")), "纳入样本中最早的 created_at"],
-                ["最晚 Execution", _date(collection.get("newest_created_at")), "纳入样本中最晚的 created_at"],
-                ["是否被截断", "是" if collection.get("truncated") else "否", "limit 大于 0 且小于筛选范围总量时为是"],
-                ["筛选条件", report.get("filters") or {}, "limit、since、task_type、skill_id 等过滤条件"],
-            ],
-        ),
-        "",
-        "## 三、Execution 状态",
-        "",
-    ])
-
-    status_rows = []
-    status_counts = execution.get("status_counts") or {}
-    status_rate_keys = {
-        status: f"{status}_rate" for status in status_counts
-    }
-    for status in list(STATUS_LABELS) + [key for key in status_counts if key not in STATUS_LABELS]:
-        if status not in status_counts and not execution_count:
-            continue
-        status_count = status_counts.get(status, 0)
-        status_rows.append([
-            STATUS_LABELS.get(status, status),
-            status_count,
-            _percentage(
-                execution.get(status_rate_keys.get(status))
-                if status_rate_keys.get(status) in execution
-                else (status_count / execution_count if execution_count else None),
-                execution_count,
-            ),
-            STATUS_MEANINGS.get(status, "历史状态或当前代码未定义的状态。"),
-        ])
-    lines.extend([
-        _table(["状态", "数量", "占比", "含义"], status_rows),
-        "",
-        _table(
-            ["指标", "数值", "指标含义"],
-            [
-                ["完成率", _percentage(execution.get("completed_rate"), execution_count), "最终状态为 completed 的 Execution 比例"],
-                ["部分完成率", _percentage(execution.get("partial_rate"), execution_count), "最终状态为 partial 的 Execution 比例"],
-                ["失败率", _percentage(execution.get("failed_rate"), execution_count), "最终状态为 failed 的 Execution 比例"],
-                ["阻塞率", _percentage(execution.get("blocked_rate"), execution_count), "最终状态为 blocked 的 Execution 比例"],
-                ["取消率", _percentage(execution.get("cancelled_rate"), execution_count), "最终状态为 cancelled 的 Execution 比例"],
-                ["平均耗时", f"{_number(execution.get('avg_duration_ms'))} 毫秒" if execution_count else "暂无数据", "所有可计算 Execution 耗时的平均值"],
-                ["P50 耗时", f"{_number(execution.get('p50_duration_ms'))} 毫秒" if execution_count else "暂无数据", "一半样本不超过的耗时"],
-                ["P95 耗时", f"{_number(execution.get('p95_duration_ms'))} 毫秒" if execution_count else "暂无数据", "95% 样本不超过的耗时"],
-            ],
-        ),
-        "",
-        "## 四、ResearchTask 指标",
-        "",
-        _table(
-            ["指标", "数值", "指标含义"],
-            [
-                ["任务数", task.get("task_count", task_count), "纳入统计的 ResearchTask 数量"],
-                ["任务完成率", _percentage(task.get("task_success_rate"), task_count), "完成任务数 / 任务总数"],
-                ["任务部分完成率", _percentage(task.get("task_partial_rate"), task_count), "部分完成任务数 / 任务总数"],
-                ["任务失败率", _percentage(task.get("task_failure_rate"), task_count), "失败任务数 / 任务总数"],
-                ["任务重试率", _percentage(task.get("retry_rate"), task_count), "发生过重试的任务数 / 任务总数"],
-                ["平均尝试次数", _number(task.get("avg_attempt_count")) if task_count else "暂无数据", "每个任务的 attempt_count 平均值"],
-            ],
-        ),
-        "",
-        "## 五、ToolCall 指标",
-        "",
-        _table(
-            ["指标", "数值", "指标含义"],
-            [
-                ["工具调用数", tool.get("tool_call_count", tool_count), "原子工具调用总数"],
-                ["成功率", _percentage(tool.get("success_rate"), tool_count), "成功工具调用 / 全部工具调用"],
-                ["失败率", _percentage(tool.get("failure_rate"), tool_count), "失败、超时或未完成工具调用 / 全部工具调用"],
-                ["超时率", _percentage(tool.get("timeout_rate"), tool_count), "错误码为 TOOL_TIMEOUT 的调用比例"],
-                ["参数错误率", _percentage(tool.get("input_invalid_rate"), tool_count), "错误码为 TOOL_INPUT_INVALID 的调用比例"],
-                ["平均耗时", f"{_number(tool.get('avg_latency_ms'))} 毫秒" if tool_count else "暂无数据", "工具调用完成耗时平均值"],
-                ["平均调用数/任务", _number(tool.get("calls_per_task")) if tool_count else "暂无数据", "有工具记录的任务中，平均每个任务调用数"],
-            ],
-        ),
-        "",
-        "## 六、ModelCall 指标",
-        "",
-        _table(
-            ["指标", "数值", "指标含义"],
-            [
-                ["模型调用数", model.get("model_call_count", model_count), "模型调用事实记录总数"],
-                ["模型错误率", _percentage(model.get("model_error_rate"), model_count), "失败模型调用 / 全部模型调用"],
-                ["平均调用数/任务", _number(model.get("model_calls_per_task")) if model_count else "暂无数据", "有模型记录的任务或兼容 Execution 的平均调用数"],
-                ["平均输入 Token/任务", _number(model.get("avg_input_tokens_per_task")) if model_count else "暂无数据", "每个任务平均输入 Token 数"],
-                ["平均输出 Token/任务", _number(model.get("avg_output_tokens_per_task")) if model_count else "暂无数据", "每个任务平均输出 Token 数"],
-                ["平均耗时", f"{_number(model.get('avg_latency_ms'))} 毫秒" if model_count else "暂无数据", "模型调用耗时平均值"],
-            ],
-        ),
-        "",
-        "## 七、执行类型与调用切片",
-        "",
-        "### Execution 类型",
-        "",
-        _table(
-            ["类型", "Execution 数", "完成率", "取消率", "平均耗时（毫秒）"],
-            [
-                [name, metrics.get("execution_count", 0),
-                 _percentage(metrics.get("completed_rate"), metrics.get("execution_count")),
-                 _percentage(metrics.get("cancelled_rate"), metrics.get("execution_count")),
-                 _number(metrics.get("avg_duration_ms"))]
-                for name, metrics in sorted((report.get("execution_types") or {}).items())
-            ],
-        ),
-        "",
-        "### Runtime 版本",
-        "",
-        _table(
-            ["版本", "Execution 数", "完成率", "失败率", "取消率"],
-            [
-                [name, metrics.get("execution_count", 0),
-                 _percentage(metrics.get("completed_rate"), metrics.get("execution_count")),
-                 _percentage(metrics.get("failed_rate"), metrics.get("execution_count")),
-                 _percentage(metrics.get("cancelled_rate"), metrics.get("execution_count"))]
-                for name, metrics in sorted((report.get("runtime_versions") or {}).items())
-            ],
-        ),
-        "",
-        "### Task 类型、Skill 与执行器",
-        "",
-        _table(
-            ["切片", "名称", "Task 数", "完成率", "重试率", "ToolCall", "ModelCall"],
-            [
-                ["Task 类型", name, metrics.get("task_count", 0),
-                 _percentage(metrics.get("task_success_rate"), metrics.get("task_count")),
-                 _percentage(metrics.get("retry_rate"), metrics.get("task_count")), "—", "—"]
-                for name, metrics in sorted((report.get("task_types") or {}).items())
-            ] + [
-                ["Skill", name, metrics.get("task_count", 0),
-                 _percentage(metrics.get("task_success_rate"), metrics.get("task_count")),
-                 _percentage(metrics.get("retry_rate"), metrics.get("task_count")),
-                 metrics.get("tool_call_count", 0), metrics.get("model_call_count", 0)]
-                for name, metrics in sorted((report.get("skills") or {}).items())
-            ] + [
-                ["执行器", name, metrics.get("task_count", 0),
-                 _percentage(metrics.get("task_success_rate"), metrics.get("task_count")),
-                 _percentage(metrics.get("retry_rate"), metrics.get("task_count")), "—", "—"]
-                for name, metrics in sorted((report.get("executors") or {}).items())
-            ],
-        ),
-        "",
-        "### Tool 与 Model",
-        "",
-        _table(
-            ["类别", "名称", "调用数", "成功/错误率", "平均耗时（毫秒）"],
-            [
-                ["Tool", name, metrics.get("tool_call_count", 0),
-                 _percentage(metrics.get("success_rate"), metrics.get("tool_call_count")),
-                 _number(metrics.get("avg_latency_ms"))]
-                for name, metrics in sorted((report.get("tools") or {}).items())
-            ] + [
-                ["Model", name, metrics.get("model_call_count", 0),
-                 _percentage(metrics.get("model_error_rate"), metrics.get("model_call_count")),
-                 _number(metrics.get("avg_latency_ms"))]
-                for name, metrics in sorted((report.get("models") or {}).items())
-            ],
-        ),
-        "",
-        "## 八、事件、预算与失败",
-        "",
-        "### 事件类型",
-        "",
-        _table(
-            ["事件类型", "数量", "含义"],
-            [
-                [name, count, "持久化的 Execution 生命周期或阶段事件"]
-                for name, count in sorted((events.get("event_type_counts") or {}).items())
-            ],
-        ),
-        "",
-        _table(
-            ["指标", "数值", "指标含义"],
-            [
-                ["事件数", events.get("event_count", sample.get("events", 0)), "AgentEvent 总数"],
-                ["平均事件数/Execution", _number(events.get("events_per_execution")) if execution_count else "暂无数据", "每个 Execution 的事件平均数量"],
-                ["重复成功工具调用数", summary.get("duplicate_count", 0), "同一任务内连续重复成功的工具调用数量"],
-                ["重复调用率", _percentage(summary.get("duplicate_rate"), tool_count), "重复成功工具调用 / 工具调用总数"],
-                ["失败记录数", summary.get("failure_count", sample.get("failure_records", 0)), "失败分类明细的总数量"],
-                ["工具预算平均使用率", _percentage((summary.get("budget") or {}).get("avg_tool_utilization"), execution_count), "实际工具调用数 / 工具调用上限的平均比例"],
-                ["模型预算平均使用率", _percentage((summary.get("budget") or {}).get("avg_model_utilization"), execution_count), "实际模型调用数 / 模型调用上限的平均比例"],
-                ["Token 预算平均使用率", _percentage((summary.get("budget") or {}).get("avg_token_utilization"), execution_count), "实际 Token / Token 上限的平均比例"],
-            ],
-        ),
-        "",
-        "### 失败分类",
-        "",
-        _table(
-            ["分类", "数量"],
-            (report.get("failures") or {}).get("failure_reason_distribution", {}).items(),
-        ),
-        "",
-        "## 九、观测覆盖诊断",
-        "",
-        _table(
-            ["指标", "数值", "含义"],
-            [
-                ["有事件的 Execution", coverage.get("executions_with_events", 0), "至少有一条 AgentEvent 的 Execution"],
-                ["有任务的 Execution", coverage.get("executions_with_tasks", 0), "至少有一条 ResearchTask 的 Execution"],
-                ["有工具明细的 Execution", coverage.get("executions_with_tool_calls", 0), "至少有一条 ToolCall 的 Execution"],
-                ["有模型明细的 Execution", coverage.get("executions_with_model_calls", 0), "至少有一条 ModelCall 的 Execution"],
-                ["无 Task 关联的 ToolCall", coverage.get("tool_calls_without_task_id", 0), "历史即时路径或尚未关联任务的工具调用"],
-                ["无 Task 关联的 ModelCall", coverage.get("model_calls_without_task_id", 0), "历史即时路径或尚未关联任务的模型调用"],
-                ["只有累计工具计数的 Execution", coverage.get("counter_only_tool_execution_count", 0), "Execution 计数大于 0，但没有 ToolCall 明细"],
-                ["只有累计模型计数的 Execution", coverage.get("counter_only_model_execution_count", 0), "Execution 计数大于 0，但没有 ModelCall 明细"],
-            ],
-        ),
-        "",
-        "## 十、Execution 明细",
-        "",
-        _table(
-            ["Execution", "状态", "类型", "版本", "Task", "事件", "Tool 明细/累计", "Model 明细/累计", "耗时（毫秒）"],
-            [
-                [
-                    item.get("execution_id"),
-                    STATUS_LABELS.get(item.get("status"), item.get("status")),
-                    item.get("agent_type"),
-                    item.get("runtime_version"),
-                    item.get("task_count", 0),
-                    item.get("event_count", 0),
-                    f"{item.get('tool_call_count', 0)}/{item.get('counter_tool_call_count', 0)}",
-                    f"{item.get('model_call_count', 0)}/{item.get('counter_model_call_count', 0)}",
-                    _number(item.get("duration_ms")),
-                ]
-                for item in report.get("execution_cases", [])
-            ],
-        ),
-        "",
-        "## 十一、ResearchTask 明细",
-        "",
-        _table(
-            ["Task", "类型", "状态", "执行器", "Skill", "尝试次数", "完成条件", "错误码"],
-            [
-                [
-                    item.get("task_id"), item.get("task_type"),
-                    STATUS_LABELS.get(item.get("status"), item.get("status")),
-                    item.get("executor_type"), item.get("skill_id"),
-                    item.get("attempt_count", 0),
-                    "通过" if item.get("completion_passed") else "未通过",
-                    item.get("error_code"),
-                ]
-                for item in report.get("cases", [])
-            ],
-        ),
-        "",
-        "## 十二、指标说明",
-        "",
-    ])
-
-    definitions = report.get("definitions") or {}
-    lines.append(_table(["字段", "说明"], sorted(definitions.items())))
-    lines.extend([
-        "",
-        "## 十三、报告限制",
-        "",
-        "- 这是运行事实报告，不评价回答内容的学术质量，也不使用大模型进行二次打分。",
-        "- 没有对应样本的比例指标显示为“暂无数据”，不能解读为 0%。",
-        "- 旧的即时 Reader/Chat 路径可能只有 Execution 累计计数，没有任务级 ToolCall/ModelCall 明细；需要结合“观测覆盖诊断”判断。",
-        "- P50/P95 在样本量很小时只适合趋势参考，不适合作为稳定性能基线。",
-        "",
-    ])
-    return "\n".join(lines)
+    """Render the report without exposing prompts, reasoning, or payloads."""
+    diagnostic, quality, mode = _diagnostic_context(report)
+    if mode != "diagnostic":
+        return _render_insufficient(report, quality)
+    return _render_normal(report, diagnostic, quality)

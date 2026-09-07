@@ -2,6 +2,20 @@
 
 Status: COMPLETE
 
+## Phase 25 Maintenance Block — Agent Runtime 诊断优先报告
+
+EVAL-OBS-3 在不新增指标体系、不重构 Agent Runtime 和不增加用户侧 Agent
+页面的前提下，调整现有报告的展示决策。报告先判断 ResearchTask、ToolCall、
+ModelCall 是否具备分析价值；空样本、Mock/测试样本或 ResearchTask 少于 20 个时，
+只输出数据不足原因、缺失数据、样本分类、建议真实链路和趋势阈值。样本充足时，
+Markdown/HTML 只展示最严重问题、Task 类型对比、Failure/Tool/Duplicate、资源
+异常和下钻对象；完整原始指标继续保留在既有 JSON 中。
+
+验收：覆盖空样本、Mock-only、20–50 和超过 50 个 ResearchTask 的样本质量判断；
+确认 Markdown 不把缺失数据解释成 0，不默认输出无决策价值的空表、分位数、预算
+明细或字段字典；确认现有 PostgreSQL Trace、Runtime Metrics、Failure Taxonomy、
+静态 Dashboard 和报告命令保持兼容。
+
 ## Phase 25 Maintenance Block — Agent Runtime 报告可读性与覆盖增强
 
 EVAL-OBS-2 在不新增执行基础设施、不改变 Agent Runtime 生命周期的前提下，

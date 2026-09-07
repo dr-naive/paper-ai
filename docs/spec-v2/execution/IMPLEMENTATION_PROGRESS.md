@@ -2,6 +2,72 @@
 
 Status: COMPLETE
 
+## Current Maintenance Block — EVAL-OBS-3
+
+Status: COMPLETE
+
+Baseline commit: `777f3a7` (`完善运行观测报告`).
+
+Scope: 将现有 Agent Runtime 报告改为诊断优先输出，不新增运行时、数据库表或
+指标体系；完整原始指标继续保留在既有 JSON，Markdown/HTML 只展示对优化决策有
+帮助的内容。
+
+End commit: 本次本地提交（提交标题：`优化运行诊断报告`，具体哈希以当前 Git HEAD 为准）。
+未执行远程推送；如需推送仍须先确认中文说明。
+
+Actual changes:
+
+- 既有确定性运行聚合新增样本质量判断、Mock/测试样本分类、真实链路建议和
+  ResearchTask 趋势阈值；没有新增运行时或指标存储体系。
+- Markdown 改为诊断优先：样本不足时只输出数据有效性、缺失原因、样本分类、真实链路
+  和阈值；样本充足时固定输出六部分诊断摘要，并保留完整 JSON 原始指标。
+- Dashboard 的 Agent Runtime 区块同步采用样本质量分支，不再把空指标表和内部明细作为
+  默认展示；没有新增用户侧 Agent 页面。
+- 增加 20 个任务进入初步趋势、超过 50 个任务进入对比模式，以及 Mock-only、缺失多类
+  运行记录、Task 类型对比和报告渲染测试。
+
+Target files:
+
+- `backend/evals/agent_runtime_metrics.py`
+- `backend/evals/agent_runtime_markdown.py`
+- `backend/evals/build_dashboard.py`
+- `backend/tests/test_agent_runtime_observability.py`
+- `backend/tests/test_eval_dashboard.py`
+- `backend/evals/README.md`
+- `docs/spec-v2/architecture/SYSTEM_ARCHITECTURE.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Database changes: none. API changes: none. Runtime、PostgreSQL Trace、Runtime Metrics、
+Failure Taxonomy、Dashboard 数据来源和指标存储路径均未改变。
+
+Validation:
+
+- 定向报告与 Dashboard 测试：`16 passed`。
+- 后端完整测试：`354 passed`。
+- 目标文件 Ruff：通过。
+- Python 编译检查：通过；静态 Dashboard 生成后的 JavaScript `node --check`：通过。
+- 已基于现有 PostgreSQL 报告快照重新渲染诊断优先 Markdown，确认当前 5 条历史
+  `mock_agent` Execution、25 条 AgentEvent、0 条 ResearchTask、0 条 ToolCall、0 条
+  ModelCall 会进入样本不足分支。
+
+Manual acceptance:
+
+- 空样本和 Mock-only 样本只显示无法评价真实 Agent 的原因、缺失数据、样本分类、建议
+  真实链路和 `<20`、`20–50`、`>50` 阈值，不显示大段空指标、分位数、预算明细或字段字典。
+- 样本达到 20 个 ResearchTask 时进入初步趋势；达到 51 个时进入 task_type/tool/failure
+  对比模式；缺失值显示“暂无数据”，已知样本量 0 仍保留为真实计数。
+- 充足样本的 Task 对比保留指定九列，并提供前三问题、Failure/Tool/Duplicate、资源
+  异常和最多 10 个 Execution/Task 下钻对象。
+
+Remaining risks:
+
+- 当前本地数据库仍只有历史 `mock_agent` Execution，没有真实 ResearchTask/ToolCall/
+  ModelCall 样本，所以报告只能证明样本不足，不能据此评价真实 Agent 质量。
+- 本次现场重新运行数据库报告命令受到 Docker 权限审查超时影响；已用此前同一 PostgreSQL
+  报告快照验证渲染结果，未伪造新的实时数据。后续容器权限可用时应重新运行报告命令。
+
 ## Current Maintenance Block — EVAL-OBS-2
 
 Status: COMPLETE

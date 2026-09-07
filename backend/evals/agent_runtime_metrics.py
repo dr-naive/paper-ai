@@ -46,6 +46,14 @@ KNOWN_EXECUTION_STATUSES = (
     "cancelled",
 )
 TERMINAL_EXECUTION_STATUSES = {"completed", "partial", "failed", "cancelled"}
+MIN_TASKS_FOR_TREND = 20
+MIN_TASKS_FOR_COMPARISON = 50
+MOCK_DATA_MARKERS = ("mock", "test", "fixture", "fake", "dummy", "sample")
+RECOMMENDED_REAL_CHAINS = [
+    "READ_PAPERS：使用已索引的真实项目论文完成一次项目级阅读。",
+    "WRITE_SECTION：使用真实 Evidence 生成一个章节，并完成 AUDIT_DRAFT。",
+    "DISCOVER_AND_IMPORT：执行真实论文发现，经过用户确认后导入论文。",
+]
 
 # These descriptions are deliberately stored with the report.  A JSON report
 # is also consumed by the dashboard and by future offline tooling, so the
@@ -92,6 +100,14 @@ REPORT_DEFINITIONS = {
     "observability.model_calls_without_task_id": "没有 ResearchTask 关联的历史或即时路径 ModelCall 数量。",
     "observability.counter_only_tool_execution_count": "Execution 累计 ToolCall 计数大于 0，但没有对应明细 ToolCall 记录的数量。",
     "observability.counter_only_model_execution_count": "Execution 累计 ModelCall 计数大于 0，但没有对应明细 ModelCall 记录的数量。",
+    "diagnostic.analysis_mode": "报告展示模式；insufficient 表示样本不足，diagnostic 表示可做初步诊断。",
+    "diagnostic.sample_quality": "按 Execution 类型和 ResearchTask/ToolCall/ModelCall 数量判断的样本有效性及缺失项。",
+    "diagnostic.task_type_comparison": "按 task_type 聚合的诊断摘要，包含样本量、成功/失败率、平均耗时、调用量、Token 和重复率。",
+    "diagnostic.failure_categories": "按现有 Failure Taxonomy 汇总的失败类别，不改变既有分类规则。",
+    "diagnostic.top_failed_tools": "按失败率和超时率排序的失败/超时 ToolCall 工具。",
+    "diagnostic.duplicate_tasks": "同一 ResearchTask 内重复成功 ToolCall 最集中的任务。",
+    "diagnostic.resource_anomalies": "按已有 ToolCall、ModelCall 和 Token 事实识别出的资源偏高 Task/Skill。",
+    "diagnostic.drilldown_targets": "按失败、阻塞、重试、重复动作和资源异常确定的最多 10 个 Execution/Task 下钻对象。",
 }
 
 
@@ -426,6 +442,489 @@ def _execution_cases(executions: list[Any], tasks: list[Any],
     ]
 
 
+def _is_mock_value(value: Any) -> bool:
+    normalized = str(value or "").lower()
+    return any(marker in normalized for marker in MOCK_DATA_MARKERS)
+
+
+def _sample_quality(executions: list[Any], tasks: list[Any],
+                    tool_calls: list[Any], model_calls: list[Any]) -> dict[str, Any]:
+    execution_count = len(executions)
+    execution_by_id = {str(_get(row, "id", "")): row for row in executions}
+    mock_execution_ids = {
+        execution_id for execution_id, row in execution_by_id.items()
+        if _is_mock_value(_get(row, "agent_type"))
+    }
+    real_execution_ids = set(execution_by_id) - mock_execution_ids
+
+    def count_for_execution(rows: list[Any], execution_ids: set[str]) -> int:
+        return sum(str(_get(row, "execution_id", "")) in execution_ids for row in rows)
+
+    type_counts = Counter(str(_get(row, "agent_type") or "未设置") for row in executions)
+    samples_by_agent_type = [
+        {
+            "agent_type": name,
+            "sample_size": count,
+            "classification": "疑似 Mock/测试" if _is_mock_value(name) else "非 Mock（需结合业务确认）",
+        }
+        for name, count in sorted(type_counts.items())
+    ]
+    mock_task_count = count_for_execution(tasks, mock_execution_ids)
+    real_task_count = count_for_execution(tasks, real_execution_ids)
+    mock_tool_count = count_for_execution(tool_calls, mock_execution_ids)
+    real_tool_count = count_for_execution(tool_calls, real_execution_ids)
+    mock_model_count = count_for_execution(model_calls, mock_execution_ids)
+    real_model_count = count_for_execution(model_calls, real_execution_ids)
+
+    reasons: list[str] = []
+    all_mock = bool(execution_by_id) and mock_execution_ids == set(execution_by_id)
+    if execution_count == 0:
+        level = "no_data"
+        label = "没有可分析样本"
+        analysis_mode = "insufficient"
+        reasons.append("NO_EXECUTIONS")
+    else:
+        if all_mock:
+            reasons.append("MOCK_ONLY")
+        if not tasks:
+            reasons.append("NO_RESEARCH_TASKS")
+        if not tool_calls:
+            reasons.append("NO_TOOL_CALLS")
+        if not model_calls:
+            reasons.append("NO_MODEL_CALLS")
+        if tasks and len(tasks) < MIN_TASKS_FOR_TREND:
+            reasons.append("TASK_SAMPLE_BELOW_TREND_THRESHOLD")
+
+        if all_mock:
+            level = "debug_only"
+            label = "仅有 Mock/测试样本，仅供调试"
+            analysis_mode = "insufficient"
+        elif reasons:
+            level = "debug_only"
+            label = "样本不足，仅供调试"
+            analysis_mode = "insufficient"
+        elif len(tasks) <= MIN_TASKS_FOR_COMPARISON:
+            level = "early_trend"
+            label = "可观察初步趋势"
+            analysis_mode = "diagnostic"
+        else:
+            level = "comparison_ready"
+            label = "可开始做 task_type / tool / failure 对比"
+            analysis_mode = "diagnostic"
+
+    if execution_count and not mock_execution_ids:
+        real_sample_label = "当前样本未命中 Mock/测试标记；仍需确认是否为真实业务流量"
+    elif real_execution_ids:
+        real_sample_label = "同时存在非 Mock 样本"
+    else:
+        real_sample_label = "当前没有可识别的非 Mock 样本"
+    return {
+        "analysis_mode": analysis_mode,
+        "level": level,
+        "label": label,
+        "reason_codes": reasons,
+        "execution_count": execution_count,
+        "task_count": len(tasks),
+        "tool_call_count": len(tool_calls),
+        "model_call_count": len(model_calls),
+        "mock_execution_count": len(mock_execution_ids),
+        "real_execution_count": len(real_execution_ids),
+        "mock_task_count": mock_task_count,
+        "real_task_count": real_task_count,
+        "mock_tool_call_count": mock_tool_count,
+        "real_tool_call_count": real_tool_count,
+        "mock_model_call_count": mock_model_count,
+        "real_model_call_count": real_model_count,
+        "real_sample_label": real_sample_label,
+        "samples_by_agent_type": samples_by_agent_type,
+        "thresholds": {
+            "min_tasks_for_trend": MIN_TASKS_FOR_TREND,
+            "min_tasks_for_comparison": MIN_TASKS_FOR_COMPARISON,
+        },
+        "recommended_real_chains": RECOMMENDED_REAL_CHAINS,
+    }
+
+
+def _task_observation_rows(tasks: list[Any], tool_calls: list[Any],
+                           model_calls: list[Any], duplicate: dict[str, Any]) -> list[dict[str, Any]]:
+    tool_counts = Counter(str(_get(row, "task_id", "")) for row in tool_calls)
+    model_counts = Counter(str(_get(row, "task_id", "")) for row in model_calls)
+    input_tokens = Counter()
+    output_tokens = Counter()
+    for row in model_calls:
+        task_id = str(_get(row, "task_id", ""))
+        input_tokens[task_id] += _integer(_get(row, "input_tokens"), 0)
+        output_tokens[task_id] += _integer(_get(row, "output_tokens"), 0)
+    duplicate_counts = Counter()
+    duplicate_tools: dict[str, Counter[str]] = defaultdict(Counter)
+    for item in duplicate.get("duplicates", []):
+        task_id = str(item.get("task_id") or "")
+        count = len(item.get("duplicate_call_ids") or [])
+        duplicate_counts[task_id] += count
+        duplicate_tools[task_id][str(item.get("tool_name") or "未设置")] += count
+
+    rows = []
+    for task in tasks:
+        task_id = str(_get(task, "task_id", ""))
+        tool_count = tool_counts[task_id]
+        model_count = model_counts[task_id]
+        token_count = input_tokens[task_id] + output_tokens[task_id]
+        rows.append({
+            "task_id": task_id,
+            "execution_id": str(_get(task, "execution_id", "")),
+            "task_type": _get(task, "task_type") or "未设置",
+            "skill_id": _get(task, "skill_id") or "未设置",
+            "executor_type": _get(task, "executor_type") or "未设置",
+            "status": _get(task, "status") or "未设置",
+            "attempt_count": _integer(_get(task, "attempt_count"), 0),
+            "duration_ms": _duration_ms(task),
+            "tool_calls": tool_count,
+            "model_calls": model_count,
+            "tokens": token_count if model_count else None,
+            "duplicate_count": duplicate_counts[task_id],
+            "duplicate_rate": _rate(duplicate_counts[task_id], tool_count) if tool_count else None,
+            "repeated_tools": dict(sorted(duplicate_tools[task_id].items())),
+            "error_code": _get(task, "error_code"),
+        })
+    return rows
+
+
+def _task_type_comparison(task_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in task_rows:
+        grouped[str(row["task_type"])].append(row)
+
+    result = []
+    for task_type, rows in sorted(grouped.items()):
+        sample_size = len(rows)
+        tool_count = sum(row["tool_calls"] for row in rows)
+        model_count = sum(row["model_calls"] for row in rows)
+        duplicate_count = sum(row["duplicate_count"] for row in rows)
+        token_values = [row["tokens"] for row in rows if row["tokens"] is not None]
+        duration_values = [row["duration_ms"] for row in rows if row["duration_ms"] is not None]
+        result.append({
+            "task_type": task_type,
+            "sample_size": sample_size,
+            "success_rate": _rate(sum(row["status"] == "completed" for row in rows), sample_size),
+            "failure_rate": _rate(sum(row["status"] == "failed" for row in rows), sample_size),
+            "avg_duration": _avg(duration_values) if duration_values else None,
+            "avg_tool_calls": round(tool_count / sample_size, 2) if sample_size else None,
+            "avg_model_calls": round(model_count / sample_size, 2) if sample_size else None,
+            "avg_tokens": _avg(token_values) if token_values else None,
+            "duplicate_rate": _rate(duplicate_count, tool_count) if tool_count else None,
+        })
+    return result
+
+
+def _resource_groups(task_rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in task_rows:
+        grouped[str(row.get(key) or "未设置")].append(row)
+    result = []
+    for name, rows in sorted(grouped.items()):
+        token_values = [row["tokens"] for row in rows if row["tokens"] is not None]
+        result.append({
+            "name": name,
+            "sample_size": len(rows),
+            "avg_tool_calls": _avg(row["tool_calls"] for row in rows),
+            "avg_model_calls": _avg(row["model_calls"] for row in rows),
+            "avg_tokens": _avg(token_values) if token_values else None,
+            "total_tool_calls": sum(row["tool_calls"] for row in rows),
+            "total_model_calls": sum(row["model_calls"] for row in rows),
+            "total_tokens": sum(token_values),
+        })
+    return result
+
+
+def _top_resource_groups(groups: list[dict[str, Any]], key: str, limit: int = 5) -> list[dict[str, Any]]:
+    return sorted(
+        groups,
+        key=lambda row: (
+            row.get(key) is not None,
+            float(row.get(key)) if row.get(key) is not None else -1.0,
+            row["name"],
+        ),
+        reverse=True,
+    )[:limit]
+
+
+def _tool_diagnostic_rows(tool_calls: list[Any]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for row in tool_calls:
+        grouped[str(_get(row, "tool_name") or "未设置")].append(row)
+    result = []
+    for name, rows in sorted(grouped.items()):
+        count = len(rows)
+        failures = sum(not _tool_ok(row) for row in rows)
+        timeouts = sum(str(_get(row, "error_code") or "") == "TOOL_TIMEOUT" for row in rows)
+        latencies = [value for row in rows if (value := _duration_ms(row)) is not None]
+        result.append({
+            "tool_name": name,
+            "sample_size": count,
+            "failure_count": failures,
+            "failure_rate": _rate(failures, count),
+            "timeout_count": timeouts,
+            "timeout_rate": _rate(timeouts, count),
+            "avg_latency_ms": _avg(latencies) if latencies else None,
+        })
+    return result
+
+
+def _resource_anomalies(task_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    task_type_groups = _resource_groups(task_rows, "task_type")
+    skill_groups = _resource_groups(task_rows, "skill_id")
+    average_tool_calls = _avg(row["tool_calls"] for row in task_rows)
+    average_model_calls = _avg(row["model_calls"] for row in task_rows)
+    token_values = [row["tokens"] for row in task_rows if row["tokens"] is not None]
+    average_tokens = _avg(token_values) if token_values else None
+    heavy_tasks = []
+    for row in task_rows:
+        signals = []
+        if average_tool_calls and row["tool_calls"] >= max(2, average_tool_calls * 1.5):
+            signals.append("Tool 调用偏高")
+        if average_model_calls and row["model_calls"] >= max(2, average_model_calls * 1.5):
+            signals.append("Model 调用偏高")
+        if average_tokens and row["tokens"] is not None and row["tokens"] >= max(average_tokens * 1.5, average_tokens + 1):
+            signals.append("Token 偏高")
+        if row["duplicate_count"]:
+            signals.append("存在重复 ToolCall")
+        score = (
+            (row["tool_calls"] / average_tool_calls if average_tool_calls else 0)
+            + (row["model_calls"] / average_model_calls if average_model_calls else 0)
+            + (row["tokens"] / average_tokens if average_tokens and row["tokens"] is not None else 0)
+            + row["duplicate_count"] * 2
+        )
+        if signals:
+            heavy_tasks.append({
+                "task_id": row["task_id"],
+                "execution_id": row["execution_id"],
+                "task_type": row["task_type"],
+                "skill_id": row["skill_id"],
+                "tool_calls": row["tool_calls"],
+                "model_calls": row["model_calls"],
+                "tokens": row["tokens"],
+                "duplicate_count": row["duplicate_count"],
+                "signals": signals,
+                "priority_score": round(score, 4),
+            })
+    return {
+        "task_types": {
+            "highest_avg_tool_calls": _top_resource_groups(task_type_groups, "avg_tool_calls"),
+            "highest_avg_model_calls": _top_resource_groups(task_type_groups, "avg_model_calls"),
+            "highest_avg_tokens": _top_resource_groups(task_type_groups, "avg_tokens"),
+        },
+        "skills": {
+            "highest_avg_tool_calls": _top_resource_groups(skill_groups, "avg_tool_calls"),
+            "highest_avg_model_calls": _top_resource_groups(skill_groups, "avg_model_calls"),
+            "highest_avg_tokens": _top_resource_groups(skill_groups, "avg_tokens"),
+        },
+        "resource_heavy_tasks": sorted(
+            heavy_tasks,
+            key=lambda row: (row["priority_score"], row["task_id"]),
+            reverse=True,
+        )[:10],
+        "baseline": {
+            "avg_tool_calls": average_tool_calls if task_rows else None,
+            "avg_model_calls": average_model_calls if task_rows else None,
+            "avg_tokens": average_tokens,
+        },
+    }
+
+
+def _top_drilldown_targets(execution_cases: list[dict[str, Any]], task_rows: list[dict[str, Any]],
+                           failures: list[dict[str, Any]]) -> dict[str, Any]:
+    failures_by_execution = Counter(str(row.get("execution_id") or "") for row in failures)
+    duplicate_execution_ids = {str(row["execution_id"]) for row in task_rows if row["duplicate_count"]}
+    execution_targets = []
+    status_weight = {
+        "failed": 100,
+        "blocked": 90,
+        "waiting_user": 80,
+        "partial": 70,
+        "cancelled": 50,
+        "retrying": 40,
+    }
+    for row in execution_cases:
+        execution_id = str(row["execution_id"])
+        reasons = []
+        score = status_weight.get(str(row.get("status")), 0)
+        if row.get("status") in status_weight:
+            reasons.append(f"Execution 状态为 {row.get('status')}")
+        if failures_by_execution[execution_id]:
+            score += 40
+            reasons.append(f"有 {failures_by_execution[execution_id]} 条失败记录")
+        if execution_id in duplicate_execution_ids:
+            score += 30
+            reasons.append("包含重复 ToolCall 的任务")
+        if row.get("counter_tool_call_count", 0) > row.get("tool_call_count", 0):
+            score += 20
+            reasons.append("累计工具计数高于明细记录")
+        if row.get("counter_model_call_count", 0) > row.get("model_call_count", 0):
+            score += 20
+            reasons.append("累计模型计数高于明细记录")
+        execution_targets.append({
+            "execution_id": execution_id,
+            "status": row.get("status"),
+            "agent_type": row.get("agent_type"),
+            "task_count": row.get("task_count", 0),
+            "event_count": row.get("event_count", 0),
+            "duration_ms": row.get("duration_ms"),
+            "reasons": reasons or ["常规抽查"],
+            "priority_score": score,
+        })
+
+    task_targets = []
+    for row in task_rows:
+        reasons = []
+        score = 0
+        if row["status"] in {"failed", "blocked", "waiting_user", "partial", "retrying"}:
+            score += 100
+            reasons.append(f"Task 状态为 {row['status']}")
+        if row["attempt_count"] > 1:
+            score += 30
+            reasons.append(f"已尝试 {row['attempt_count']} 次")
+        if row["duplicate_count"]:
+            score += 40
+            reasons.append(f"有 {row['duplicate_count']} 次重复 ToolCall")
+        if row["tool_calls"] >= 2:
+            score += row["tool_calls"]
+        if row["model_calls"] >= 2:
+            score += row["model_calls"]
+        task_targets.append({
+            "task_id": row["task_id"],
+            "execution_id": row["execution_id"],
+            "task_type": row["task_type"],
+            "skill_id": row["skill_id"],
+            "status": row["status"],
+            "attempt_count": row["attempt_count"],
+            "tool_calls": row["tool_calls"],
+            "model_calls": row["model_calls"],
+            "tokens": row["tokens"],
+            "duplicate_count": row["duplicate_count"],
+            "reasons": reasons or ["常规抽查"],
+            "priority_score": score,
+        })
+    return {
+        "executions": sorted(
+            execution_targets,
+            key=lambda row: (row["priority_score"], row["execution_id"]),
+            reverse=True,
+        )[:10],
+        "tasks": sorted(
+            task_targets,
+            key=lambda row: (row["priority_score"], row["task_id"]),
+            reverse=True,
+        )[:10],
+    }
+
+
+def _diagnostic_issue_list(sample_quality: dict[str, Any], task_comparison: list[dict[str, Any]],
+                            failure_categories: list[dict[str, Any]], tool_rows: list[dict[str, Any]],
+                            duplicate_tasks: list[dict[str, Any]], resource: dict[str, Any]) -> list[dict[str, Any]]:
+    if sample_quality["analysis_mode"] != "diagnostic":
+        return []
+    candidates: list[dict[str, Any]] = []
+    if task_comparison:
+        worst = min(task_comparison, key=lambda row: (row["success_rate"], -row["failure_rate"], row["task_type"]))
+        candidates.append({
+            "category": "task_type",
+            "title": f"{worst['task_type']} 表现最差",
+            "evidence": f"样本 {worst['sample_size']}，成功率 {worst['success_rate']:.2%}，失败率 {worst['failure_rate']:.2%}。",
+            "target": worst["task_type"],
+        })
+    if failure_categories:
+        failure = failure_categories[0]
+        candidates.append({
+            "category": "failure_category",
+            "title": f"失败主要集中在 {failure['category']}",
+            "evidence": f"共 {failure['count']} 条，占失败记录 {failure['rate']:.2%}。",
+            "target": failure["category"],
+        })
+    failed_tools = [row for row in tool_rows if row["failure_count"] or row["timeout_count"]]
+    if failed_tools:
+        tool = sorted(failed_tools, key=lambda row: (row["failure_rate"], row["timeout_rate"], row["sample_size"]), reverse=True)[0]
+        candidates.append({
+            "category": "tool",
+            "title": f"工具 {tool['tool_name']} 失败/超时最多",
+            "evidence": f"调用 {tool['sample_size']} 次，失败 {tool['failure_count']} 次，超时 {tool['timeout_count']} 次。",
+            "target": tool["tool_name"],
+        })
+    elif duplicate_tasks:
+        duplicate = duplicate_tasks[0]
+        candidates.append({
+            "category": "duplicate",
+            "title": f"Task {duplicate['task_id']} 重复 ToolCall 最严重",
+            "evidence": f"重复 {duplicate['duplicate_count']} 次，占该 Task 工具调用 {duplicate['duplicate_rate']:.2%}。",
+            "target": duplicate["task_id"],
+        })
+    elif resource.get("resource_heavy_tasks"):
+        heavy = resource["resource_heavy_tasks"][0]
+        candidates.append({
+            "category": "resource",
+            "title": f"Task {heavy['task_id']} 资源使用偏高",
+            "evidence": "、".join(heavy["signals"]),
+            "target": heavy["task_id"],
+        })
+    return candidates[:3]
+
+
+def _build_diagnostics(executions: list[Any], tasks: list[Any], tool_calls: list[Any],
+                       model_calls: list[Any], events: list[Any], duplicate: dict[str, Any],
+                       failures: list[dict[str, Any]], execution_cases: list[dict[str, Any]]) -> dict[str, Any]:
+    sample_quality = _sample_quality(executions, tasks, tool_calls, model_calls)
+    task_rows = _task_observation_rows(tasks, tool_calls, model_calls, duplicate)
+    task_comparison = _task_type_comparison(task_rows)
+    failure_counter = Counter(row["reason"] for row in failures)
+    failure_categories = [
+        {"category": name, "count": count, "rate": _rate(count, len(failures))}
+        for name, count in failure_counter.most_common()
+    ]
+    tool_rows = _tool_diagnostic_rows(tool_calls)
+    top_failed_tools = sorted(
+        [row for row in tool_rows if row["failure_count"] or row["timeout_count"]],
+        key=lambda row: (row["failure_rate"], row["timeout_rate"], row["sample_size"], row["tool_name"]),
+        reverse=True,
+    )[:5]
+    duplicate_by_task = Counter()
+    duplicate_tools_by_task: dict[str, Counter[str]] = defaultdict(Counter)
+    for item in duplicate.get("duplicates", []):
+        task_id = str(item.get("task_id") or "")
+        count = len(item.get("duplicate_call_ids") or [])
+        duplicate_by_task[task_id] += count
+        duplicate_tools_by_task[task_id][str(item.get("tool_name") or "未设置")] += count
+    tool_counts_by_task = Counter(str(_get(row, "task_id", "")) for row in tool_calls)
+    task_lookup = {row["task_id"]: row for row in task_rows}
+    duplicate_tasks = []
+    for task_id, count in duplicate_by_task.items():
+        task = task_lookup.get(task_id, {})
+        total_tools = tool_counts_by_task[task_id]
+        duplicate_tasks.append({
+            "task_id": task_id,
+            "execution_id": task.get("execution_id"),
+            "task_type": task.get("task_type"),
+            "skill_id": task.get("skill_id"),
+            "duplicate_count": count,
+            "sample_size": total_tools,
+            "duplicate_rate": _rate(count, total_tools) if total_tools else None,
+            "repeated_tools": dict(sorted(duplicate_tools_by_task[task_id].items())),
+        })
+    duplicate_tasks.sort(key=lambda row: (row["duplicate_rate"] is not None, row["duplicate_rate"] or -1, row["duplicate_count"], row["task_id"]), reverse=True)
+    resource = _resource_anomalies(task_rows)
+    execution_cases = execution_cases or _execution_cases(executions, tasks, tool_calls, model_calls, events)
+    drilldown = _top_drilldown_targets(execution_cases, task_rows, failures)
+    return {
+        "analysis_mode": sample_quality["analysis_mode"],
+        "sample_quality": sample_quality,
+        "top_issues": _diagnostic_issue_list(sample_quality, task_comparison, failure_categories, top_failed_tools, duplicate_tasks, resource),
+        "task_type_comparison": task_comparison,
+        "failure_categories": failure_categories[:5],
+        "top_failed_tools": top_failed_tools,
+        "duplicate_tasks": duplicate_tasks[:10],
+        "resource_anomalies": resource,
+        "drilldown_targets": drilldown,
+    }
+
+
 def _task_metrics(tasks: list[Any]) -> dict[str, Any]:
     count = len(tasks)
     statuses = Counter(str(_get(row, "status", "")) for row in tasks)
@@ -731,6 +1230,11 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
         default=None,
     )
     most_failed_tool = failed_tools.most_common(1)[0] if failed_tools else None
+    execution_cases = _execution_cases(executions, tasks, tool_calls, model_calls, events)
+    diagnostics = _build_diagnostics(
+        executions, tasks, tool_calls, model_calls, events, duplicate, failures,
+        execution_cases,
+    )
     summary = {
         **execution_metrics,
         **task_metrics,
@@ -827,8 +1331,9 @@ def build_runtime_report(*, executions: Iterable[Any] | None = None,
             "details": failures,
             "unknown_count": failure_distribution.get("UNKNOWN", 0),
         },
+        "diagnostic": diagnostics,
         "definitions": REPORT_DEFINITIONS,
-        "execution_cases": _execution_cases(executions, tasks, tool_calls, model_calls, events),
+        "execution_cases": execution_cases,
         "cases": [
             {
                 "execution_id": str(_get(row, "execution_id", "")),

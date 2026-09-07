@@ -518,20 +518,22 @@ task/artifact ID、Project advisory lock 和输出复用保持幂等。用户确
 
 ### 15.2 Agent Evaluation & Observability
 
-内部观测不改变上述生命周期，也不新增 Agent Runtime。`backend/evals` 的通用
-报告只做确定性聚合：Execution 全状态分布、Task 成功与失败率、Skill/Executor/Task
-类型切片、AgentEvent 类型、Tool/Model 延迟与调用量、预算使用、累计计数与明细
-追踪覆盖率、同一 ResearchTask 内的重复成功 ToolCall，以及可由错误码直接映射的
-失败分类。重试后的失败调用不会被误报为重复动作；没有稳定证据的分类记为
-`UNKNOWN`。没有对应样本的比例指标在中文报告中显示为“暂无数据”，避免将缺失观测
-误解为零成功率。
+内部观测不改变上述生命周期，也不新增 Agent Runtime 或第二套指标系统。`backend/evals`
+继续从 PostgreSQL 确定性聚合 Execution、Task、AgentEvent、ToolCall、ModelCall、预算、
+重复动作和 Failure Taxonomy；完整原始指标、失败记录和 trace 只保留在 JSON，供 Dashboard
+和离线工具使用。
 
-报告包含样本量、采集范围、观测覆盖率和可下钻的 `execution_id`、`task_id`、`trace_id`，不包含完整
-prompt、chain-of-thought、认证信息或原始 Provider payload。现有 Writing
-`execution_trace_report()` / `evaluate_execution_trace()` 仍是 Writing 专用评估
-入口，Agent Runtime 报告只扩展运行事实，不替换或复制它。现有静态评测面板
-仅增加开发/评测用 Agent Runtime 区块，不进入产品导航；Markdown 报告用于人工阅读，
-JSON 报告用于面板和离线工具。
+Markdown/HTML 采用诊断优先策略。报告先判断样本是否具备分析价值：没有 ResearchTask、
+ToolCall 或 ModelCall，样本全部命中 Mock/测试标记，或 ResearchTask 少于 20 个时，只说明
+无法评价真实 Agent 的原因、缺失数据、真实/Mock 样本、建议运行的真实链路和趋势阈值；不
+输出空表、无意义的分位数、预算明细或完整字段字典。20–50 个 ResearchTask 仅观察初步
+趋势，超过 50 个才适合进行 task_type、tool 和 failure 对比。样本充足时 Markdown/HTML
+固定压缩为样本有效性、前三项问题、Task 类型对比、Failure/Tool/Duplicate、资源与 Budget
+异常、Execution/ResearchTask 下钻六部分。缺失观测显示“暂无数据”，不得解释成零。
+
+现有 Writing `execution_trace_report()` / `evaluate_execution_trace()` 仍是 Writing 专用
+评估入口，Agent Runtime 报告只扩展运行事实，不替换或复制它。现有静态评测面板仅增加
+开发/评测用 Agent Runtime 区块，不进入产品导航；不新增用户侧 Agent 页面。
 
 ### 项目级 Goal 与即时交互边界
 
