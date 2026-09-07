@@ -2,6 +2,102 @@
 
 Status: COMPLETE
 
+## Current Maintenance Block — ADMIN-EVAL-1
+
+Status: COMPLETE
+
+Baseline commit: `a54d0a1`（`新增 Agent 行为约束数据集`）。
+
+Scope: 为现有管理员控制台增加可持久化的评测运行入口、Redis Worker 异步执行、结果
+详情和历史记录。优先复用当前 Agent Runtime、检索评测、端到端评测脚本以及既有
+Queue/Worker；不新建 Agent Runtime、Tool、RAG 或用户侧 Agent 页面。
+
+过程修正：本 Block 后续按 `docs/architecture/CODE_MAP.md` 从管理员页面入口沿真实
+调用链阅读，先执行受影响的后端/前端定向测试；完整回归仅在 Block 最终收口时执行一次。
+
+Target files:
+
+- `backend/app/models/evaluation.py`
+- `backend/app/application/evaluation_run_service.py`
+- `backend/app/application/admin_evaluation_runner.py`
+- `backend/app/api/admin.py`
+- `backend/app/worker.py`
+- `backend/app/main.py`
+- `backend/alembic/env.py`
+- `backend/alembic/versions/0009_admin_evaluation_runs.py`
+- `backend/alembic/versions/0010_admin_evaluation_active_guard.py`
+- `backend/app/infrastructure/db/migrations.py`
+- `backend/scripts/check_schema_revision.py`
+- `backend/tests/test_admin_evaluations.py`
+- `backend/tests/test_database_migrations.py`
+- `frontend/src/api/admin.ts`
+- `frontend/src/components/admin/AdminEvaluationPanel.vue`
+- `frontend/src/components/admin/AdminEvaluationPanel.spec.ts`
+- `frontend/src/views/AdminDashboard.vue`
+- `docs/architecture/CODE_MAP.md`
+- `AGENTS.md`
+- `docs/API.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Database changes: 新增 `evaluation_runs` 表，仅使用新增 nullable/有默认值字段，不修改
+既有 `AgentExecution`、`ResearchTask` 或历史报告结构。迁移前需执行 schema preflight，
+迁移头更新为 `0010_eval_active_guard`；`0009` 负责新增表，`0010` 负责
+为同一评测类型的活动运行增加并发唯一保护，避免修改已经执行过的迁移。
+
+API changes: 新增管理员专用 `POST /api/admin/evaluations`、
+`GET /api/admin/evaluations` 和 `GET /api/admin/evaluations/{run_id}`；既有管理员
+Dashboard、Discover、Reading、Writing API 不改公开参数。
+
+End commit: 本次本地提交（具体哈希以当前 Git HEAD 为准）；未执行远程推送。
+
+Actual changes:
+
+- 新增 `EvaluationRun` 持久化模型和两个兼容迁移：`0009_admin_evaluation_runs` 新增
+  评测运行表，`0010_eval_active_guard` 为同一评测类型的活动运行增加数据库唯一保护；
+  既有 `AgentExecution`、`ResearchTask` 和历史报告数据未修改。
+- 新增统一的 EvaluationRun 状态转换服务，API、Worker 不再各自直接实现状态规则；支持
+  `queued`、`running`、`retrying`、`completed`、`failed`、`cancelled`。
+- 新增管理员评测 Runner 适配层，复用既有 runtime、retrieval、e2e 评测脚本；API 只
+  创建持久化记录并投递现有 `WorkerJob`，Worker 完成后写回结构化汇总和报告引用。
+- 管理员控制台新增测评类型选择、启动按钮、运行状态、结果摘要、历史记录和日期展示；
+  不向用户展示 Worker、ToolCall、ModelCall 等内部运行概念。
+- 新增 `docs/architecture/CODE_MAP.md`，并在 `AGENTS.md`、执行索引和本台账中固定了
+  入口导航、受影响范围测试和最终回归规则。
+
+Validation:
+
+- 后端受影响定向测试（管理员测评、迁移、应用和队列）：`25 passed`。
+- Alembic 当前版本：`0010_eval_active_guard (head)`。
+- schema preflight：`compatible: true`，无缺失表、列或约束。
+- 后端完整回归：`372 passed`。
+- 前端管理员测评组件定向测试：`2 passed`。
+- 前端完整 Vitest（使用 `--configLoader runner` 绕过已有缓存目录权限问题）：
+  `20 个测试文件，81 passed`。
+- 前端 `npm run typecheck`：通过。
+- 前端 `npm run lint`：通过。
+- 前端 `npm run build`：通过。
+- 改动文件 Ruff 检查和 `git diff --check`：通过。
+- 后端、Worker、迁移镜像已按最新源码重建；管理员测评代码级启动、状态转换、报告
+  复用、Worker 重试和前端历史渲染均已覆盖测试。
+
+Manual acceptance:
+
+- 已通过自动化验收确认管理员可以创建运行记录、读取历史详情、显示日期，并在刷新后
+  依据持久化记录恢复状态。
+- 已确认旧 `/api/admin/dashboard`、Discover、Reading、Writing 相关测试保持通过。
+- 尚未使用真实管理员账号在浏览器中执行一次完整点击验收；当前测试不伪造外部评测结果。
+
+Deviations and remaining risks:
+
+- 本 Block 没有新增评测指标或第二套 Runtime；检索和端到端测评仍依赖项目已有向量、
+  LLM 和 Provider 配置，未配置凭证时只会记录失败，不应视为真实评测通过。
+- 评测报告的 JSON/Markdown 文件保存在后端报告目录，当前 API 返回结构化详情，不新增
+  独立下载入口。
+- 运行中的 `backend`、`worker`、`frontend` 已按最新源码重建并通过健康检查；尚未使用真实
+  管理员账号在浏览器中点击执行一轮外部检索或端到端评测。
+
 ## Current Maintenance Block — EVAL-OBS-4
 
 Status: COMPLETE

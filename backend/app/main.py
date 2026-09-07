@@ -135,6 +135,7 @@ from app.models.chat import ChatSession, ChatMessage, SummaryCache, InterpretCac
 # 项目/写作产物模型:import 后 Base.metadata.create_all 会自动建表
 from app.models.project import ResearchProject, ProjectPaper, WritingArtifact
 from app.models.execution import AgentExecution, AgentEvent, ToolCall
+from app.models.evaluation import EvaluationRun
 from app.models.research import MemoryItem, EvidenceItem
 from app.models.document import WritingDocument, DocumentRevision
 

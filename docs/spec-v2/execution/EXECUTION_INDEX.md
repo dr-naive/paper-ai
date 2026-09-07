@@ -14,6 +14,9 @@ Codex must first read:
 2. this file
 3. `IMPLEMENTATION_PROGRESS.md`
 
+For the repository-level entrypoint map and test selection rules, read
+`docs/architecture/CODE_MAP.md` when the current Block has a matching feature map.
+
 Do not read all active specifications by default. Do not read
 `docs/archive/` during normal implementation.
 
@@ -22,6 +25,55 @@ Do not read all active specifications by default. Do not read
 Phase 25 — Agent Evaluation & Observability.
 
 ## Current Implementation Block
+
+ADMIN-EVAL-1 — 管理员测评启动、结果渲染与历史记录。
+
+ADMIN-EVAL-1 status: COMPLETE。复用现有评测脚本、Redis Queue 和 Worker，新增
+管理员测评运行记录的持久化接口；前端通过管理员控制台启动测评、轮询结果、渲染完成
+报告并显示带日期的历史记录。该 Block 不新增 Agent Runtime、Tool、RAG 或用户侧
+Agent 页面。
+
+## ADMIN-EVAL-1 Reading Boundary
+
+- `backend/app/api/admin.py`
+- `backend/app/models/evaluation.py`
+- `backend/app/application/evaluation_run_service.py`
+- `backend/app/application/admin_evaluation_runner.py`
+- `backend/app/job_queue.py`
+- `backend/app/worker.py`
+- `backend/evals/run_agent_runtime_report.py`
+- `backend/evals/run_retrieval_eval.py`
+- `backend/evals/run_e2e_eval.py`
+- `backend/evals/score_e2e_eval.py`
+- `backend/alembic/versions/0009_admin_evaluation_runs.py`
+- `backend/alembic/versions/0010_admin_evaluation_active_guard.py`
+- `backend/app/infrastructure/db/migrations.py`
+- `backend/alembic/env.py`
+- `backend/scripts/check_schema_revision.py`
+- `backend/tests/test_admin_evaluations.py`
+- `backend/tests/test_database_migrations.py`
+- `frontend/src/api/admin.ts`
+- `frontend/src/components/admin/AdminEvaluationPanel.vue`
+- `frontend/src/views/AdminDashboard.vue`
+- `frontend/src/components/admin/AdminEvaluationPanel.spec.ts`
+- `docs/API.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Acceptance boundary:
+
+- 管理员可以选择现有 `runtime`、`retrieval` 或 `e2e` 评测类型，创建一条持久化运行
+  记录并通过现有 Redis Worker 异步执行；不直接在 API 进程执行长任务。
+- Worker 只适配现有评测脚本，结果写入稳定的 JSON/Markdown 报告路径，并把结构化
+  汇总和错误写回数据库；队列重试、死信和 Worker 恢复继续由既有基础设施负责。
+- API 提供运行记录列表和详情；详情包含完成后的结构化报告，前端显示状态、结果和
+  日期，刷新页面后仍可恢复历史记录和当前运行状态。
+- 重复点击不会为同一评测类型创建并行运行；重复消费使用稳定运行 ID 和稳定报告路径，
+  已完成结果直接复用。旧 `/api/admin/dashboard`、Discover、Reading、Writing
+  接口保持兼容。
+- 覆盖启动、完成/失败、历史日期、Worker 派发、重试幂等和前端渲染测试；外部
+  Provider/LLM 仅在已有配置可用时做真实运行，测试使用确定性 mock。
+
+## EVAL-OBS-4 Reading Boundary
 
 EVAL-OBS-4 — 基于现有 PaperQA 与 Skill Case 建立 Agent 行为约束数据集。
 

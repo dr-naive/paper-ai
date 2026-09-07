@@ -12,6 +12,7 @@ import app.models.chat  # noqa: F401,E402
 import app.models.paper  # noqa: F401,E402
 import app.models.project  # noqa: F401,E402
 import app.models.execution  # noqa: F401,E402
+import app.models.evaluation  # noqa: F401,E402
 import app.models.research  # noqa: F401,E402
 import app.models.document  # noqa: F401,E402
 import app.models.user  # noqa: F401,E402

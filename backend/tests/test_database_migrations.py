@@ -61,7 +61,7 @@ def test_runtime_head_points_to_evidence_verification_revision():
 def test_runtime_head_points_to_execution_io_revision():
     revision = BACKEND_DIR / "alembic" / "versions" / "0006_execution_io_add_execution_input_and_result.py"
     source = revision.read_text(encoding="utf-8")
-    assert ALEMBIC_HEAD_REVISION == "0008_agent_runtime_observability"
+    assert ALEMBIC_HEAD_REVISION == "0010_eval_active_guard"
     assert 'revision: str = "0006_execution_io"' in source
     assert 'down_revision: Union[str, None] = "0005_evidence_verification"' in source
     assert '"input_payload"' in source
@@ -79,9 +79,29 @@ def test_agent_runtime_observability_migration_is_additive():
     assert 'ondelete="SET NULL"' in source
 
 
+def test_admin_evaluation_migration_is_additive_and_persistent():
+    revision = BACKEND_DIR / "alembic" / "versions" / "0009_admin_evaluation_runs.py"
+    source = revision.read_text(encoding="utf-8")
+    assert 'revision: str = "0009_admin_evaluation_runs"' in source
+    assert 'down_revision: Union[str, None] = "0008_agent_runtime_observability"' in source
+    assert 'op.create_table(' in source and '"evaluation_runs"' in source
+    for column in ("evaluation_type", "status", "config", "summary", "report_path", "created_at", "completed_at"):
+        assert f'"{column}"' in source
+    assert 'ondelete="SET NULL"' in source
+
+
+def test_admin_evaluation_active_guard_is_a_follow_up_migration():
+    revision = BACKEND_DIR / "alembic" / "versions" / "0010_admin_evaluation_active_guard.py"
+    source = revision.read_text(encoding="utf-8")
+    assert 'revision: str = "0010_eval_active_guard"' in source
+    assert 'down_revision: Union[str, None] = "0009_admin_evaluation_runs"' in source
+    assert 'unique=True' in source
+    assert "status IN ('queued', 'running', 'retrying')" in source
+
+
 def test_schema_check_loads_every_current_model_family():
     source = (BACKEND_DIR / "scripts" / "check_schema_revision.py").read_text()
-    for module in ("chat", "document", "execution", "paper", "project", "research", "user"):
+    for module in ("chat", "document", "execution", "evaluation", "paper", "project", "research", "user"):
         assert f"import app.models.{module}" in source
 
 

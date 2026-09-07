@@ -32,6 +32,7 @@ from app.models.user import User  # noqa: F401
 from app.models.paper import Paper, Section, Image, Note, Table, TableStructure  # noqa: F401
 from app.models.project import ResearchProject, ProjectPaper, WritingArtifact  # noqa: F401
 from app.models.execution import AgentExecution, AgentEvent, ToolCall, TERMINAL_EXECUTION_STATUSES  # noqa: F401
+from app.models.evaluation import EvaluationRun  # noqa: F401
 from app.models.research import MemoryItem, EvidenceItem  # noqa: F401
 from app.models.document import WritingDocument, DocumentRevision  # noqa: F401
 from app.research.context.paper_profile import (
@@ -50,6 +51,62 @@ ANSWER_TASK_PREFIX = "paperai:answer-task:"
 ANSWER_CANCEL_PREFIX = "paperai:answer-cancel:"
 WORKER_HEARTBEAT_KEY = "paperai:worker:heartbeat"
 ANSWER_TRACE_PREFIX = "paperai:answer-trace:"
+
+
+async def handle_admin_evaluation(job: WorkerJob) -> None:
+    """在现有 Worker 中执行管理员评测并持久化结果。"""
+    from app.application.admin_evaluation_runner import run_admin_evaluation
+    from app.application.evaluation_run_service import transition_evaluation_run
+    from app.job_queue import MAX_RETRY_ATTEMPTS
+
+    run_id = str(job.payload["evaluation_run_id"])
+    async with AsyncSessionLocal() as db:
+        run = await db.get(EvaluationRun, run_id)
+        if run is None or run.status in {"completed", "cancelled"}:
+            return
+        transition_evaluation_run(run, "running")
+        run.attempt_count = int(run.attempt_count or 0) + 1
+        await db.commit()
+        evaluation_type = str(run.evaluation_type)
+        config = dict(run.config or {})
+
+    try:
+        report, report_path, markdown_path = await run_admin_evaluation(
+            run_id,
+            evaluation_type,
+            config,
+        )
+    except Exception as exc:
+        async with AsyncSessionLocal() as db:
+            run = await db.get(EvaluationRun, run_id)
+            if run is not None and run.status not in {"completed", "cancelled"}:
+                final_failure = job.attempts >= MAX_RETRY_ATTEMPTS
+                transition_evaluation_run(
+                    run,
+                    "failed" if final_failure else "retrying",
+                    error_code=type(exc).__name__.upper()[:80],
+                    error_message=str(exc)[:4000],
+                )
+                await db.commit()
+        raise
+
+    async with AsyncSessionLocal() as db:
+        run = await db.get(EvaluationRun, run_id)
+        if run is None or run.status == "cancelled":
+            return
+        transition_evaluation_run(
+            run,
+            "completed",
+            summary=dict(report.get("summary") or {}),
+            report_path=report_path,
+            markdown_path=markdown_path,
+            error_code=None,
+            error_message=None,
+        )
+        # A completed retry must not retain the previous transient error.
+        run.error_code = None
+        run.error_message = None
+        await db.commit()
 
 
 async def handle_agent_execution_v2(job: WorkerJob) -> None:
@@ -460,6 +517,7 @@ async def dispatch_job(job: WorkerJob) -> None:
         "paper_profile": handle_paper_profile,
         "arxiv_import": handle_arxiv_import,
         "agent_execution_v2": handle_agent_execution_v2,
+        "admin_evaluation": handle_admin_evaluation,
     }
     handler = handlers.get(job.type)
     if handler is None:

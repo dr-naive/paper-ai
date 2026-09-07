@@ -42,9 +42,20 @@ Router：`backend/app/api/admin.py`
 | Method | Path | 用途 |
 | --- | --- | --- |
 | GET | `/api/admin/dashboard` | 系统健康、使用量、AI Trace、七日趋势和最新评测汇总 |
+| POST | `/api/admin/evaluations` | 创建一轮管理员评测并交给现有 Worker 异步执行（202） |
+| GET | `/api/admin/evaluations` | 获取管理员评测历史记录，包含状态、日期和结构化汇总 |
+| GET | `/api/admin/evaluations/{run_id}` | 获取单轮评测状态；完成后包含结构化报告 |
 
 该接口仅允许 `admin` 角色访问。AI Token 来自回答 Trace 的估算值，
 用于观察趋势，不代表模型供应商账单；部署本版本后产生的回答会持久化统计。
+
+`POST /api/admin/evaluations` 请求体为
+`{"evaluation_type":"runtime"}`，评测类型支持 `runtime`（Agent Runtime
+运行观测）、`retrieval`（`paperqa_v1.jsonl` 检索质量）和 `e2e`
+（`paperqa_v1.jsonl` 端到端回答与引用）。接口只创建持久化运行记录并入既有
+Redis Queue；评测结果由 Worker 写入 `backend/evals/reports/admin_evaluations/`，
+历史记录保存创建、开始、更新和完成时间。相同类型存在 `queued`、`running` 或
+`retrying` 运行时会返回冲突，避免重复启动。
 
 ## 论文
 

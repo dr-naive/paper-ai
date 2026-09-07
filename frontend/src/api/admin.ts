@@ -67,6 +67,53 @@ interface EvaluationReport {
   summary: Record<string, number | null>
 }
 
+export type AdminEvaluationType = 'runtime' | 'retrieval' | 'e2e'
+export type AdminEvaluationStatus = 'queued' | 'running' | 'retrying' | 'completed' | 'failed' | 'cancelled'
+
+export interface AdminEvaluationRun {
+  id: string
+  evaluation_type: AdminEvaluationType
+  status: AdminEvaluationStatus
+  config: Record<string, unknown>
+  summary: Record<string, unknown> | null
+  attempt_count: number
+  max_attempts: number
+  created_at: string | null
+  started_at: string | null
+  updated_at: string | null
+  completed_at: string | null
+  report_available: boolean
+  markdown_available: boolean
+  error: { code: string | null; message: string | null } | null
+}
+
+export interface AdminEvaluationReport {
+  report_type?: string
+  generated_at?: string
+  summary?: Record<string, unknown>
+  sample_size?: Record<string, unknown>
+  diagnostic?: Record<string, unknown>
+  collection?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface AdminEvaluationDetail extends AdminEvaluationRun {
+  report: AdminEvaluationReport | null
+}
+
+export interface AdminEvaluationListResponse {
+  items: AdminEvaluationRun[]
+}
+
+export const startAdminEvaluation = (evaluationType: AdminEvaluationType = 'runtime') =>
+  request.post<AdminEvaluationRun>('/api/admin/evaluations', { evaluation_type: evaluationType })
+
+export const listAdminEvaluations = (limit = 20) =>
+  request.get<AdminEvaluationListResponse>('/api/admin/evaluations', { params: { limit } })
+
+export const getAdminEvaluation = (runId: string) =>
+  request.get<AdminEvaluationDetail>(`/api/admin/evaluations/${runId}`)
+
 export const getAdminDashboard = () =>
   request.get<AdminDashboardData>('/api/admin/dashboard')
 

@@ -535,6 +535,14 @@ ToolCall 或 ModelCall，样本全部命中 Mock/测试标记，或 ResearchTask
 评估入口，Agent Runtime 报告只扩展运行事实，不替换或复制它。现有静态评测面板仅增加
 开发/评测用 Agent Runtime 区块，不进入产品导航；不新增用户侧 Agent 页面。
 
+管理员控制台的主动测评也不建立第二套执行基础设施。管理员点击测评后，API 持久化
+`EvaluationRun`，再以同一个运行 ID 投递既有 Redis `WorkerJob`；Worker 复用当前
+`run_agent_runtime_report`、`run_retrieval_eval` 或 `run_e2e_eval + score_e2e_eval`，
+将 JSON/Markdown 报告引用和结构化汇总写回 `EvaluationRun`。前端只读取运行状态、
+结果和历史日期，不直接暴露 Worker、ToolCall 或内部执行细节。重复启动由同一评测类型
+的活动运行保护，重复消费使用稳定报告路径复用已完成结果；Provider/LLM 配置缺失时
+记录失败原因，不把失败或空结果伪装成成功。
+
 ### 项目级 Goal 与即时交互边界
 
 项目级 Reading / Writing 只有一个生命周期来源：

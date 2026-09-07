@@ -2,6 +2,26 @@
 
 Status: COMPLETE
 
+## Phase 25 Maintenance Block — 管理员测评启动与历史记录
+
+状态：COMPLETE（代码、迁移、定向测试、完整回归和前端生产构建已通过；真实外部
+Provider/LLM 评测仍以当前环境配置为准）。
+
+ADMIN-EVAL-1 将现有离线评测脚本接入管理员控制台，但不复制评测、Queue 或 Worker
+基础设施。管理员选择 `runtime`、`retrieval` 或 `e2e` 后，API 只创建持久化
+`EvaluationRun` 并把同一个运行 ID 作为 `WorkerJob` 载体入现有 Redis Queue；Worker
+复用当前脚本生成 JSON/Markdown 报告，完成后写回运行状态、汇总和报告引用。前端
+轮询运行记录，在完成后渲染结构化摘要，并保留带日期的历史记录。
+
+运行状态统一经过 EvaluationRun 服务转换：`queued → running → completed/failed`，
+队列重试使用 `retrying`；已完成运行和稳定报告路径可直接复用，防止重复点击或重复
+消费造成重复报告。外部检索/模型配置缺失时保留明确失败信息，不伪造测评数据。
+
+验收：管理员启动按钮、运行中状态、完成/失败展示、历史日期和刷新恢复；三类现有
+评测脚本均有 Worker 适配；数据库迁移为新增表且旧数据可读；覆盖 API/Worker/队列
+兼容、重复运行保护和前端组件测试。现有 `/api/admin/dashboard`、Discover、
+Reading、Writing 公开入口保持可用。
+
 ## Phase 25 Maintenance Block — Agent Behavior V1 约束数据集
 
 EVAL-OBS-4 基于现有 `paperqa_v1.jsonl`、Skill `cases.yaml` 和三个核心 Goal，

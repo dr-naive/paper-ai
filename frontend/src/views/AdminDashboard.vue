@@ -46,6 +46,8 @@
         </section>
 
         <section class="dashboard-grid">
+          <AdminEvaluationPanel />
+
           <article id="ai-usage" class="panel usage-panel">
             <div class="panel-heading">
               <div><h2>近 7 日使用趋势</h2><p>问答次数与回答侧 Token 消耗，两组数据按各自峰值缩放</p></div>
@@ -169,6 +171,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import AdminShell from '@/components/AdminShell.vue'
+import AdminEvaluationPanel from '@/components/admin/AdminEvaluationPanel.vue'
 import { getAdminDashboard, type AdminDashboardData } from '@/api/admin'
 
 const data = ref<AdminDashboardData | null>(null)

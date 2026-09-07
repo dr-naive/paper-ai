@@ -8,20 +8,38 @@ from pathlib import Path
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from typing import Literal
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import require_admin
 from app.config import BACKEND_DIR
 from app.database import get_db
+from app.application.admin_evaluation_runner import default_evaluation_config, load_report
+from app.application.evaluation_run_service import (
+    evaluation_run_dict,
+    transition_evaluation_run,
+)
+from app.job_queue import enqueue_job
 from app.models.chat import AnswerTrace, ChatMessage, ChatSession
+from app.models.evaluation import ACTIVE_EVALUATION_STATUSES, EvaluationRun
 from app.models.paper import Paper
 from app.models.user import User
 from app.redis_client import get_async_redis, redis_health
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 REPORTS_DIR = BACKEND_DIR / "evals" / "reports"
+
+
+class EvaluationRunCreate(BaseModel):
+    evaluation_type: Literal["runtime", "retrieval", "e2e"] = "runtime"
+
+
+def _evaluation_projection(run: EvaluationRun) -> dict[str, Any]:
+    return evaluation_run_dict(run, REPORTS_DIR)
 
 
 async def _count(db: AsyncSession, model, *conditions) -> int:
@@ -58,6 +76,112 @@ def _load_latest_report(pattern: str) -> dict[str, Any] | None:
         "generated_at": generated_at or None,
         "summary": payload.get("summary") or {},
     }
+
+
+# ==================== 管理员评测:启动、历史和结果 ====================
+
+@router.post("/evaluations", status_code=status.HTTP_202_ACCEPTED)
+async def start_evaluation(
+    body: EvaluationRunCreate,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """创建一轮评测并交给现有 Redis Worker 执行。"""
+    active = (
+        await db.execute(
+            select(EvaluationRun)
+            .where(EvaluationRun.evaluation_type == body.evaluation_type)
+            .where(EvaluationRun.status.in_(ACTIVE_EVALUATION_STATUSES))
+            .order_by(EvaluationRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if active is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "EVALUATION_ALREADY_RUNNING",
+                "message": "同一评测类型已有运行中的任务",
+                "run_id": active.id,
+            },
+        )
+
+    run = EvaluationRun(
+        requested_by=admin.id,
+        evaluation_type=body.evaluation_type,
+        status="queued",
+        config=default_evaluation_config(body.evaluation_type),
+        max_attempts=4,
+    )
+    db.add(run)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "EVALUATION_ALREADY_RUNNING",
+                "message": "同一评测类型已有运行中的任务",
+            },
+        ) from exc
+    await db.refresh(run)
+    try:
+        await enqueue_job(
+            "admin_evaluation",
+            {"evaluation_run_id": run.id},
+            job_id=f"evaluation:{run.id}",
+        )
+    except Exception as exc:
+        await db.refresh(run)
+        transition_evaluation_run(
+            run,
+            "failed",
+            error_code="EVALUATION_QUEUE_UNAVAILABLE",
+            error_message="评测任务未能进入后台队列，请检查 Redis 和 Worker。",
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "EVALUATION_QUEUE_UNAVAILABLE",
+                "message": "评测任务未能进入后台队列，请稍后重试",
+            },
+        ) from exc
+    return _evaluation_projection(run)
+
+
+@router.get("/evaluations")
+async def list_evaluations(
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+):
+    rows = (
+        await db.execute(
+            select(EvaluationRun)
+            .order_by(EvaluationRun.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return {"items": [_evaluation_projection(row) for row in rows]}
+
+
+@router.get("/evaluations/{run_id}")
+async def get_evaluation(
+    run_id: str,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    run = await db.get(EvaluationRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="评测记录不存在")
+    payload = _evaluation_projection(run)
+    if run.report_path:
+        payload["report"] = load_report(run.id)
+    else:
+        payload["report"] = None
+    return payload
 
 
 @router.get("/dashboard")

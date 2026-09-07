@@ -51,6 +51,11 @@ Do not recursively read every document referenced by another document unless
 `docs/spec-v2/execution/EXECUTION_INDEX.md` explicitly requires it. Do not rely on a referenced path
 unless it actually exists in the current branch.
 
+For fast code navigation, consult `docs/architecture/CODE_MAP.md` when the target
+feature has an entry there. Start from the documented entrypoint and follow the
+actual imports/calls only; do not recursively inspect the whole repository unless
+the call chain or a failing test demonstrates an impact outside the initial boundary.
+
 ## V1 product boundary
 
 The Project product surface is intentionally limited to:
@@ -494,6 +499,11 @@ Commit
 
 Phase regression
 = broader regression after all Blocks in the Phase are complete
+
+For a targeted change, run the smallest affected test set first. Database migration
+and schema checks are required only when the ORM/schema boundary changes. A full
+backend/frontend regression is a final Block or Phase acceptance check, not a check
+after every file edit; record why a broader suite was necessary when one is run.
 ```
 
 ## Git 提交与远程推送规范
