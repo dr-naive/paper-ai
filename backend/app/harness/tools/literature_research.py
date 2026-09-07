@@ -598,7 +598,12 @@ def make_project_tools(db: AsyncSession, project_id: str, user_id: str) -> list[
                 "project_id": _pid, "arxiv_id": arxiv_id, "source_url": source_url,
                 "role": role, "tags": import_item["tags"], "notes": import_item["notes"],
                 "reading_priority": import_item["reading_priority"],
-                "initial_counts": {"original_filename": f"arxiv-{arxiv_id}.pdf", "remote_source": "arxiv"},
+                "initial_counts": {
+                    "original_filename": f"arxiv-{arxiv_id}.pdf",
+                    "remote_source": "arxiv",
+                    "project_id": _pid,
+                    "project_only": True,
+                },
             }, job_id=task.task_id)
         except Exception:
             update_task(task.task_id, status="failed", progress=0, message="导入任务入队失败")

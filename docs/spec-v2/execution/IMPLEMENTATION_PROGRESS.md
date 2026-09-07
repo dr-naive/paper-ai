@@ -2,6 +2,104 @@
 
 Status: COMPLETE
 
+## Current Maintenance Block — PAPER-BOUNDARY-1
+
+Status: COMPLETE
+
+Baseline commit: `8537c05`（`接入管理员测评与历史记录`）。
+
+目标：修复项目论文误入独立阅读、PDF 提取文本包含 NUL 导致 PostgreSQL 入库失败、
+失败导入无法删除三个问题。只复用现有上传服务、Paper Worker、Redis 任务状态、向量
+清理和前端 Reader 边界；不新增第二套处理流程。
+
+Target files:
+
+- `backend/app/models/paper.py`
+- `backend/alembic/versions/0011_paper_scope.py`
+- `backend/app/infrastructure/db/migrations.py`
+- `backend/app/api/papers.py`
+- `backend/app/services/paper_files.py`
+- `backend/app/services/paper_upload.py`
+- `backend/app/services/paper_core_processing.py`
+- `backend/app/worker.py`
+- `backend/app/harness/tools/literature_research.py`
+- `backend/tests/test_database_migrations.py`
+- `backend/tests/test_paper_processing_services.py`
+- `backend/tests/test_paper_retry.py`
+- `backend/tests/test_paper_scope.py`
+- `backend/tests/test_paper_router_structure.py`
+- `frontend/src/api/paper.ts`
+- `frontend/src/components/PaperUploadModal.vue`
+- `frontend/src/components/PaperUploadModal.spec.ts`
+- `frontend/src/views/PaperList.vue`
+- `docs/API.md`
+- `docs/architecture/CODE_MAP.md`
+- `docs/spec-v2/execution/EXECUTION_INDEX.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PLAN.md`
+
+Database changes: 新增 `papers.is_project_only`，使用 Alembic `0011_paper_scope`，
+不可为空且服务端默认 `false`；不修改或删除历史字段，旧论文保持独立阅读可见。
+
+API changes: `POST /api/v1/papers/upload` 新增可选 `project_id` 表单字段；新增
+`DELETE /api/v1/papers/tasks/{task_id}`，仅允许当前用户删除失败导入任务；任务列表
+增加 `project_only` 和 `delete_available` 展示字段。旧上传调用无需新增字段即可继续工作。
+
+End commit: 本次本地提交（具体哈希以当前 Git HEAD 为准）；未执行远程推送。
+
+Actual changes:
+
+- `Paper` 新增 `is_project_only`；项目本地上传通过可选 `project_id` 表单字段传入项目
+  范围，项目 arXiv 导入也沿现有 Worker payload 标记为项目专属。独立论文列表增加
+  `is_project_only=false` 边界；历史论文由迁移默认值保持可见，已有独立论文加入项目
+  时不会被改写范围。
+- 现有 Redis 上传去重锁增加业务范围维度，同一用户的项目上传和独立上传不会互相复用
+  任务。
+- 新增兼容迁移 `0011_paper_scope`，仅向 `papers` 添加非空、默认 `false` 的字段；
+  现有数据库已从 `0010_eval_active_guard` 升级，旧论文数据未删除或改写。
+- PDF 提取、分页内容、解析器输出、Paper/Section/DocumentElement 数据和索引输入均
+  经过 NUL 清洗，覆盖 Worker 初次处理、恢复和重试路径，避免报告中的
+  `asyncpg CharacterNotInRepertoireError`。
+- 新增 `DELETE /api/v1/papers/tasks/{task_id}`，仅允许删除当前用户的失败导入，清理
+  既有 Knowledge Base、部分 Paper、PDF、文件任务和 Redis 任务；进行中任务返回 `409`。
+  PaperList 和上传弹窗均提供“删除失败导入”入口。
+- 更新 API 文档、代码导航和本 Block 的执行边界；没有新建论文处理流程、第二套队列、
+  第二套 Reader 或新的前端主入口。
+
+Validation:
+
+- 定向后端测试：`27 passed`。
+- 相关项目/Reading/Writing/Discover/Worker 回归：`83 passed`。
+- 后端完整回归：`380 passed`。
+- 前端相关组件测试：`5 passed`；前端全量 Vitest：`20 个测试文件，82 passed`。
+- `npm run typecheck`：通过；`npm run lint`：通过；`npm run build`：通过。
+- Alembic 当前版本：`0011_paper_scope (head)`；schema preflight：
+  `compatible: true`，无缺失表、列或约束。
+- `git diff --check`、新增/影响服务的编译检查和新增服务/测试文件 Ruff 检查：通过；
+  `papers.py`、`worker.py` 等既有文件仍有原先的 Ruff 导入顺序/未使用变量告警，本 Block
+  未扩大范围处理。
+- Docker 中 backend、worker、frontend 已按新镜像重建并启动，健康检查返回
+  `status=healthy、database=healthy、redis=healthy、worker=healthy`。
+
+Manual acceptance:
+
+- 已通过代码级调用链和测试确认：项目上传携带项目 ID，独立查询排除项目专属 Paper，
+  独立上传接口无需新增字段；失败任务删除会清理文件、任务和向量入口。
+- 未使用真实用户在浏览器中完成一次真实 PDF 上传；因此真实解析成功率和具体文件兼容性
+  仍需在当前部署中上传一篇真实 PDF 做最终验收。
+
+Deviations and remaining risks:
+
+- 迁移无法可靠推断迁移前已成功上传的论文是“项目内新建”还是“独立论文后加入项目”，
+  因此历史行统一默认为独立论文，避免误隐藏用户已有资产；新上传从本版本开始准确记录。
+- 若外部 arXiv 下载、LLM 或向量服务本身不可用，仍会按既有 Worker 错误/重试机制失败；
+  本 Block 只修复文本编码和范围归属，不替代外部服务配置验证。
+- 当前失败导入清理入口集中在上传弹窗和独立论文列表；项目 arXiv 任务的项目镜像也会
+  随删除接口清理，未新增独立的项目失败任务页面。
+
+Exact next action: 使用真实账号在项目论文页上传一篇 PDF，确认项目论文页可见、独立阅读
+页不可见、解析完成后可打开项目 Reader；再用一篇会触发失败的文件确认删除入口。若需要
+同步 GitHub，先向用户展示中文提交/推送说明并等待明确确认。
+
 ## Current Maintenance Block — ADMIN-EVAL-1
 
 Status: COMPLETE

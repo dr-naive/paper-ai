@@ -375,6 +375,13 @@ async def handle_paper_process(job: WorkerJob) -> None:
     from app.api.papers import _schedule_process_paper
 
     payload = job.payload
+    initial_counts = dict(payload.get("initial_counts") or {})
+    project_only = bool(
+        payload.get("project_only")
+        or initial_counts.get("project_only")
+        or initial_counts.get("project_id")
+    )
+    initial_counts.setdefault("project_only", project_only)
     await _schedule_process_paper(
         str(payload["paper_id"]),
         str(payload["file_path"]),
@@ -382,8 +389,9 @@ async def handle_paper_process(job: WorkerJob) -> None:
         payload.get("raw_text"),
         dict(payload.get("initial_timings") or {}),
         float(payload.get("pipeline_started_at") or time.perf_counter()),
-        dict(payload.get("initial_counts") or {}),
+        initial_counts,
         bool(payload.get("media_only")),
+        project_only,
     )
     if payload.get("media_only"):
         return
@@ -445,6 +453,8 @@ async def handle_arxiv_import(job: WorkerJob) -> None:
     await update_import("processing")
     file_path = str(payload.get("file_path") or "")
     initial_counts = dict(payload.get("initial_counts") or {})
+    initial_counts.setdefault("project_id", project_id)
+    initial_counts["project_only"] = True
     if not file_path:
         update_task(
             job.id,
@@ -480,6 +490,7 @@ async def handle_arxiv_import(job: WorkerJob) -> None:
     await _schedule_process_paper(
         paper_id, file_path, str(payload["user_id"]), None,
         {}, time.perf_counter(), initial_counts,
+        False, True,
     )
     async with AsyncSessionLocal() as db:
         paper = await db.get(Paper, paper_id)

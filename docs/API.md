@@ -66,9 +66,10 @@ Router：`backend/app/api/papers.py`
 | Method | Path | 用途 |
 | --- | --- | --- |
 | GET | `/api/v1/papers/` | 获取论文列表，支持分页、状态、搜索；同时返回当前用户尚未生成 Paper 记录的 `import_tasks` |
-| POST | `/api/v1/papers/upload` | 上传 PDF 论文 |
+| POST | `/api/v1/papers/upload` | 上传 PDF 论文；可选提交 `project_id`，项目内新建论文不会进入独立阅读 |
 | GET | `/api/v1/papers/tasks/{task_id}` | 获取后台处理任务状态 |
 | POST | `/api/v1/papers/tasks/{task_id}/retry` | 重试当前用户失败的导入任务，或仅重试已可用论文失败的图表增强阶段 |
+| DELETE | `/api/v1/papers/tasks/{task_id}` | 删除当前用户失败的导入任务、残留 PDF、向量数据和部分论文记录 |
 | GET | `/api/v1/papers/{paper_id}` | 获取论文详情 |
 | GET | `/api/v1/papers/{paper_id}/pdf` | 获取论文 PDF 文件 |
 | POST | `/api/v1/papers/{paper_id}/pdf/telemetry` | 上报本次 PDF 阅读首屏加载耗时（仅写日志，不持久化） |
@@ -83,6 +84,16 @@ Router：`backend/app/api/papers.py`
 | GET | `/api/v1/papers/{paper_id}/summary` | 获取结构化摘要 |
 
 前端主要调用文件：`frontend/src/api/paper.ts`
+
+`POST /api/v1/papers/upload` 保持原有 `file` 表单字段和响应结构；项目上传时额外提交
+`project_id`，服务端校验当前用户拥有该 Project，并将新建 Paper 标记为项目专属。旧
+论文加入 Project 只新增 `ProjectPaper` 关系，不会被改成项目专属。`GET /api/v1/papers/`
+的 `items` 不包含项目专属 Paper；处理中/失败的 `import_tasks` 额外返回
+`project_only` 与 `delete_available`。
+
+失败导入删除接口只接受 `failed` 状态，进行中任务返回 `409`，无权任务返回 `404`。
+删除动作复用既有知识库清理和任务存储清理；删除成功后返回
+`{"message":"失败导入已删除"}`。
 
 阅读状态相关接口若在前后端存在契约差异，应以当前分支重新验证后记录到 `docs/TODO_OR_RISKS.md`；不要把未重新验证的历史风险继续固化在 API Contract 中。
 

@@ -49,6 +49,8 @@ class Paper(Base):
     reading_status = Column(String(20), default='unread') # 阅读状态
     reading_progress = Column(Float, default=0) # 阅读进度
     is_favorite = Column(Boolean, default=False) # 是否收藏
+    # 项目内新建的论文不应自动出现在独立阅读库；历史论文默认仍为独立论文。
+    is_project_only = Column(Boolean, nullable=False, default=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow) # 上传时间
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow) # 更新时间
     

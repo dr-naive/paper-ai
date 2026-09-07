@@ -28,15 +28,16 @@
       处理完成后，论文会自动加入当前项目「{{ projectTitle || '当前项目' }}」。
     </p>
 
-    <div v-if="uploading || attachError" class="upload-progress" role="status" aria-live="polite">
+    <div v-if="uploading || attachError || taskFailed" class="upload-progress" role="status" aria-live="polite">
       <div class="progress-bar">
         <div class="progress-fill" :style="{ transform: `scaleX(${progressPercent / 100})` }"></div>
       </div>
       <p class="progress-text">{{ attachError || progressText }}</p>
       <a-button v-if="attachError" type="primary" size="small" @click="retryAttach">重试加入项目</a-button>
+      <a-button v-if="taskFailed" status="danger" size="small" @click="deleteFailedImport">删除失败导入</a-button>
     </div>
 
-    <div v-if="!uploading && !attachError && selectedFile" class="upload-actions">
+    <div v-if="!uploading && !attachError && !taskFailed && selectedFile" class="upload-actions">
       <a-button type="primary" @click="handleUpload" :disabled="!selectedFile">开始上传</a-button>
     </div>
   </a-modal>
@@ -48,7 +49,7 @@ import { Message } from '@arco-design/web-vue'
 import type { FileItem } from '@arco-design/web-vue'
 import type { RequestOption, UploadRequest } from '@arco-design/web-vue/es/upload/interfaces'
 import { addProjectPaper } from '@/api/projects'
-import { getTaskStatus, type PaperTaskStatusResponse, uploadPaper, type PaperUploadResponse } from '@/api/paper'
+import { deletePaperTask, getTaskStatus, type PaperTaskStatusResponse, uploadPaper, type PaperUploadResponse } from '@/api/paper'
 
 const props = withDefaults(defineProps<{
   visible: boolean
@@ -69,6 +70,7 @@ const uploading = ref(false)
 const progressPercent = ref(0)
 const progressText = ref('')
 const attachError = ref('')
+const taskFailed = ref(false)
 const activeTaskId = ref('')
 const activePaperId = ref('')
 let pollInterval: number | null = null
@@ -88,6 +90,7 @@ const reset = () => {
   progressPercent.value = 0
   progressText.value = ''
   attachError.value = ''
+  taskFailed.value = false
   activeTaskId.value = ''
   activePaperId.value = ''
 }
@@ -109,6 +112,7 @@ const handleFileChange = (fileList: FileItem[]) => {
   const latestFile = fileList[fileList.length - 1]
   selectedFile.value = latestFile?.file || null
   attachError.value = ''
+  taskFailed.value = false
 }
 
 const finishUpload = async () => {
@@ -154,6 +158,7 @@ const pollTaskStatus = async () => {
     } else if (response.status === 'failed') {
       stopPolling()
       uploading.value = false
+      taskFailed.value = true
       progressText.value = response.message || '处理失败，请重新上传'
       Message.error(progressText.value)
     }
@@ -174,10 +179,14 @@ const handleUpload = async () => {
 
   uploading.value = true
   attachError.value = ''
+  taskFailed.value = false
   progressPercent.value = 0
   progressText.value = '正在上传文件...'
   try {
-    const response: PaperUploadResponse = await uploadPaper(selectedFile.value)
+    const response: PaperUploadResponse = await uploadPaper(
+      selectedFile.value,
+      props.projectId || undefined,
+    )
     const taskId = response.task_id || response.taskId || ''
     const paperId = response.paper_id || response.paperId || ''
     if (!taskId || !paperId) throw new Error('未能获取论文处理任务')
@@ -203,6 +212,18 @@ const retryAttach = () => {
   progressPercent.value = 100
   progressText.value = '正在加入当前项目...'
   void finishUpload()
+}
+
+const deleteFailedImport = async () => {
+  if (!activeTaskId.value) return
+  try {
+    await deletePaperTask(activeTaskId.value)
+    Message.success('失败导入已删除')
+    reset()
+    emit('update:visible', false)
+  } catch (error: any) {
+    Message.error(error?.response?.data?.detail || '删除失败导入失败，请稍后再试')
+  }
 }
 
 onUnmounted(stopPolling)

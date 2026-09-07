@@ -126,6 +126,13 @@
                     :disabled="!task.retry_available"
                     @click="retryImport(task)"
                   >{{ task.retry_available ? '重试导入' : '请重新上传' }}</a-button>
+                  <a-button
+                    v-if="task.status === 'failed' && task.delete_available !== false"
+                    size="small"
+                    status="danger"
+                    :loading="deletingTasks[task.task_id]"
+                    @click="deleteImport(task)"
+                  >删除失败导入</a-button>
                 </div>
               </article>
               <article
@@ -218,6 +225,7 @@ import {
   getRecentMessages,
   updateReadingStatus,
   retryPaperTask,
+  deletePaperTask,
 } from '@/api/paper'
 import type { PaperImportTask } from '@/api/paper'
 import dayjs from 'dayjs'
@@ -232,6 +240,7 @@ const router = useRouter()
 const papers = ref<any[]>([])
 const importTasks = ref<PaperImportTask[]>([])
 const retryingTasks = ref<Record<string, boolean>>({})
+const deletingTasks = ref<Record<string, boolean>>({})
 const recentMessages = ref<any[]>([])
 const searchText = ref('')
 const statusFilter = ref('all')
@@ -414,6 +423,28 @@ const retryTask = async (taskId: string, successMessage: string) => {
 const retryImport = (task: PaperImportTask) => retryTask(task.task_id, '导入重试已排队')
 const retryMediaEnhancement = (paper: any) => retryTask(`task_${paper.id}`, '图表增强重试已排队')
 
+const deleteImport = (task: PaperImportTask) => {
+  Modal.warning({
+    title: '确认删除失败导入',
+    content: '将删除失败记录和已保存的 PDF 文件，确定继续吗？',
+    okText: '删除',
+    cancelText: '取消',
+    onOk: async () => {
+      deletingTasks.value = { ...deletingTasks.value, [task.task_id]: true }
+      try {
+        const result = await deletePaperTask(task.task_id)
+        Message.success(result.message || '失败导入已删除')
+        await loadPapers(true)
+      } catch (error: any) {
+        const detail = error?.response?.data?.detail
+        Message.error(typeof detail === 'string' ? detail : '删除失败导入失败，请稍后再试')
+      } finally {
+        deletingTasks.value = { ...deletingTasks.value, [task.task_id]: false }
+      }
+    },
+  })
+}
+
 
 onUnmounted(() => {
   if (mediaPollInterval) {
@@ -434,6 +465,7 @@ const handleDelete = (paperId: string) => {
         loadPapers()
       } catch (error) {
         console.error('删除失败', error)
+        Message.error('删除失败，请稍后再试')
       }
     }
   })

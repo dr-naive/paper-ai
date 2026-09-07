@@ -26,6 +26,51 @@ Phase 25 — Agent Evaluation & Observability.
 
 ## Current Implementation Block
 
+PAPER-BOUNDARY-1 — 项目论文隔离、解析容错与失败导入清理。
+
+PAPER-BOUNDARY-1 status: COMPLETE。该维护块只适配现有论文上传、解析、Redis
+Worker、任务状态和向量清理能力，不新增第二套论文处理流程；目标是让项目内新建论文
+与独立阅读范围分离，清理 PDF 文本中的 PostgreSQL 非法 NUL 字符，并允许用户删除
+失败导入留下的任务和文件。
+
+## PAPER-BOUNDARY-1 Reading Boundary
+
+- `backend/app/api/papers.py`
+- `backend/app/models/paper.py`
+- `backend/app/models/project.py`
+- `backend/app/services/paper_files.py`
+- `backend/app/services/paper_upload.py`
+- `backend/app/services/paper_core_processing.py`
+- `backend/app/harness/tools/literature_research.py`
+- `backend/app/worker.py`
+- `backend/app/utils/task_manager.py`
+- `backend/alembic/versions/0011_paper_scope.py`
+- `backend/app/infrastructure/db/migrations.py`
+- `backend/tests/test_paper_processing_services.py`
+- `backend/tests/test_paper_retry.py`
+- `backend/tests/test_paper_scope.py`
+- `backend/tests/test_paper_router_structure.py`
+- `backend/tests/test_database_migrations.py`
+- `frontend/src/api/paper.ts`
+- `frontend/src/components/PaperUploadModal.vue`
+- `frontend/src/components/PaperUploadModal.spec.ts`
+- `frontend/src/views/PaperList.vue`
+- `frontend/src/views/ProjectPapers.vue`
+- `docs/API.md`
+- `docs/architecture/CODE_MAP.md`
+- `docs/spec-v2/execution/IMPLEMENTATION_PROGRESS.md`
+
+Acceptance boundary:
+
+- `ProjectPapers` 上传将项目标识传入现有上传接口；新建论文标记为项目专属，不进入
+  独立论文列表；已有独立论文加入项目时不改变其独立范围。
+- PyMuPDF、pdfplumber、解析器输出、数据库字段和索引输入统一去除 NUL 字符；历史论文
+  通过兼容迁移默认保持独立论文语义。
+- 失败导入可按所有权删除持久化任务、残留 PDF、向量数据和可能存在的部分论文记录；
+  进行中的任务不能被误删，重试仍复用现有 Worker 队列。
+- 旧 `/api/v1/papers/upload`、独立 Reading、项目 Papers、Discover/项目 arXiv 导入和
+  现有 Redis Worker 调用保持兼容。
+
 ADMIN-EVAL-1 — 管理员测评启动、结果渲染与历史记录。
 
 ADMIN-EVAL-1 status: COMPLETE。复用现有评测脚本、Redis Queue 和 Worker，新增

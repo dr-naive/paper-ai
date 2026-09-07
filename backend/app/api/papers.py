@@ -1,5 +1,5 @@
 """论文 API 模块"""
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header, Query, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Header, Query, BackgroundTasks
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
@@ -26,6 +26,7 @@ from app.models.paper import (
     TableCell,
     TableStructure,
 )
+from app.models.project import ResearchProject
 from app.api.auth import decode_token
 from app.agent.paper_parser.graph import run_paper_parser
 from app.rag.knowledge_base import get_knowledge_base, SmartChunker
@@ -34,7 +35,7 @@ from app.config import settings
 from app.job_queue import enqueue_job
 from app.redis_client import get_async_redis
 from app.parsers.multimedia_extractor import MultimediaExtractor
-from app.utils.task_manager import TaskStatus, create_task, get_task, list_tasks, update_task
+from app.utils.task_manager import TaskStatus, create_task, get_task, list_tasks, remove_task, update_task
 from app.utils.background_tasks import spawn_background_task
 from app.services.paper_files import (
     extract_pdf_page_contents as _extract_pdf_page_contents,
@@ -45,6 +46,7 @@ from app.services.paper_files import (
     parse_byte_range as _parse_byte_range,
     save_validated_pdf as _save_validated_pdf,
     read_file_range as _read_file_range,
+    sanitize_text as _sanitize_text,
 )
 from app.services.paper_indexing import (
     build_complete_text_chunks as _build_complete_text_chunks,
@@ -181,7 +183,12 @@ async def get_papers(
 ):
     user_id = await get_current_user_id(authorization, db)
     
-    query = select(Paper).filter(Paper.user_id == user_id)
+    # 独立阅读只展示用户独立上传/导入的论文；从项目内新建的论文仍由
+    # Project Papers 管理。历史记录通过迁移默认 is_project_only=false，保持兼容。
+    query = select(Paper).filter(
+        Paper.user_id == user_id,
+        Paper.is_project_only.is_(False),
+    )
     
     if status:
         query = query.filter(Paper.reading_status == status)
@@ -211,6 +218,8 @@ async def get_papers(
             "status": task.status.value,
             "message": task.message or "等待处理",
             "retry_available": task.status == TaskStatus.FAILED and os.path.exists(file_path),
+            "project_only": bool(counts.get("project_only") or counts.get("project_id")),
+            "delete_available": task.status == TaskStatus.FAILED,
             "updated_at": task.updated_at.isoformat(),
         })
     
@@ -615,6 +624,7 @@ async def _process_paper_async(
     pipeline_started_at: Optional[float] = None,
     initial_counts: Optional[Dict[str, Any]] = None,
     media_only: bool = False,
+    project_only: bool = False,
 ):
     """异步处理论文的核心逻辑"""
     task_id = f"task_{paper_id}"
@@ -642,6 +652,8 @@ async def _process_paper_async(
         )
 
     try:
+        if raw_text is not None:
+            raw_text = _sanitize_text(raw_text)
         if media_only:
             async with AsyncSessionLocal() as db:
                 paper = await db.scalar(
@@ -650,7 +662,7 @@ async def _process_paper_async(
                 if paper is None:
                     raise RuntimeError("媒体重试目标论文不存在")
                 file_path = str(paper.pdf_path or file_path)
-                raw_text = str(paper.full_text or "")
+                raw_text = _sanitize_text(paper.full_text)
                 section_rows = (
                     await db.execute(
                         select(Section)
@@ -732,6 +744,7 @@ async def _process_paper_async(
                 file_path=file_path,
                 raw_text=raw_text,
                 structure=structure,
+                is_project_only=project_only,
             )
             finish_stage("core_database_persistence", core_persistence_started_at)
 
@@ -1314,6 +1327,7 @@ async def _schedule_process_paper(
     pipeline_started_at: Optional[float] = None,
     initial_counts: Optional[Dict[str, Any]] = None,
     media_only: bool = False,
+    project_only: bool = False,
 ):
     """安排论文处理任务在后台执行"""
     await _process_paper_async(
@@ -1325,12 +1339,14 @@ async def _schedule_process_paper(
         pipeline_started_at,
         initial_counts,
         media_only,
+        project_only,
     )
 
 
 @router.post("/upload")
 async def upload_paper(
     file: UploadFile = File(...), 
+    project_id: Optional[str] = Form(None),
     authorization: str = Header(None), 
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = None
@@ -1342,6 +1358,16 @@ async def upload_paper(
     
     user_id = await get_current_user_id(authorization, db)
     logger.info(f"👤 用户ID: {user_id}")
+
+    if project_id:
+        project = await db.scalar(
+            select(ResearchProject).where(
+                ResearchProject.id == project_id,
+                ResearchProject.user_id == user_id,
+            )
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="项目不存在或无访问权限")
     
     paper_id = str(uuid.uuid4())
     original_filename = file.filename
@@ -1363,10 +1389,18 @@ async def upload_paper(
 
     # An atomic Redis key prevents repeated clicks or concurrent containers from
     # scheduling the same PDF for the same user more than once.
-    upload_lock_key = f"paperai:upload-dedupe:{user_id}:{upload_result.file_sha256}"
+    # 项目上传和独立上传即使内容相同，也属于两个独立业务范围，不能共享去重锁。
+    upload_scope = project_id or "standalone"
+    upload_lock_key = (
+        f"paperai:upload-dedupe:{user_id}:{upload_scope}:{upload_result.file_sha256}"
+    )
     try:
         redis_client = get_async_redis()
-        lock_value = json.dumps({"task_id": f"task_{paper_id}", "paper_id": paper_id})
+        lock_value = json.dumps({
+            "task_id": f"task_{paper_id}",
+            "paper_id": paper_id,
+            "project_id": project_id,
+        })
         claimed = await redis_client.set(upload_lock_key, lock_value, nx=True, ex=3600)
         if not claimed:
             existing_raw = await redis_client.get(upload_lock_key)
@@ -1387,7 +1421,11 @@ async def upload_paper(
     
     # 创建任务
     task = create_task(paper_id, user_id)
-    initial_counts = {"original_filename": original_filename}
+    initial_counts = {
+        "original_filename": original_filename,
+        "project_id": project_id,
+        "project_only": bool(project_id),
+    }
     update_task(
         task.task_id,
         details=_build_timing_details(
@@ -1410,6 +1448,7 @@ async def upload_paper(
                 "initial_timings": initial_timings,
                 "pipeline_started_at": pipeline_started_at,
                 "initial_counts": initial_counts,
+                "project_only": bool(project_id),
             },
             job_id=task.task_id,
         )
@@ -1456,6 +1495,8 @@ async def _recover_one_paper_task(task) -> None:
         return
 
     details["recovery_count"] = recovery_count + 1
+    counts = dict(details.get("counts") or {})
+    project_only = bool(counts.get("project_only") or counts.get("project_id"))
     update_task(
         task.task_id,
         status="processing",
@@ -1482,7 +1523,13 @@ async def _recover_one_paper_task(task) -> None:
         file_path,
         task.user_id,
         raw_text,
-        initial_counts={"text_extraction_method": extraction_method, "recovered": True},
+        initial_counts={
+            "text_extraction_method": extraction_method,
+            "recovered": True,
+            "project_id": counts.get("project_id"),
+            "project_only": project_only,
+        },
+        project_only=project_only,
     )
 
 
@@ -1589,6 +1636,10 @@ async def retry_paper_task(
             "user_id": user_id,
             "raw_text": None,
             "initial_counts": dict(details.get("counts") or {}),
+            "project_only": bool(
+                (details.get("counts") or {}).get("project_only")
+                or (details.get("counts") or {}).get("project_id")
+            ),
         }
         job_type = "paper_process"
         response_message = "导入重试已排队"
@@ -1640,6 +1691,58 @@ async def get_task_status(task_id: str, authorization: str = Header(None)):
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat()
     }
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_failed_import_task(
+    task_id: str,
+    authorization: str = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """删除失败的导入任务、残留文件和可能已经写入的部分论文记录。"""
+    user_id = await get_current_user_id(authorization, db)
+    task = get_task(task_id)
+    if task is None or task.user_id != user_id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.status != TaskStatus.FAILED:
+        raise HTTPException(status_code=409, detail="只有失败的导入任务可以删除")
+
+    paper = await db.scalar(
+        select(Paper).where(Paper.id == task.paper_id, Paper.user_id == user_id)
+    )
+    details = dict(task.details or {})
+    counts = dict(details.get("counts") or {})
+    project_id = str(counts.get("project_id") or "")
+    file_path = str(getattr(paper, "pdf_path", "") or "") if paper else ""
+    if not file_path:
+        file_path = os.path.join(settings.FILE_STORAGE_PATH, f"{task.paper_id}.pdf")
+
+    # 清理向量库时即使正文事务未提交也要执行，避免失败重试/删除后留下孤立向量。
+    await get_knowledge_base().delete_paper(task.paper_id)
+    if paper is not None:
+        await db.delete(paper)
+
+    # arXiv 项目导入会把任务镜像写入项目 preferences；删除任务时一并移除。
+    if project_id:
+        project = await db.scalar(
+            select(ResearchProject).where(
+                ResearchProject.id == project_id,
+                ResearchProject.user_id == user_id,
+            )
+        )
+        if project is not None:
+            preferences = dict(project.preferences or {})
+            imports = [dict(item) for item in preferences.get("paper_imports") or []]
+            remaining = [item for item in imports if item.get("task_id") != task_id]
+            if len(remaining) != len(imports):
+                preferences["paper_imports"] = remaining
+                project.preferences = preferences
+
+    await db.commit()
+    if file_path and os.path.exists(file_path):
+        os.remove(file_path)
+    remove_task(task_id)
+    return {"message": "失败导入已删除"}
 
 
 @router.delete("/{paper_id}")

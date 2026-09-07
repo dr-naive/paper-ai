@@ -72,7 +72,47 @@ AdminDashboard.vue
 运行时指标；需要增加评测类型时，只新增一个受控 Runner 适配，并复用同一个
 `EvaluationRun → WorkerJob → Worker` 生命周期。
 
-## 五、按影响范围选择测试
+## 五、论文上传、解析与项目范围真实调用链
+
+```text
+ProjectPapers.vue / PaperList.vue
+  → PaperUploadModal.vue
+  → api/paper.ts: uploadPaper(file, projectId?)
+  → POST /api/v1/papers/upload
+  → app/api/papers.py: upload_paper
+  → create_task + enqueue_job("paper_process")
+  → app/worker.py: handle_paper_process
+  → _schedule_process_paper
+  → PaperUploadService.extract_text
+  → PaperCoreProcessingService.extract_structure/persist_core/build_text_index
+  → Paper / Section / DocumentElement / 既有知识库
+```
+
+项目上传会在 `Paper.is_project_only` 保存为项目专属；独立阅读的
+`GET /api/v1/papers/` 只读取 `false`，而 `ProjectService.list_project_papers` 仍按
+`ProjectPaper` 关系读取项目论文。已有独立论文通过加入项目接口建立关系时不会改变
+`is_project_only`，因此可以同时出现在两个业务范围。
+
+解析文本的清洗边界：`paper_files.extract_pdf_text` 和分页文本先清洗，
+`PaperUploadService`、`PaperCoreProcessingService` 在解析结果、数据库字段和索引输入
+处再次清洗，兼容 Worker 恢复、重试和直接调用路径。
+
+失败导入清理链：
+
+```text
+PaperList.vue / PaperUploadModal.vue
+  → DELETE /api/v1/papers/tasks/{task_id}
+  → 校验当前用户 + FAILED 状态
+  → 既有 KnowledgeBase.delete_paper
+  → 删除部分 Paper（如存在）+ PDF
+  → task_manager.remove_task（文件 + Redis）
+```
+
+对应文件：`backend/app/api/papers.py`、`backend/app/services/paper_files.py`、
+`backend/app/services/paper_core_processing.py`、`backend/app/worker.py`、
+`frontend/src/components/PaperUploadModal.vue`、`frontend/src/views/PaperList.vue`。
+
+## 六、按影响范围选择测试
 
 | 改动范围 | 先跑的测试 | 额外检查 |
 | --- | --- | --- |

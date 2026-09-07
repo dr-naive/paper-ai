@@ -61,7 +61,7 @@ def test_runtime_head_points_to_evidence_verification_revision():
 def test_runtime_head_points_to_execution_io_revision():
     revision = BACKEND_DIR / "alembic" / "versions" / "0006_execution_io_add_execution_input_and_result.py"
     source = revision.read_text(encoding="utf-8")
-    assert ALEMBIC_HEAD_REVISION == "0010_eval_active_guard"
+    assert ALEMBIC_HEAD_REVISION == "0011_paper_scope"
     assert 'revision: str = "0006_execution_io"' in source
     assert 'down_revision: Union[str, None] = "0005_evidence_verification"' in source
     assert '"input_payload"' in source
@@ -97,6 +97,18 @@ def test_admin_evaluation_active_guard_is_a_follow_up_migration():
     assert 'down_revision: Union[str, None] = "0009_admin_evaluation_runs"' in source
     assert 'unique=True' in source
     assert "status IN ('queued', 'running', 'retrying')" in source
+
+
+def test_paper_scope_migration_is_additive_and_defaults_old_papers_to_standalone():
+    revision = BACKEND_DIR / "alembic" / "versions" / "0011_paper_scope.py"
+    source = revision.read_text(encoding="utf-8")
+    assert ALEMBIC_HEAD_REVISION == "0011_paper_scope"
+    assert 'revision: str = "0011_paper_scope"' in source
+    assert 'down_revision: Union[str, None] = "0010_eval_active_guard"' in source
+    assert 'op.add_column(' in source
+    assert '"papers"' in source and '"is_project_only"' in source
+    assert "nullable=False" in source
+    assert "server_default=sa.false()" in source
 
 
 def test_schema_check_loads_every_current_model_family():

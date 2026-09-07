@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from fastapi import UploadFile
 
-from app.services.paper_files import extract_pdf_text, save_validated_pdf
+from app.services.paper_files import extract_pdf_text, sanitize_text, save_validated_pdf
 
 
 class PaperTextExtractionError(RuntimeError):
@@ -80,7 +80,7 @@ class PaperUploadService:
             raise PaperTextMissingError("无法从 PDF 中提取文字")
 
         return PaperTextResult(
-            raw_text=raw_text,
+            raw_text=sanitize_text(raw_text),
             extraction_method=extraction_method,
             elapsed_seconds=time.perf_counter() - started_at,
         )

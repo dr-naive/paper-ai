@@ -2,6 +2,26 @@
 
 Status: COMPLETE
 
+## Phase 25 Maintenance Block — 项目论文边界、解析容错与失败导入清理
+
+状态：COMPLETE。基线提交：`8537c05`（管理员测评与历史记录）。本 Block 沿现有
+`PaperUploadModal → /api/v1/papers/upload → paper_process → Worker →
+PaperCoreProcessingService` 调用链做最小改造，不复制论文处理、任务队列或向量索引
+基础设施。
+
+实现边界：
+
+- 在 `Paper` 增加兼容的 `is_project_only` 字段；旧数据通过 `false` 默认值继续出现在
+  独立阅读中，项目上传和项目 arXiv 导入的新论文设为 `true`。
+- 上传接口新增可选 `project_id` 表单字段并校验项目所有权；独立上传请求保持原参数
+  和返回结构。
+- 在 PDF 提取、解析结果持久化和索引前清洗 NUL 字符，避免 asyncpg 的 UTF8 入库错误。
+- 新增失败导入删除接口和前端操作入口；删除复用既有向量清理、任务文件/Redis 清理和
+  数据库所有权校验，Worker retry 继续走原队列。
+
+验收：迁移检查、失败删除、NUL 清洗、项目/独立上传边界和前端失败状态操作定向测试；
+后端完整回归、前端全量测试、类型检查、Lint、生产构建和迁移/schema 检查均已通过。
+
 ## Phase 25 Maintenance Block — 管理员测评启动与历史记录
 
 状态：COMPLETE（代码、迁移、定向测试、完整回归和前端生产构建已通过；真实外部

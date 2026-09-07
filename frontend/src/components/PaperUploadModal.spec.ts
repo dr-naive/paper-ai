@@ -4,12 +4,14 @@ import PaperUploadModal from './PaperUploadModal.vue'
 
 const uploadPaper = vi.hoisted(() => vi.fn())
 const getTaskStatus = vi.hoisted(() => vi.fn())
+const deletePaperTask = vi.hoisted(() => vi.fn())
 const addProjectPaper = vi.hoisted(() => vi.fn())
 const uploadFile = vi.hoisted(() => new File(['%PDF-1.7'], 'paper.pdf', { type: 'application/pdf' }))
 
 vi.mock('@/api/paper', () => ({
   uploadPaper,
   getTaskStatus,
+  deletePaperTask,
 }))
 
 vi.mock('@/api/projects', () => ({
@@ -50,6 +52,7 @@ describe('PaperUploadModal', () => {
       progress: 100,
       message: '论文已可用',
     })
+    deletePaperTask.mockReset().mockResolvedValue({ message: '失败导入已删除' })
     addProjectPaper.mockReset().mockResolvedValue({ _action: 'created' })
   })
 
@@ -63,7 +66,7 @@ describe('PaperUploadModal', () => {
     await wrapper.get('button:not(.upload-stub)').trigger('click')
     await flushPromises()
 
-    expect(uploadPaper).toHaveBeenCalledWith(uploadFile)
+    expect(uploadPaper).toHaveBeenCalledWith(uploadFile, 'project-1')
     expect(getTaskStatus).toHaveBeenCalledWith('task-paper-1')
     expect(addProjectPaper).toHaveBeenCalledWith('project-1', { paper_id: 'paper-1' })
     expect(wrapper.emitted('uploaded')).toEqual([[{
@@ -71,5 +74,32 @@ describe('PaperUploadModal', () => {
       taskId: 'task-paper-1',
       projectId: 'project-1',
     }]])
+  })
+
+  it('allows deleting a failed import without creating a project paper', async () => {
+    getTaskStatus.mockReset().mockResolvedValue({
+      task_id: 'task-paper-1',
+      paper_id: 'paper-1',
+      status: 'failed',
+      progress: 0,
+      message: '处理失败：PDF 无法解析',
+    })
+
+    const wrapper = mount(PaperUploadModal, {
+      props: { visible: true, projectId: 'project-1' },
+      global,
+    })
+
+    await wrapper.get('.upload-stub').trigger('click')
+    await wrapper.get('button:not(.upload-stub)').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('删除失败导入')
+    await wrapper.get('.upload-progress button').trigger('click')
+    await flushPromises()
+
+    expect(deletePaperTask).toHaveBeenCalledWith('task-paper-1')
+    expect(addProjectPaper).not.toHaveBeenCalled()
+    expect(wrapper.emitted('update:visible')).toContainEqual([false])
   })
 })

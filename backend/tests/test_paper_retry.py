@@ -2,8 +2,11 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.api import papers as papers_api
-from app.utils.task_manager import TaskStatus, create_task, get_task, update_task
+from fastapi import HTTPException
+from app.utils.task_manager import TaskStatus, create_task, get_task, remove_task, update_task
 
 
 class FakeDatabase:
@@ -100,6 +103,66 @@ def test_failed_media_retry_only_queues_media_enhancement(tmp_path, monkeypatch)
     assert retried.status == TaskStatus.READY
     assert retried.details["media_status"] == "processing"
     assert "media_error" not in retried.details
+
+
+def test_failed_import_can_be_deleted_with_its_file_and_persisted_task(tmp_path, monkeypatch):
+    _configure_task_storage(tmp_path, monkeypatch)
+    paper_dir = tmp_path / "papers"
+    paper_dir.mkdir()
+    monkeypatch.setattr(papers_api.settings, "FILE_STORAGE_PATH", str(paper_dir))
+    pdf_path = paper_dir / "paper-delete.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\n")
+
+    task = create_task("paper-delete", "user-1")
+    update_task(
+        task.task_id,
+        status=TaskStatus.FAILED,
+        message="处理失败",
+        details={"counts": {"original_filename": "failed.pdf"}},
+    )
+
+    class DeleteDatabase:
+        async def scalar(self, _statement):
+            return None
+
+        async def commit(self):
+            return None
+
+    async def fake_user_id(*args, **kwargs):
+        return "user-1"
+
+    knowledge_base = FakeKnowledgeBase()
+    monkeypatch.setattr(papers_api, "get_current_user_id", fake_user_id)
+    monkeypatch.setattr(papers_api, "get_knowledge_base", lambda: knowledge_base)
+
+    result = asyncio.run(
+        papers_api.delete_failed_import_task(task.task_id, "Bearer token", DeleteDatabase())
+    )
+
+    assert result["message"] == "失败导入已删除"
+    assert knowledge_base.deleted_papers == ["paper-delete"]
+    assert not pdf_path.exists()
+    assert get_task(task.task_id) is None
+
+
+def test_processing_import_cannot_be_deleted(tmp_path, monkeypatch):
+    _configure_task_storage(tmp_path, monkeypatch)
+    task = create_task("paper-processing", "user-1")
+    update_task(task.task_id, status=TaskStatus.PROCESSING, message="处理中")
+
+    async def fake_user_id(*args, **kwargs):
+        return "user-1"
+
+    monkeypatch.setattr(papers_api, "get_current_user_id", fake_user_id)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            papers_api.delete_failed_import_task(task.task_id, "Bearer token", FakeDatabase())
+        )
+
+    assert exc.value.status_code == 409
+    assert get_task(task.task_id).status == TaskStatus.PROCESSING
+    remove_task(task.task_id)
 
 
 def test_worker_dispatches_media_retry_through_the_existing_paper_handler(monkeypatch):

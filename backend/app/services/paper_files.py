@@ -14,6 +14,16 @@ logger = logging.getLogger(__name__)
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 
+def sanitize_text(value: str | None) -> str:
+    """Remove characters PostgreSQL text/json fields cannot store.
+
+    PDF extractors occasionally preserve an embedded NUL byte from a font or
+    malformed text object.  It is not meaningful research content and
+    asyncpg rejects it before PostgreSQL can persist the paper.
+    """
+    return str(value or "").replace("\x00", "")
+
+
 def parse_byte_range(range_header: str, file_size: int) -> tuple[int, int] | None:
     if not range_header or not range_header.startswith("bytes=") or file_size <= 0:
         return None
@@ -117,6 +127,7 @@ def extract_pdf_text(file_path: str, max_pages: int = 51) -> tuple[str, str]:
                 document[index].get_text("text")
                 for index in range(min(max_pages, len(document)))
             )
+        text = sanitize_text(text)
         if text.strip():
             return text, "pymupdf"
     except Exception as exc:
@@ -127,7 +138,7 @@ def extract_pdf_text(file_path: str, max_pages: int = 51) -> tuple[str, str]:
         for page in pdf.pages[:max_pages]:
             if page_text := page.extract_text():
                 text_parts.append(page_text)
-    return "\n\n".join(text_parts), "pdfplumber"
+    return sanitize_text("\n\n".join(text_parts)), "pdfplumber"
 
 
 def normalize_page_text(value: str) -> str:
@@ -150,7 +161,7 @@ def extract_pdf_page_contents(file_path: str) -> list[str]:
         import fitz
 
         with fitz.open(file_path) as document:
-            return [page.get_text("text").strip() for page in document]
+            return [sanitize_text(page.get_text("text")).strip() for page in document]
     except Exception as exc:
         logger.warning("提取 PDF 原始分页文本失败: %s", exc)
         return []

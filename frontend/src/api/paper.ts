@@ -12,9 +12,10 @@ export interface PaperUploadResponse {
   duplicate?: boolean
 }
 
-export const uploadPaper = (file: File) => {
+export const uploadPaper = (file: File, projectId?: string) => {
   const formData = new FormData()
   formData.append('file', file)
+  if (projectId) formData.append('project_id', projectId)
   const token = localStorage.getItem('access_token')
   return request.post<PaperUploadResponse>('/api/v1/papers/upload', formData, {
     timeout: 900000,
@@ -35,6 +36,8 @@ export interface PaperImportTask {
   status: 'pending' | 'processing' | 'failed'
   message: string
   retry_available: boolean
+  project_only?: boolean
+  delete_available?: boolean
   updated_at: string
 }
 
@@ -48,6 +51,9 @@ export interface PaperRetryResponse {
 
 export const retryPaperTask = (taskId: string) =>
   request.post<PaperRetryResponse>(`/api/v1/papers/tasks/${encodeURIComponent(taskId)}/retry`)
+
+export const deletePaperTask = (taskId: string) =>
+  request.delete<{ message: string }>(`/api/v1/papers/tasks/${encodeURIComponent(taskId)}`)
 
 export const getPaper = (paperId: string) => request.get(`/api/v1/papers/${paperId}`)
 
